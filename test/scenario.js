@@ -89,9 +89,17 @@ if (which === 'pat-profile') {
     test('pat is pinned as the active bartender', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
     test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
     test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
-    test('pat day ring tightens 165 -> 75 -> 66', () => {
+    test('pat day ring tightens 165 -> 90 -> 80', () => {
         const dr = prof().dayRing;
-        assert.ok(dr && dr.early === 165 && dr.mid === 75 && dr.late === 66, JSON.stringify(dr));
+        assert.ok(dr && dr.early === 165 && dr.mid === 90 && dr.late === 80, JSON.stringify(dr));
+    });
+    test('mid/late ring is not tighter than any demo p25', () => {
+        // 6.85.4 shipped 75/66; the three day demos park at p25 78/96/96 (mid)
+        // and 71/-/74 (late). Anything below the floor of those is tighter
+        // than the human ever stood.
+        const dr = prof().dayRing;
+        assert.ok(dr.mid >= 78, 'mid ' + dr.mid);
+        assert.ok(dr.late >= 71, 'late ' + dr.late);
     });
     test('pat day ring is monotonically tightening', () => {
         const dr = prof().dayRing;
@@ -102,7 +110,7 @@ if (which === 'pat-profile') {
         // 12px, when both manual demos show Pat opening far wider than that.
         assert.ok(prof().dayRing.early > 118 * 1.3, 'early ' + prof().dayRing.early);
     });
-    test('pat carries a 150px hell boss floor', () => assert.strictEqual(prof().bossFloor, 150));
+    test('pat hell boss floor is retracted (0)', () => assert.strictEqual(prof().bossFloor, 0));
 
     // A passout mid-fall is a telegraphed AoE, so it must still be a mark —
     // but tagged `drop` so it cannot cancel the anchor. A landed one is loot.
@@ -120,9 +128,11 @@ if (which === 'pat-profile') {
     done();
 }
 
-// 5. hell boss floor is behavioural: parked inside 150px of a boss in hell,
-//    the planner must move OUTWARD. Pre-6.85.2 a small boss was ringed at
-//    e.r + 55 (~95px) — inside the band where the manual demo lost 26-54 HP.
+// 5. hell boss ring. 6.85.2 floored this at 150 for pat; 6.85.5 retracts the
+//    floor (see CHARS.pat comment — the second hell demo puts hit-bossD at
+//    med 264, so distance was never the mechanism). This test now guards the
+//    retraction end-to-end: the planner must use the natural size/reach ring,
+//    not a floored one, and must still produce a move next to a hell boss.
 if (which === 'boss-floor') {
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
     setTimeout(() => {
@@ -137,10 +147,12 @@ if (which === 'boss-floor') {
         const plan = pineBot.test.planMove();
         test('planner produced a move', () => assert.ok(plan && typeof plan.dx === 'number', 'no plan'));
         test('boss firing ring was computed', () => assert.ok(typeof pineBot.test.bossRing() === 'number', 'ring ' + pineBot.test.bossRing()));
-        test('hell boss ring is floored at 150 for pat', () => {
+        test('hell boss ring is not floored (6.85.5 retraction)', () => {
             const r = pineBot.test.bossRing();
-            // unfloored this boss rings at max(r+55, min(reach+10, 150)) = 100
-            assert.ok(r >= 150, 'ring ' + r + ' (expected >= 150)');
+            // natural ring for this boss is max(r+55, min(reach+10, 150)) = 100.
+            // If a floor were still applied it would read >= 150.
+            assert.ok(r < 150, 'ring ' + r + ' (expected the natural ring, < 150)');
+            assert.ok(r >= 90, 'ring ' + r + ' (expected roughly r+55 = 95)');
         });
         done();
     }, 2000);

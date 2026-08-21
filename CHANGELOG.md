@@ -18,6 +18,47 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.2+crown+pat | — | | | | | | | Pat recalibrated from three manual demos (see below). Joe out of the rotation, replaced by minguk as a live control. |
 
 | 6.85.3+crown+pat | — | | | | | | | Pat pinned, no rotation. Identical play logic to 6.85.2 — **pool the two `+pat` rows.** |
+| 6.85.4+crown+pat | — | | | | | | | Day ring opening 130 → 165 (6.85.2 measured one demo by eye). |
+| 6.85.5+crown+pat | — | | | | | | | `bossFloor` retracted to 0 (second hell demo puts hit-`bossD` at med 264 — not contact). Day ring mid/late 75/66 → 90/80. |
+
+## 6.85.5 — bossFloor retracted, mid/late day ring widened
+
+Two more manual demos (a third day run and a second hell run, both saved
+2026-08-21) contradict two things 6.85.2 shipped.
+
+**bossFloor: 150 → 0.** The 6.85.2 claim was "every damage event in the hell
+run happened at `bossD` < 140; above ~150 he took nothing all run." The second
+hell run (`endGt` 2246, `hpMin` 23) does not look like that:
+
+| | p25 | median | p75 |
+|---|---|---|---|
+| `bossD` at every sample | 125 | 170 | 313 |
+| `bossD` **when damage landed** | 181 | 264 | 294 |
+| `near` when damage landed | 1 | 2 | 4 |
+
+Big hits landed at `bossD` 537, 376, 166, 264, 308, 248, 294 — and one at 39.
+Hit-`bossD` medians across the two hell runs are 156 and 264. It is not contact
+(the distances are far too large) and not a swarm (`hitNear` median 2, and he
+sat at 160 near on full HP without losing a point). Pat is eating ranged fire
+or telegraphed AoE at arbitrary range, and a standoff floor cannot touch that —
+it only costs damage uptime. n=1 was never enough to ship it; retracted.
+
+`bossFloor` stays in the profile schema and the `bossRingRef` diagnostic stays,
+but the `boss-floor` test now asserts the *natural* ring (95–100px for a small
+boss) is what the planner uses.
+
+**dayRing mid/late: 75/66 → 90/80.** 6.85.4 fixed the opening (130 → 165) but
+left mid/late where 6.85.2 put them, and those sit below every demo's p25:
+
+| window | run A p25 | run B p25 | run C p25 | 6.85.4 | now |
+|---|---|---|---|---|---|
+| 0–180s | 166 | 138 | 115 | 165 | 165 |
+| 180–600s | 78 | 96 | 96 | **75** | 90 |
+| 600–1200s | 71 | — | 74 | **66** | 80 |
+
+75 and 66 are tighter than the human ever parked in any of the three runs. The
+opening holds at 165 (the widest read, since early day is where ~29% of runs
+die). n=3, still provisional.
 
 ## 6.85.4 — day-ring correction (6.85.2 was measured wrong)
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.4
+// @version      6.85.5
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.4';
+    const SCRIPT_VERSION = '6.85.5';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -367,39 +367,43 @@
     // LIVE-READ BASE STATS (player.maxHp / player.speed at t=0, 2026-08-21).
     // `tank` = survive by absorbing (HP/armor/shield); `runner` = survive
     // by spacing (only meaningful before enemy speed passes ours, ~minute 8).
-    // v6.85.2 PAT CALIBRATION — from three manual Pat demos (2026-08-21),
-    // one full day (idx 1) and 19 minutes inside hell (idx 3). What the
-    // human actually did, and what the 6.85.1 profile had wrong:
+    // PAT CALIBRATION — from manual demos recorded with the 🎥 recorder
+    // (2026-08-21): three full day runs and two runs deep inside hell.
+    // Method: percentiles over EVERY sample carrying the field, not
+    // eyeballed stationary stretches. p25 is the estimator that matters for
+    // a farming station — the median is inflated by transit between
+    // passouts, and the p75 is pure transit.
     //   * dayRing: he farms from far out in the opening minutes and TIGHTENS
     //     as the build matures — the bot was holding a flat 118/112/105.
-    //     v6.85.4 CORRECTION: 6.85.2's 130/72/62 came from eyeballing
-    //     stationary samples in demo idx 1 alone. Reading idx 2 properly
-    //     (percentiles over every sample carrying a poD) showed the opening
-    //     figure was badly biased tight:
-    //         window      idx2 p25 / med / p75     6.85.2 shipped
-    //         0-180s      166 / 210 / 240          130   <-- wrong
-    //         180-600s     78 / 105 / 171           72
-    //         600-1200s    71 /  85 /  96           62
-    //     Median runs wide because it includes transit between passouts; p25
-    //     is the better estimate of where he actually parks, which is why the
-    //     mid/late figures held up. The opening did not. Early day is where
-    //     ~29% of runs die, so being too tight there is the worst direction
-    //     to be wrong in. Now the mean of the two demos' station estimates,
-    //     rounded, with the opening taking the wider read. n=2 — treat these
-    //     as provisional, not settled.
+    //     poD p25 per day run:
+    //         window        run A   run B   run C     shipped
+    //         0-180s         166     138     115       165
+    //         180-600s        78      96      96        90
+    //         600-1200s       71       —      74        80
+    //     v6.85.2 shipped 130/72/62 from eyeballing run A alone; v6.85.4
+    //     fixed the opening to 165 but left mid/late at 75/66, which sit
+    //     BELOW every run's p25 — i.e. tighter than the human ever parked.
+    //     v6.85.5 raises them to 90/80. Early day is where ~29% of runs die,
+    //     so erring tight there is the worst direction to be wrong in.
+    //     n=3 — provisional, not settled.
     //   * crowdPanic: he held station through waves of 50-99 near at 100 HP
     //     (day) and 102-156 near (hell) without losing a point. Crowd count
     //     is not a threat for a tank with freeze up; HP is the only gate.
     //   * kiteMul back to 1.0: CEM's own gradient has movement.kitePull at
     //     corr +0.41. Cutting it to 0.7 in 6.85.0 was a guess the data rejects.
-    //   * bossFloor: every damage event in the 19-minute hell run happened at
-    //     bossD < 140 (100->74 at 93px, 100->46 at 74px). Above ~150 he took
-    //     nothing all run. Small bosses could previously be ringed at ~95px.
-    // dayRing/bossFloor/crowdPanic are null/true for the runners: minguk's
+    //   * bossFloor: RETRACTED in v6.85.5, back to 0. 6.85.2 set it to 150 on
+    //     the claim that every damage event in the first hell run happened at
+    //     bossD < 140. The second hell run refutes that — bossD at the moment
+    //     of damage runs p25 181 / med 264 / p75 294, with big hits landing at
+    //     537 and 376. Hit-bossD medians across the two runs: 156 and 264.
+    //     Whatever is hurting him in hell is ranged or a telegraph, not
+    //     contact and not a swarm (hitNear med 2), so a standoff floor cannot
+    //     reach it and only costs uptime. Left in the code as a profile knob.
+    // dayRing/bossFloor/crowdPanic are null/true/0 for the runners: minguk's
     // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
-                  dayRing: { early: 165, mid: 75, late: 66 }, crowdPanic: false, bossFloor: 150 },
+                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0 },
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0 },
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
