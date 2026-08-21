@@ -23,6 +23,32 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.6+crown+pat | — | | | | | | | User directives: day bosses over the passout farm, TIME STOP station weight, flight survives low HP. |
 | 6.85.7+crown+pat | — | | | | | | | Hell boss engagement no longer deferred to the MOJITO sniper when SOUTH SIDE is owned. |
 | 6.85.8+crown+pat | — | | | | | | | Pat's ult has distance falloff: proximity-weighted aim, one-passout gate, 900ms retry. MOJITO deferral deleted. |
+| 6.85.9+crown+pat | — | | | | | | | Flame cross: passout station collapses to contact range while it burns; pickup value roughly doubled with passouts up. |
+
+## 6.85.9 — the flame cross is a body-centred burn
+
+User: *"pat also needs to use flame cross to kill passouts as other weapons
+don't do much damage to them."*
+
+The cross was already valued as loot, but the bot was throwing the window away
+after picking it up. `fireCrossUntil` only made the farm pull 1.3× stronger —
+it did nothing to the **station**. So Pat would light up and then keep farming
+from his 165px opening-day ring, spending the entire burn on empty floor. The
+cross is body-centred: its damage reaches what the bot is standing next to,
+nothing further.
+
+- **While the cross burns, the passout station collapses to `zone + 24`** —
+  just outside the contact ring, so the flame covers the body. The contact zone
+  itself stays off-limits; the existing 55-danger retreat gradient still owns
+  that. *Tested — the closing rate goes from ~0 to ~1 with the burn on, and the
+  assertion fails without the change.*
+- Farm pull during the window 1.3 → 1.6.
+- **Pickup value with a passout field up: +28 → +55 (day), +18 → +35 (hell).**
+  Given that the rest of the roster barely scratches passouts, a cross on the
+  floor while they are up is close to top-priority loot rather than a mild
+  preference. On an empty field it stays cheap, so the bot still leaves it lying
+  there until it pays — the cross activates on pickup, and grabbing one early
+  wastes it.
 
 ## 6.85.8 — Pat's ultimate has distance falloff; MOJITO deferral deleted
 

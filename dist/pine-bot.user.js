@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.8
+// @version      6.85.9
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.8';
+    const SCRIPT_VERSION = '6.85.9';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -3764,7 +3764,12 @@
                     // the cross does it for free. Day phase values it most.
                     const gtF = typeof G.gameTime === 'number' ? G.gameTime : 0;
                     const day = gtF < 1200 && !hellDetected;
-                    if ((lastPlan.passoutsNear || 0) >= 1) v += day ? 28 : 18;
+                    // v6.85.9 (user): passouts are what the cross is FOR — the
+                    // rest of the roster barely scratches them. A cross on the
+                    // floor with a passout field up is close to top-priority
+                    // loot, not a mild preference. On an empty field it stays
+                    // cheap, so the bot leaves it lying there until it pays.
+                    if ((lastPlan.passoutsNear || 0) >= 1) v += day ? 55 : 35;
                     else if (lastPlan.wallNear === true || lastPlan.bossNear === true) v += day ? 20 : 14;
                     else if ((lastPlan.lines || 0) > 0) v += 12;
                 }
@@ -4140,7 +4145,7 @@
         const gtNow2 = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const dayFarm = ((!hellDetected && gtNow2 < 60) ? 1.7 : ((gtNow2 < 1200 && !hellDetected) ? 1.35 : 1)) *
             (1 + 0.45 * buildHunger) *  // starving build: kills ARE the upgrades — hunt harder
-            (flameOn ? 1.3 : 1) *       // burn window: harvest everything it touches
+            (flameOn ? 1.6 : 1) *       // burn window: harvest everything it touches
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
 
         // ULT AIMING. The ultimate spirals OUTWARD from the bot, so the aim
@@ -4477,9 +4482,20 @@
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
                         : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105);
-                    const ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                    let ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
                         : dayRing * slowPad);
                     const zone = po.r + 18;
+                    // v6.85.9 (user): "pat also needs to use flame cross to kill
+                    // passouts as other weapons don't do much damage to them."
+                    // The flame cross is a BODY-CENTRED burn, not a projectile —
+                    // its damage only reaches what the bot is standing next to.
+                    // Farming a passout from Pat's 165px day station during the
+                    // window spends the whole cross on empty floor. While it is
+                    // burning, the station collapses to just outside the contact
+                    // zone so the flame actually covers the body. The zone
+                    // itself is still off-limits: contact ticks are what the
+                    // 55-danger retreat gradient below exists to prevent.
+                    if (flameOn) ring = Math.min(ring, zone + 24);
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
                     if (dNow < zone) {

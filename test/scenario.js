@@ -281,6 +281,30 @@ if (which === 'ult-falloff') {
     }, 1000);
 }
 
+// 9. v6.85.9: the flame cross is a body-centred burn, so while it is up the
+//    passout station collapses from Pat's 165px day ring to contact range.
+if (which === 'flame-cross') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 60 } });
+    pineBot.stop();
+    const po = { type: 'passout', x: 435, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 4 };
+    const run = flame => {
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        if (flame) global.player.fireCrossUntil = 1e5;
+        global.enemies = [po];
+        const pl = pineBot.test.planMove();
+        // signed closing rate along the chosen heading
+        return pl.dx * (po.x - 270) / 165 + pl.dy * (po.y - 270) / 165;
+    };
+    const cold = run(false), hot = run(true);
+    test('without the cross, Pat holds his 165px station', () =>
+        assert.ok(cold < 0.5, 'closing ' + cold.toFixed(2)));
+    test('with the cross burning, Pat closes on the passout', () =>
+        assert.ok(hot > 0.7, 'closing ' + hot.toFixed(2)));
+    test('the burn window strictly increases the closing rate', () =>
+        assert.ok(hot > cold + 0.3, 'cold ' + cold.toFixed(2) + ' hot ' + hot.toFixed(2)));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -313,4 +337,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
