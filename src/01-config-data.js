@@ -154,13 +154,19 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // v6.85.2: JOE IS OUT. 113 runs, 12% day clear, median 446s, P60 0.00 —
-        // half the farm was producing nothing. Rotation is now PAT (the tank
-        // experiment, freshly recalibrated) against MINGUK (the ~600-run
-        // incumbent) so every other run is a live control instead of a
-        // write-off. Joe's learned store is left on disk, untouched, in case
-        // the runner profile is worth revisiting later.
-        preferredBartender: null,
+        // v6.85.3 (user directive): PIN PAT. No rotation.
+        // 6.85.2 had pat/minguk alternating so minguk acted as a live control.
+        // That is now dropped in favour of sample rate: every run lands on the
+        // freshly recalibrated tank, so his median/day-clear/mark-share move
+        // twice as fast against the 6.85.1 baseline (925s / 0.31 / 37%).
+        // The cost is real and worth remembering — minguk is currently the
+        // BETTER character (median 21.9m vs Pat's 15.4m), so while this is
+        // pinned every run is on the weaker profile and crown odds are lower.
+        // minguk still has ~600 runs of history to compare against, so the
+        // control is historical rather than concurrent.
+        // To restore the A/B: set preferredBartender back to null. The
+        // rotation list below is inert while a bartender is pinned.
+        preferredBartender: 'pat',
         bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set

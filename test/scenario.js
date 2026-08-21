@@ -86,7 +86,7 @@ if (which === 'pat-profile') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
     const prof = () => global.window.pineBotStats().charProfile;
-    test('rotation starts on pat', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
+    test('pat is pinned as the active bartender', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
     test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
     test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
     test('pat day ring tightens 130 -> 72 -> 62', () => {

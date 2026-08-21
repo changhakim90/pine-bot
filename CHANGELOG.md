@@ -17,6 +17,26 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.1+crown+joe | 113 | 7.4m | 9.5m | 56:21 | 0.00 | 0.00 | 0.12 | Unplayable. Retired in 6.85.2. |
 | 6.85.2+crown+pat | — | | | | | | | Pat recalibrated from three manual demos (see below). Joe out of the rotation, replaced by minguk as a live control. |
 
+| 6.85.3+crown+pat | — | | | | | | | Pat pinned, no rotation. Identical play logic to 6.85.2 — **pool the two `+pat` rows.** |
+
+## 6.85.3 — Pat pinned
+
+`preferredBartender: 'pat'`, rotation off. Config only; the planner and scoring
+are byte-for-byte 6.85.2, so the `6.85.2+crown+pat` and `6.85.3+crown+pat` rows
+in `compare()` should be read together (same precedent as 6.83.0/6.83.1).
+
+The version bump exists solely so Violentmonkey's self-update fires — it keys on
+`@version`, so a config-only change with the same version would never reach the
+browser.
+
+Trade being made: 6.85.2 alternated pat/minguk so minguk was a concurrent
+control. Pinning doubles Pat's sample rate, which is what we want while the
+recalibration is unproven — but minguk is currently the *better* character
+(median 21.9m vs Pat 15.4m), so every run is now on the weaker profile and
+crown odds are lower until Pat proves out. minguk's ~600 runs remain as a
+historical baseline. Restore the A/B by setting `preferredBartender` back to
+`null`.
+
 ## 6.85.2 — Pat calibrated from manual play
 
 Three manual Pat runs recorded with the 🎥 demo recorder on 2026-08-21: one full

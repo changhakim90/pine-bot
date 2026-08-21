@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.2
+// @version      6.85.3
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.2';
+    const SCRIPT_VERSION = '6.85.3';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -156,13 +156,19 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // v6.85.2: JOE IS OUT. 113 runs, 12% day clear, median 446s, P60 0.00 —
-        // half the farm was producing nothing. Rotation is now PAT (the tank
-        // experiment, freshly recalibrated) against MINGUK (the ~600-run
-        // incumbent) so every other run is a live control instead of a
-        // write-off. Joe's learned store is left on disk, untouched, in case
-        // the runner profile is worth revisiting later.
-        preferredBartender: null,
+        // v6.85.3 (user directive): PIN PAT. No rotation.
+        // 6.85.2 had pat/minguk alternating so minguk acted as a live control.
+        // That is now dropped in favour of sample rate: every run lands on the
+        // freshly recalibrated tank, so his median/day-clear/mark-share move
+        // twice as fast against the 6.85.1 baseline (925s / 0.31 / 37%).
+        // The cost is real and worth remembering — minguk is currently the
+        // BETTER character (median 21.9m vs Pat's 15.4m), so while this is
+        // pinned every run is on the weaker profile and crown odds are lower.
+        // minguk still has ~600 runs of history to compare against, so the
+        // control is historical rather than concurrent.
+        // To restore the A/B: set preferredBartender back to null. The
+        // rotation list below is inert while a bartender is pinned.
+        preferredBartender: 'pat',
         bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
