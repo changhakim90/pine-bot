@@ -11,7 +11,7 @@
     "run:headless": "node run/playwright.js --headless"
   },
   "pineBot": {
-    "rawBase": "https://raw.githubusercontent.com/OWNER/REPO/main"
+    "rawBase": "https://raw.githubusercontent.com/changhakim90/pine-bot/main"
   },
   "devDependencies": {},
   "optionalDependencies": {

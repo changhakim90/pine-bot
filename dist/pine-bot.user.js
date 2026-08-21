@@ -9,6 +9,8 @@
 // @match        http://pineandco.online/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/changhakim90/pine-bot/main/dist/pine-bot.user.js
+// @downloadURL  https://raw.githubusercontent.com/changhakim90/pine-bot/main/dist/pine-bot.user.js
 // ==/UserScript==
 
 /* =====================================================================
