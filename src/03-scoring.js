@@ -571,12 +571,19 @@
         // rest of the roster.
         if (!atCap && ((type === 'weapon' && /^(SOUTH SIDE|NEGRONI)$/.test(name)) ||
             (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|DRY VERMOUTH)$/.test(name)))) add(10, 'minguk-core');
-        // KNOCKBACK PUSH (user): VODKA CRANBERRY and MOSCOW MULE gain their
-        // shove at LEVEL 6 — finishing them is contact-damage insurance, so
-        // the last levels are worth extra while contact is what kills us.
-        if (type === 'weapon' && !atCap && /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(name) &&
-            lv >= 3 && lv < 6 && (lastDeathCause === 'contact' || enemyMix.boss > 0.5 || hellDetected))
-            add(10, 'knockback-finish');
+        // KNOCKBACK TO LEVEL 6 (v6.84.0 — the measured lever). VODKA CRANBERRY
+        // and MOSCOW MULE gain their shove at Lv6 with NO super required, and
+        // between them they are the primary of four of the all-time top runs
+        // (255:48 included). Contact ends ~67% of runs, so a knockback
+        // cocktail one or two levels short of 6 is the most valuable weapon
+        // card on the board.
+        if (type === 'weapon' && !atCap && /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(name) && lv >= 1 && lv < 6) {
+            const near6 = lv >= 4 ? 14 : (lv >= 3 ? 8 : 4);   // closer to the shove = worth more
+            const ctx = (hellDetected ? 10 : 0) +
+                (lastDeathCause === 'contact' ? 8 : 0) +
+                (enemyMix.boss > 0.5 ? 6 : 0);
+            add(12 + near6 + ctx, 'knockback-to-6');
+        }
 
         // WHISKY SOUR (user): the freeze beam pins bosses — a stopped boss
         // deals no contact damage, so it is a DEFENSIVE pick, valued higher
@@ -608,22 +615,10 @@
                 if ((ownedLevels[ck] || 0) >= 4) { add(12, 'plan-super-soon'); break; }
             }
         }
-        // FIFTH SUPER (v6.82.0): top runs finish with FOUR supers. In hell,
-        // while a super slot is still open, the key ingredient of a maxed
-        // plan cocktail whose super does not exist yet jumps the queue —
-        // and the cocktail's own last levels when its key is already maxed.
-        if (!atCap && hellDetected && Math.max(supersMade.size, liveSuperCount()) < 5) {
-            if (type === 'passive' && PLAN_INGREDIENTS.includes(name)) {
-                for (const ck of PLAN_COCKTAILS) {
-                    if (SUPER_KEY_INGREDIENT[ck] !== name) continue;
-                    if ([...supersMade].some(n => n.toUpperCase().includes(ck))) continue;
-                    if ((ownedLevels[ck] || 0) >= (ownedMax[ck] || 6)) { add(22, 'fifth-super-key'); break; }
-                }
-            }
-            if (type === 'weapon' && PLAN_COCKTAILS.includes(name) && lv >= 4 &&
-                isMaxed(SUPER_KEY_INGREDIENT[name]) && ![...supersMade].some(n => n.toUpperCase().includes(name)))
-                add(16, 'fifth-super-finish');
-        }
+        // (v6.82.0's fifth-super bonuses removed in v6.84.0 — 112 runs showed
+        // supersPerRun unmoved at 1.4-1.6 and the two best runs ever finishing
+        // with THREE supers. Super COUNT does not produce depth; see the
+        // knockback rule above, which is what the top runs actually share.)
         // survival pair, day phase: armor + shield before anything optional
         if (!atCap && !hellDetected && (typeof G.gameTime !== 'number' || G.gameTime < 1200) &&
             (name === 'OLIVE' || name === 'NEGRONI')) add(14, 'survival-pair');

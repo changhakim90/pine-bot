@@ -842,8 +842,13 @@
                 const urg = (typeof m.tLeft === 'number')
                     ? (m.tLeft <= 0.35 ? 1.6 : m.tLeft <= 0.7 ? 1.15 : 0.8)
                     : 1;
-                if (d < m.r) danger += markW * 16 * urg;
-                else if (d < m.r * 1.5) danger += markW * 3 * urg;
+                // DEPTH-SCALED (v6.84.0): marks rose to 27% of deaths in the
+                // deep-run version. Both the radius we route around and the
+                // weight we give it widen with hell depth.
+                const mR = m.r * (1 + (DH.markPadMul - 1) * depth);
+                const mW = markW * (1 + (DH.markWeightMul - 1) * depth);
+                if (d < mR) danger += mW * 16 * urg;
+                else if (d < mR * 1.5) danger += mW * 3 * urg;
             }
 
             // armed lanes are lethal NOW; unarmed ones are telegraphs — still

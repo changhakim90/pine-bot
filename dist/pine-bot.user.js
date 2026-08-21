@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.83.2
+// @version      6.84.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -82,6 +82,23 @@
  *   list and joins the ingredient plan: SUPER MOSCOW MULE becomes the
  *   fifth line. Five is still safe — the gun gate is six MAXED supers and
  *   the gun-guard refuses a sixth regardless. Day phase untouched.
+ * ---------------------------------------------------------------------
+ * v6.84.0 — SUPERS ARE NOT THE LEVER; KNOCKBACK AND MARKS ARE
+ *   112 runs of 6.83.x refuted the fifth-super theory: supersPerRun stayed
+ *   at 1.4-1.6, and the two best runs EVER — 255:48 (run 4177, VODKA
+ *   CRANBERRY primary) and 253:31 (run 4178, GIN TONIC) — finished with
+ *   THREE supers each. The only 5-super run lasted 49 minutes. More supers
+ *   is not what produces depth.
+ *   What DOES keep showing up at the top is knockback: VODKA CRANBERRY and
+ *   MOSCOW MULE lead four of the all-time top runs, and both gain their
+ *   shove at LEVEL 6 — no super required. So:
+ *     * the 6.82 fifth-super bonuses are removed as dead weight,
+ *     * finishing a knockback cocktail to Lv6 becomes a first-class goal,
+ *       scaled by proximity to 6 and by how much contact is killing us,
+ *     * marks — 27% of 6.83.1 deaths, up from 21% — get depth-scaled
+ *       avoidance to match the deep-hell contact posture.
+ *   GINGER BEER stays unbanned in hell: it is MOSCOW MULE's key, and while
+ *   its super no longer looks decisive, the cocktail itself does.
  * ===================================================================== */
 
 (function () {
@@ -89,7 +106,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.83.2';
+    const SCRIPT_VERSION = '6.84.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -212,7 +229,9 @@
             reachMul: 1.3,         // boss fear radius at depth
             horizonFrames: 20,     // contact-imminent lookahead at depth (base 12)
             dashGateMs: 420,       // dash rate limit at depth (base 650 in hell)
-            ultOnContact: true     // contact imminent + ult ready = fire (invincibility eats the hit)
+            ultOnContact: true,    // contact imminent + ult ready = fire (invincibility eats the hit)
+            markPadMul: 1.5,       // v6.84.0: telegraphed-blast avoidance radius at depth
+            markWeightMul: 1.4     // v6.84.0: and how hard those blasts are weighted
         },
 
         abilities: {
@@ -2065,12 +2084,19 @@
         // rest of the roster.
         if (!atCap && ((type === 'weapon' && /^(SOUTH SIDE|NEGRONI)$/.test(name)) ||
             (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|DRY VERMOUTH)$/.test(name)))) add(10, 'minguk-core');
-        // KNOCKBACK PUSH (user): VODKA CRANBERRY and MOSCOW MULE gain their
-        // shove at LEVEL 6 — finishing them is contact-damage insurance, so
-        // the last levels are worth extra while contact is what kills us.
-        if (type === 'weapon' && !atCap && /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(name) &&
-            lv >= 3 && lv < 6 && (lastDeathCause === 'contact' || enemyMix.boss > 0.5 || hellDetected))
-            add(10, 'knockback-finish');
+        // KNOCKBACK TO LEVEL 6 (v6.84.0 — the measured lever). VODKA CRANBERRY
+        // and MOSCOW MULE gain their shove at Lv6 with NO super required, and
+        // between them they are the primary of four of the all-time top runs
+        // (255:48 included). Contact ends ~67% of runs, so a knockback
+        // cocktail one or two levels short of 6 is the most valuable weapon
+        // card on the board.
+        if (type === 'weapon' && !atCap && /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(name) && lv >= 1 && lv < 6) {
+            const near6 = lv >= 4 ? 14 : (lv >= 3 ? 8 : 4);   // closer to the shove = worth more
+            const ctx = (hellDetected ? 10 : 0) +
+                (lastDeathCause === 'contact' ? 8 : 0) +
+                (enemyMix.boss > 0.5 ? 6 : 0);
+            add(12 + near6 + ctx, 'knockback-to-6');
+        }
 
         // WHISKY SOUR (user): the freeze beam pins bosses — a stopped boss
         // deals no contact damage, so it is a DEFENSIVE pick, valued higher
@@ -2102,22 +2128,10 @@
                 if ((ownedLevels[ck] || 0) >= 4) { add(12, 'plan-super-soon'); break; }
             }
         }
-        // FIFTH SUPER (v6.82.0): top runs finish with FOUR supers. In hell,
-        // while a super slot is still open, the key ingredient of a maxed
-        // plan cocktail whose super does not exist yet jumps the queue —
-        // and the cocktail's own last levels when its key is already maxed.
-        if (!atCap && hellDetected && Math.max(supersMade.size, liveSuperCount()) < 5) {
-            if (type === 'passive' && PLAN_INGREDIENTS.includes(name)) {
-                for (const ck of PLAN_COCKTAILS) {
-                    if (SUPER_KEY_INGREDIENT[ck] !== name) continue;
-                    if ([...supersMade].some(n => n.toUpperCase().includes(ck))) continue;
-                    if ((ownedLevels[ck] || 0) >= (ownedMax[ck] || 6)) { add(22, 'fifth-super-key'); break; }
-                }
-            }
-            if (type === 'weapon' && PLAN_COCKTAILS.includes(name) && lv >= 4 &&
-                isMaxed(SUPER_KEY_INGREDIENT[name]) && ![...supersMade].some(n => n.toUpperCase().includes(name)))
-                add(16, 'fifth-super-finish');
-        }
+        // (v6.82.0's fifth-super bonuses removed in v6.84.0 — 112 runs showed
+        // supersPerRun unmoved at 1.4-1.6 and the two best runs ever finishing
+        // with THREE supers. Super COUNT does not produce depth; see the
+        // knockback rule above, which is what the top runs actually share.)
         // survival pair, day phase: armor + shield before anything optional
         if (!atCap && !hellDetected && (typeof G.gameTime !== 'number' || G.gameTime < 1200) &&
             (name === 'OLIVE' || name === 'NEGRONI')) add(14, 'survival-pair');
@@ -4067,8 +4081,13 @@
                 const urg = (typeof m.tLeft === 'number')
                     ? (m.tLeft <= 0.35 ? 1.6 : m.tLeft <= 0.7 ? 1.15 : 0.8)
                     : 1;
-                if (d < m.r) danger += markW * 16 * urg;
-                else if (d < m.r * 1.5) danger += markW * 3 * urg;
+                // DEPTH-SCALED (v6.84.0): marks rose to 27% of deaths in the
+                // deep-run version. Both the radius we route around and the
+                // weight we give it widen with hell depth.
+                const mR = m.r * (1 + (DH.markPadMul - 1) * depth);
+                const mW = markW * (1 + (DH.markWeightMul - 1) * depth);
+                if (d < mR) danger += mW * 16 * urg;
+                else if (d < mR * 1.5) danger += mW * 3 * urg;
             }
 
             // armed lanes are lethal NOW; unarmed ones are telegraphs — still

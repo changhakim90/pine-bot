@@ -80,6 +80,23 @@
  *   list and joins the ingredient plan: SUPER MOSCOW MULE becomes the
  *   fifth line. Five is still safe — the gun gate is six MAXED supers and
  *   the gun-guard refuses a sixth regardless. Day phase untouched.
+ * ---------------------------------------------------------------------
+ * v6.84.0 — SUPERS ARE NOT THE LEVER; KNOCKBACK AND MARKS ARE
+ *   112 runs of 6.83.x refuted the fifth-super theory: supersPerRun stayed
+ *   at 1.4-1.6, and the two best runs EVER — 255:48 (run 4177, VODKA
+ *   CRANBERRY primary) and 253:31 (run 4178, GIN TONIC) — finished with
+ *   THREE supers each. The only 5-super run lasted 49 minutes. More supers
+ *   is not what produces depth.
+ *   What DOES keep showing up at the top is knockback: VODKA CRANBERRY and
+ *   MOSCOW MULE lead four of the all-time top runs, and both gain their
+ *   shove at LEVEL 6 — no super required. So:
+ *     * the 6.82 fifth-super bonuses are removed as dead weight,
+ *     * finishing a knockback cocktail to Lv6 becomes a first-class goal,
+ *       scaled by proximity to 6 and by how much contact is killing us,
+ *     * marks — 27% of 6.83.1 deaths, up from 21% — get depth-scaled
+ *       avoidance to match the deep-hell contact posture.
+ *   GINGER BEER stays unbanned in hell: it is MOSCOW MULE's key, and while
+ *   its super no longer looks decisive, the cocktail itself does.
  * ===================================================================== */
 
 (function () {
@@ -210,7 +227,9 @@
             reachMul: 1.3,         // boss fear radius at depth
             horizonFrames: 20,     // contact-imminent lookahead at depth (base 12)
             dashGateMs: 420,       // dash rate limit at depth (base 650 in hell)
-            ultOnContact: true     // contact imminent + ult ready = fire (invincibility eats the hit)
+            ultOnContact: true,    // contact imminent + ult ready = fire (invincibility eats the hit)
+            markPadMul: 1.5,       // v6.84.0: telegraphed-blast avoidance radius at depth
+            markWeightMul: 1.4     // v6.84.0: and how hard those blasts are weighted
         },
 
         abilities: {

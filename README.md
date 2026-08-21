@@ -51,4 +51,4 @@ In the game tab: the 📸 panel button, or in the console `pineBot.compare()` / 
 - `deepHell`: contact posture ramp past the 2-hour mark.
 - `stopOnHellRecord`: pause for manual name entry on a hell #1.
 
-Edited from VS Code
+Edited from VS Code Test
