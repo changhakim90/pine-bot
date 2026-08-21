@@ -3,7 +3,7 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 const pkg = require('../package.json');
-const scenarios = ['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog'];
+const scenarios = ['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura'];
 console.log('pine-bot tests v' + pkg.version);
 let failed = 0;
 for (const s of scenarios) {

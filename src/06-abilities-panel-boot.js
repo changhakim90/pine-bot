@@ -526,9 +526,21 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }
+            };
+            // v6.85.12: pineBot.bossHitRange() — the measured boss damage ring.
+            // Percentiles of the player->boss distance at every frame a boss
+            // lost HP. p95 is the practical outer edge: past it our damage was
+            // not landing. Compare against the ring the planner actually holds
+            // (max(e.r+55, min(reach+10,150)) in hell, max(reach+60,240) in day).
+            window.pineBot.bossHitRange = () => {
+                const a = bossHitD.slice().sort((x, y) => x - y);
+                if (!a.length) return { n: 0, note: 'no boss damage observed yet — run until a boss is engaged' };
+                const q = f => a[Math.min(a.length - 1, Math.floor(a.length * f))];
+                return { n: a.length, min: a[0], p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), max: a[a.length - 1] };
             };
             window.pineBotDiagnose = diagnose;
             window.pineBotStats = buildStatsReport;

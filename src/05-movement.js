@@ -61,7 +61,26 @@
                     }
                     continue;
                 }
-                const d = Math.hypot(e.x - p.x, e.y - p.y);
+                const dRaw = Math.hypot(e.x - p.x, e.y - p.y);
+                // v6.85.12 INSTRUMENT — boss damage ring (user: "the bosses
+                // have two blue rings, the inner ring is where the bosses get
+                // damaged"). Rather than guess that radius and ship a seventh
+                // unmeasured constant, measure it: every time a boss's HP
+                // actually drops, record how far away the bot was standing.
+                // The upper percentile of those distances IS the outer edge of
+                // the ring where our damage lands. Runs BEFORE the enemyRange
+                // cut so a boss engaged at the 240px day station is still seen.
+                // WeakMap keyed on the entity object — enemies persist frame to
+                // frame, and it cannot leak once the game drops them.
+                if (t0 === 'boss' && typeof e.hp === 'number' && !/nobook/i.test(bc0 + ' ' + t0)) {
+                    const prevHp = bossHpMem.get(e);
+                    bossHpMem.set(e, e.hp);
+                    if (prevHp != null && e.hp < prevHp - 0.5) {
+                        bossHitD.push(Math.round(dRaw));
+                        if (bossHitD.length > 600) bossHitD.shift();
+                    }
+                }
+                const d = dRaw;
                 if (d > R) continue;
                 const prof = enemyProfile(e);
                 const t = t0;
@@ -92,7 +111,18 @@
                 // partners close within GZ_PAIR_DIST they form a freeze field
                 // around their MIDPOINT (radius GZ_FREEZE_R): slow 0.6 AND
                 // a hard freeze. Handled as a ZONE below, not as chase fear.
-                const freezeAura = t === 'boss' && !!e.partner;
+                // v6.85.12 (user: "the bot is thinking the freeze aura of the
+                // four-hour two-top to be its damage radius"). It was, and the
+                // flag was also firing when no field existed: `!!e.partner` is
+                // true for the whole run, but the field only forms while the
+                // partners are actually close. So a two-top with its partner
+                // across the map was carrying a phantom aura, was never
+                // engaged, and pushed the bot 130px further out than the boss
+                // itself warranted. The flag now means "the field is up (or
+                // about to be)" — the same test the midpoint mark uses.
+                const pairDist = (t === 'boss' && e.partner && typeof e.partner.x === 'number')
+                    ? Math.hypot(e.x - e.partner.x, e.y - e.partner.y) : Infinity;
+                const freezeAura = t === 'boss' && pairDist < GZ_PAIR_DIST * 2.2;
                 // USER: with OLIVE armor stacked, rushing commons barely
                 // scratch — fear of non-boss mobs scales DOWN with armor
                 // (up to -36% at OLIVE 6), so the bot stands and grinds.
@@ -103,7 +133,16 @@
                 out.enemies.push({
                     x: e.x, y: e.y, vx, vy, spd,
                     r: (typeof e.r === 'number' ? e.r : 10) + CONFIG.threat.contactPad,
-                    reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0) + (freezeAura ? 130 : 0)) * (slowPadRef.v || 1),   // fast bosses + freeze auras: fear from further out, scaled by how slowed we are
+                    // v6.85.12: the `+130 freezeAura` term is GONE. `reach`
+                    // drives a DAMAGE gradient (see the danger loop) and the
+                    // boss firing ring. The pair field neither damages nor
+                    // emanates from the boss body — it slows and freezes, from
+                    // the pair's MIDPOINT — and the `pairFreeze` mark below
+                    // already models it correctly, at the right centre, with
+                    // the right radius, only while it exists. Adding it here
+                    // double-counted the same field as body-centred damage and
+                    // shoved the engagement ring 130px out for nothing.
+                    reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
                     w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft

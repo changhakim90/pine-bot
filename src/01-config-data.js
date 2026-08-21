@@ -715,6 +715,12 @@
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
     const flightRef = { v: false };  // live flight-mode flag (unkillable chase)
+    // v6.85.12: boss damage-ring instrument. bossHitD collects the player->boss
+    // distance at every frame a boss's HP drops; its percentiles measure how
+    // close the bot must be for its damage to land, which is currently a guess
+    // (`e.r + 55`, capped at 150 in hell / 240 in day) and, per the user, wrong.
+    const bossHpMem = new WeakMap();
+    const bossHitD = [];
     // v6.85.2: last boss firing-ring the planner computed, in px. Diagnostic
     // only — nothing reads it to make a decision. It exists because the ring
     // is otherwise unobservable from outside planMove, which made the

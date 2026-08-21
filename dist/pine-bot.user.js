@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.11
+// @version      6.85.12
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.11';
+    const SCRIPT_VERSION = '6.85.12';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -717,6 +717,12 @@
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
     const flightRef = { v: false };  // live flight-mode flag (unkillable chase)
+    // v6.85.12: boss damage-ring instrument. bossHitD collects the player->boss
+    // distance at every frame a boss's HP drops; its percentiles measure how
+    // close the bot must be for its damage to land, which is currently a guess
+    // (`e.r + 55`, capped at 150 in hell / 240 in day) and, per the user, wrong.
+    const bossHpMem = new WeakMap();
+    const bossHitD = [];
     // v6.85.2: last boss firing-ring the planner computed, in px. Diagnostic
     // only — nothing reads it to make a decision. It exists because the ring
     // is otherwise unobservable from outside planMove, which made the
@@ -3486,7 +3492,26 @@
                     }
                     continue;
                 }
-                const d = Math.hypot(e.x - p.x, e.y - p.y);
+                const dRaw = Math.hypot(e.x - p.x, e.y - p.y);
+                // v6.85.12 INSTRUMENT — boss damage ring (user: "the bosses
+                // have two blue rings, the inner ring is where the bosses get
+                // damaged"). Rather than guess that radius and ship a seventh
+                // unmeasured constant, measure it: every time a boss's HP
+                // actually drops, record how far away the bot was standing.
+                // The upper percentile of those distances IS the outer edge of
+                // the ring where our damage lands. Runs BEFORE the enemyRange
+                // cut so a boss engaged at the 240px day station is still seen.
+                // WeakMap keyed on the entity object — enemies persist frame to
+                // frame, and it cannot leak once the game drops them.
+                if (t0 === 'boss' && typeof e.hp === 'number' && !/nobook/i.test(bc0 + ' ' + t0)) {
+                    const prevHp = bossHpMem.get(e);
+                    bossHpMem.set(e, e.hp);
+                    if (prevHp != null && e.hp < prevHp - 0.5) {
+                        bossHitD.push(Math.round(dRaw));
+                        if (bossHitD.length > 600) bossHitD.shift();
+                    }
+                }
+                const d = dRaw;
                 if (d > R) continue;
                 const prof = enemyProfile(e);
                 const t = t0;
@@ -3517,7 +3542,18 @@
                 // partners close within GZ_PAIR_DIST they form a freeze field
                 // around their MIDPOINT (radius GZ_FREEZE_R): slow 0.6 AND
                 // a hard freeze. Handled as a ZONE below, not as chase fear.
-                const freezeAura = t === 'boss' && !!e.partner;
+                // v6.85.12 (user: "the bot is thinking the freeze aura of the
+                // four-hour two-top to be its damage radius"). It was, and the
+                // flag was also firing when no field existed: `!!e.partner` is
+                // true for the whole run, but the field only forms while the
+                // partners are actually close. So a two-top with its partner
+                // across the map was carrying a phantom aura, was never
+                // engaged, and pushed the bot 130px further out than the boss
+                // itself warranted. The flag now means "the field is up (or
+                // about to be)" — the same test the midpoint mark uses.
+                const pairDist = (t === 'boss' && e.partner && typeof e.partner.x === 'number')
+                    ? Math.hypot(e.x - e.partner.x, e.y - e.partner.y) : Infinity;
+                const freezeAura = t === 'boss' && pairDist < GZ_PAIR_DIST * 2.2;
                 // USER: with OLIVE armor stacked, rushing commons barely
                 // scratch — fear of non-boss mobs scales DOWN with armor
                 // (up to -36% at OLIVE 6), so the bot stands and grinds.
@@ -3528,7 +3564,16 @@
                 out.enemies.push({
                     x: e.x, y: e.y, vx, vy, spd,
                     r: (typeof e.r === 'number' ? e.r : 10) + CONFIG.threat.contactPad,
-                    reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0) + (freezeAura ? 130 : 0)) * (slowPadRef.v || 1),   // fast bosses + freeze auras: fear from further out, scaled by how slowed we are
+                    // v6.85.12: the `+130 freezeAura` term is GONE. `reach`
+                    // drives a DAMAGE gradient (see the danger loop) and the
+                    // boss firing ring. The pair field neither damages nor
+                    // emanates from the boss body — it slows and freezes, from
+                    // the pair's MIDPOINT — and the `pairFreeze` mark below
+                    // already models it correctly, at the right centre, with
+                    // the right radius, only while it exists. Adding it here
+                    // double-counted the same field as body-centred damage and
+                    // shoved the engagement ring 130px out for nothing.
+                    reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
                     w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft
@@ -5227,9 +5272,21 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }
+            };
+            // v6.85.12: pineBot.bossHitRange() — the measured boss damage ring.
+            // Percentiles of the player->boss distance at every frame a boss
+            // lost HP. p95 is the practical outer edge: past it our damage was
+            // not landing. Compare against the ring the planner actually holds
+            // (max(e.r+55, min(reach+10,150)) in hell, max(reach+60,240) in day).
+            window.pineBot.bossHitRange = () => {
+                const a = bossHitD.slice().sort((x, y) => x - y);
+                if (!a.length) return { n: 0, note: 'no boss damage observed yet — run until a boss is engaged' };
+                const q = f => a[Math.min(a.length - 1, Math.floor(a.length * f))];
+                return { n: a.length, min: a[0], p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), max: a[a.length - 1] };
             };
             window.pineBotDiagnose = diagnose;
             window.pineBotStats = buildStatsReport;

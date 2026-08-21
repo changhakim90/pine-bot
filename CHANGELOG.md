@@ -26,6 +26,47 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.9+crown+pat | — | | | | | | | Flame cross: passout station collapses to contact range while it burns; pickup value roughly doubled with passouts up. |
 | 6.85.10+crown+pat | — | | | | | | | Passout backlog: field-wide gather (was a 312px window), FIFO trek target, density-scaled `contested`. |
 | 6.85.11+crown+pat | — | | | | | | | Frozen-boss stacking: `!projHere` gate removed (it suppressed the branch in hell), two-phase station at SOUTH SIDE burn range. |
+| 6.85.12+crown+pat | — | | | | | | | Freeze aura no longer read as a body-centred damage radius. New `pineBot.bossHitRange()` instrument. |
+
+## 6.85.12 — the freeze aura was being read as a damage radius
+
+User: *"I think the bot is thinking the freeze aura of the four-hour two-top to
+be its damage radius."* Correct, and in four ways at once.
+
+The two-top is a **paired** boss. When the partners close, they form a freeze
+field around their **midpoint** — it slows and hard-freezes, it does not damage.
+The planner already modelled that correctly as a `pairFreeze` mark at the
+midpoint, radius `GZ_FREEZE_R`, only while the pair is seated. Then, separately,
+`reach` added **+130** for any boss with a partner. `reach` drives the damage
+gradient in the danger loop *and* the boss firing ring, so that term:
+
+1. **double-counted** a field the midpoint mark already handled,
+2. centred it on **each boss body** instead of the pair's midpoint,
+3. applied it as **damage** when the field only slows and freezes,
+4. and fired on `!!e.partner`, which is true for the whole run — so a two-top
+   whose partner was across the map carried a phantom 130px aura, was skipped
+   for engagement entirely, and pushed the firing ring 130px further out than
+   its own body warranted.
+
+The `+130` is gone, and `freezeAura` now means "the field is up (or about to
+be)", using the same pair-distance test as the mark. *Tested — three assertions
+fail against the unfixed source.*
+
+### New instrument: `pineBot.bossHitRange()`
+
+User: *"the bosses have two blue rings, the inner ring is where the bosses get
+damaged."* If that is right then every boss ring in the planner is a guess at
+the wrong quantity — hell holds `max(e.r+55, min(reach+10, 150))`, day holds
+`max(reach+60, 240)`.
+
+Rather than guess the radius and ship a seventh unmeasured constant, this
+measures it. Every frame a boss's HP actually drops, the player→boss distance is
+recorded (before the `enemyRange` cut, so a boss engaged at the 240px day
+station is still seen; `WeakMap`-keyed on the entity so nothing leaks).
+`pineBot.bossHitRange()` returns min / p25 / median / p75 / p95 / max.
+
+**p95 is the answer**: past it, our damage was not landing. Run a few games,
+call it, and the boss rings can be set from data the way the day ring was.
 
 ## 6.85.11 — the frozen-boss stacking window barely existed
 

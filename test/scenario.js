@@ -381,6 +381,63 @@ if (which === 'backlog') {
     done();
 }
 
+// 11. v6.85.12: freeze aura is a MIDPOINT zone, not a body-centred damage
+//     radius; and the boss damage-ring instrument.
+if (which === 'freeze-aura') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+    const far = { type: 'boss', x: 480, y: 60, r: 40, hp: 5e5, maxHp: 5e5, speed: 1.0, moving: true };
+    const lone = { type: 'boss', x: 350, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 1.0, moving: true };
+    const paired = { type: 'boss', x: 330, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 1.0, moving: true, partner: far };
+    global.enemies = [lone];
+    const loneReach = pineBot.test.gatherThreats(global.player).enemies[0].reach;
+    global.enemies = [paired, far];
+    const th = pineBot.test.gatherThreats(global.player);
+    const pairedGot = th.enemies.find(e => Math.round(e.x) === 330);
+    test('a partner across the map does NOT raise the fear radius', () =>
+        assert.strictEqual(pairedGot.reach, loneReach));
+    test('a partner across the map does NOT flag freezeAura', () =>
+        assert.strictEqual(pairedGot.freezeAura, false));
+    test('no phantom pair-freeze mark when the partners are apart', () =>
+        assert.ok(!th.marks.some(m => m.pairFreeze), JSON.stringify(th.marks)));
+
+    // seated pair: the field is real, and it is centred on the MIDPOINT
+    const near = { type: 'boss', x: 370, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 1.0, moving: true };
+    const seated = { type: 'boss', x: 330, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 1.0, moving: true, partner: near };
+    near.partner = seated;
+    global.enemies = [seated, near];
+    const th2 = pineBot.test.gatherThreats(global.player);
+    test('a seated pair DOES flag freezeAura', () =>
+        assert.strictEqual(th2.enemies.find(e => Math.round(e.x) === 330).freezeAura, true));
+    test('the pair field is marked at the midpoint, not on a body', () => {
+        const m = th2.marks.find(mk => mk.pairFreeze);
+        assert.ok(m, 'no pairFreeze mark');
+        assert.strictEqual(Math.round(m.x), 350);
+    });
+    test('even seated, reach is not inflated by the aura', () =>
+        assert.strictEqual(th2.enemies.find(e => Math.round(e.x) === 330).reach, loneReach));
+
+    // instrument: HP drops on a boss are recorded with the distance
+    test('boss damage-ring instrument records nothing before any damage', () =>
+        assert.strictEqual(pineBot.test.bossHitSamples().length, 0));
+    test('a boss HP drop records the player-to-boss distance', () => {
+        global.enemies = [lone];                       // 80px east
+        pineBot.test.gatherThreats(global.player);     // seed the hp memory
+        lone.hp -= 500;
+        pineBot.test.gatherThreats(global.player);
+        const s = pineBot.test.bossHitSamples();
+        assert.strictEqual(s.length, 1, JSON.stringify(s));
+        assert.strictEqual(s[0], 80);
+    });
+    test('bossHitRange reports percentiles', () => {
+        const r = global.window.pineBot.bossHitRange();
+        assert.strictEqual(r.n, 1);
+        assert.strictEqual(r.median, 80);
+    });
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -413,4 +470,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
