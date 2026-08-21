@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.1
+// @version      6.85.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.1';
+    const SCRIPT_VERSION = '6.85.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -156,10 +156,14 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // Current experiment: cycle PAT and JOE run-by-run (minguk's ~600-run
-        // tuning stays parked, untouched, under his own key).
+        // v6.85.2: JOE IS OUT. 113 runs, 12% day clear, median 446s, P60 0.00 —
+        // half the farm was producing nothing. Rotation is now PAT (the tank
+        // experiment, freshly recalibrated) against MINGUK (the ~600-run
+        // incumbent) so every other run is a live control instead of a
+        // write-off. Joe's learned store is left on disk, untouched, in case
+        // the runner profile is worth revisiting later.
         preferredBartender: null,
-        bartenderRotation: ['pat', 'joe'],
+        bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate
@@ -357,10 +361,29 @@
     // LIVE-READ BASE STATS (player.maxHp / player.speed at t=0, 2026-08-21).
     // `tank` = survive by absorbing (HP/armor/shield); `runner` = survive
     // by spacing (only meaningful before enemy speed passes ours, ~minute 8).
+    // v6.85.2 PAT CALIBRATION — from three manual Pat demos (2026-08-21),
+    // one full day (idx 1) and 19 minutes inside hell (idx 3). What the
+    // human actually did, and what the 6.85.1 profile had wrong:
+    //   * dayRing: he farms passouts from 130px in the first 3 minutes and
+    //     TIGHTENS to 72 / 62 as the build matures — the bot was holding
+    //     118/112/105, roughly double the distance in mid/late day.
+    //   * crowdPanic: he held station through waves of 50-99 near at 100 HP
+    //     (day) and 102-156 near (hell) without losing a point. Crowd count
+    //     is not a threat for a tank with freeze up; HP is the only gate.
+    //   * kiteMul back to 1.0: CEM's own gradient has movement.kitePull at
+    //     corr +0.41. Cutting it to 0.7 in 6.85.0 was a guess the data rejects.
+    //   * bossFloor: every damage event in the 19-minute hell run happened at
+    //     bossD < 140 (100->74 at 93px, 100->46 at 74px). Above ~150 he took
+    //     nothing all run. Small bosses could previously be ringed at ~95px.
+    // dayRing/bossFloor/crowdPanic are null/true for the runners: minguk's
+    // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
-        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 0.7, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10 },
-        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4 },
-        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0 }
+        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
+                  dayRing: { early: 130, mid: 72, late: 62 }, crowdPanic: false, bossFloor: 150 },
+        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
+                  dayRing: null, crowdPanic: true, bossFloor: 0 },
+        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
+                  dayRing: null, crowdPanic: true, bossFloor: 0 }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a
@@ -662,6 +685,13 @@
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
     const flightRef = { v: false };  // live flight-mode flag (unkillable chase)
+    // v6.85.2: last boss firing-ring the planner computed, in px. Diagnostic
+    // only — nothing reads it to make a decision. It exists because the ring
+    // is otherwise unobservable from outside planMove, which made the
+    // per-character bossFloor impossible to test: a direction-based test
+    // passes either way, since the contact-danger gradient already pushes
+    // away from a boss regardless of where the ring sits.
+    const bossRingRef = { v: null };
     let lastDeathCause = null;
     let enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };  // rolling: what we're fighting
     // Enemy-scaling telemetry: measure the difficulty curve instead of assuming it.
@@ -3388,7 +3418,13 @@
                     // r*1.9 and dmg*1.5 (source-verified) — the falling body
                     // is a telegraphed AoE strike, not a farm target yet.
                     if (typeof e.fallT === 'number' && e.fallT > 0) {
-                        out.marks.push({ x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 14) * 1.9 + CONFIG.threat.markPad });
+                        // v6.85.2: tagged `drop` so the ANCHOR test can ignore
+                        // it. It stays a real hazard in the danger field (never
+                        // stand under a falling body), but in the day these fire
+                        // constantly — every manual-demo `marks:3` window is a
+                        // passout landing 1-2s later — and `markHere` was
+                        // cancelling the anchor almost permanently because of it.
+                        out.marks.push({ x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 14) * 1.9 + CONFIG.threat.markPad, drop: true });
                         continue;
                     }
                     if (Math.hypot(e.x - p.x, e.y - p.y) < CONFIG.movement.lootRange * 1.3) {
@@ -3878,7 +3914,13 @@
             // minutes was 44 within 90px (p90 219) at 100% HP — density at
             // depth is the working environment, never an emergency.
             (hellDetected ? Math.round(Math.min(40, Math.max(0, ((typeof G.gameTime === 'number' ? G.gameTime : 0) - 1800) / 120))) : 0);
-        const panic = hpPanic || th.near >= crowdTol;
+        // v6.85.2: a tank profile (charOf().crowdPanic === false) ignores crowd
+        // COUNT entirely and panics on HP alone. Measured: Pat held station at
+        // 100 HP through 50-99 near in the day and 102-156 near in hell, with
+        // freeze up, taking zero damage. crowdTol still drives the gap-escape
+        // and loot-greed terms below for every profile.
+        const crowdPanic = charOf().crowdPanic !== false && th.near >= crowdTol;
+        const panic = hpPanic || crowdPanic;
         const lootMul = M.lootPull * (panic ? M.panicLootDiscount : 1) *
             (hellRecent ? 0.3 : 1) *      // hell entry: survival only, greed later
             (surgeActive ? 0.6 : 1) *     // surges: dodge first, loot after
@@ -4032,7 +4074,8 @@
         const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !hpPanic;
         flightRef.v = flight;
 
-        const markHere = th.marks.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 50);
+        // v6.85.2: falling-passout drops excluded — see the `drop` tag above.
+        const markHere = th.marks.some(m => !m.drop && Math.hypot(m.x - p.x, m.y - p.y) < m.r + 50);
         // live enemy fire anywhere near us: do NOT plant — keep moving
         const projHere = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + 130);
@@ -4289,7 +4332,16 @@
                     if ((ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
-                    const ring = (rainbowThisRun && !rainbowRecent)
+                    // v6.85.2: `bossFloor` is a per-character hard minimum on
+                    // the firing ring in hell. Pat's 19-minute hell demo took
+                    // damage at bossD 136 -> 93 (100->74) and 98 -> 74
+                    // (100->46), and nothing at all above ~150. A small boss
+                    // could previously be ringed at e.r+55 (~95px), straight
+                    // inside that band. Gun-era point-blank melting is exempt:
+                    // the rainbow kills before contact matters.
+                    const bossFloor = (hellDetected && !(rainbowThisRun && !rainbowRecent))
+                        ? (charOf().bossFloor || 0) : 0;
+                    let ring = (rainbowThisRun && !rainbowRecent)
                         ? Math.max(e.r + 34, Math.round(e.reach * 0.55))   // DEMO-TUNED: gun-era point-blank boss melting (user p25: 60px)
                         : (CONFIG.rainbowPolicyOverride === 'skip'
                             // FULL-RUN CALIBRATION: the DAY phase sits far out
@@ -4306,6 +4358,8 @@
                                     : Math.max(e.r + 55, Math.min(e.reach + 10, 150)))
                                 : Math.max(e.reach + 60, 240))
                             : Math.max(e.reach + 10, e.r + 40));
+                    if (bossFloor && ring < bossFloor) ring = bossFloor;
+                    bossRingRef.v = ring;
                     const errNow = Math.abs(Math.hypot(p.x - e.x, p.y - e.y) - ring);
                     const errNew = Math.abs(Math.hypot(nx - e.x, ny - e.y) - ring);
                     gain += M.bossEngageValue * dayFarm * (errNow - errNew) * 0.12;
@@ -4349,11 +4403,22 @@
                     // ~245 by minute 30 as everything scales. Day keeps the
                     // tight, build-confidence curve.
                     const hellRing = 115 + Math.min(120, Math.max(0, (gtRing - 1200) / 600 * 120));
-                    const ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                    // v6.85.2: per-character day curve. Pat's manual demo farms
+                    // from 130px in the opening minutes then tightens hard to
+                    // ~72 and ~62 as the build matures — measured off stationary
+                    // poD samples, keyed on gameTime rather than gamePhase()
+                    // because the tightening happens at ~180s, well inside the
+                    // 'early' bucket. Characters without a dayRing keep the
+                    // original minguk-calibrated 118/112/105.
+                    const dr = charOf().dayRing;
+                    const dayRing = dr
+                        ? (gtRing < 180 ? dr.early : (gtRing < 600 ? dr.mid : dr.late))
                         // DAY (minguk-calibrated): hold ~124px — weapons reach,
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
-                        : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105) * slowPad);
+                        : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105);
+                    const ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                        : dayRing * slowPad);
                     const zone = po.r + 18;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
@@ -4953,6 +5018,11 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     activeRoster: () => activeRoster,
+                    bossRing: () => bossRingRef.v,
+                    // test-only: age the hell-entry stamp so the 90s entry
+                    // window (`hellRecent`) is past and the boss-ring branch
+                    // is reachable without sleeping for a minute and a half.
+                    ageHellEntry: ms => { if (hellEnteredAt) hellEnteredAt -= (ms || 120000); },
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }

@@ -154,10 +154,14 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // Current experiment: cycle PAT and JOE run-by-run (minguk's ~600-run
-        // tuning stays parked, untouched, under his own key).
+        // v6.85.2: JOE IS OUT. 113 runs, 12% day clear, median 446s, P60 0.00 —
+        // half the farm was producing nothing. Rotation is now PAT (the tank
+        // experiment, freshly recalibrated) against MINGUK (the ~600-run
+        // incumbent) so every other run is a live control instead of a
+        // write-off. Joe's learned store is left on disk, untouched, in case
+        // the runner profile is worth revisiting later.
         preferredBartender: null,
-        bartenderRotation: ['pat', 'joe'],
+        bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate
@@ -355,10 +359,29 @@
     // LIVE-READ BASE STATS (player.maxHp / player.speed at t=0, 2026-08-21).
     // `tank` = survive by absorbing (HP/armor/shield); `runner` = survive
     // by spacing (only meaningful before enemy speed passes ours, ~minute 8).
+    // v6.85.2 PAT CALIBRATION — from three manual Pat demos (2026-08-21),
+    // one full day (idx 1) and 19 minutes inside hell (idx 3). What the
+    // human actually did, and what the 6.85.1 profile had wrong:
+    //   * dayRing: he farms passouts from 130px in the first 3 minutes and
+    //     TIGHTENS to 72 / 62 as the build matures — the bot was holding
+    //     118/112/105, roughly double the distance in mid/late day.
+    //   * crowdPanic: he held station through waves of 50-99 near at 100 HP
+    //     (day) and 102-156 near (hell) without losing a point. Crowd count
+    //     is not a threat for a tank with freeze up; HP is the only gate.
+    //   * kiteMul back to 1.0: CEM's own gradient has movement.kitePull at
+    //     corr +0.41. Cutting it to 0.7 in 6.85.0 was a guess the data rejects.
+    //   * bossFloor: every damage event in the 19-minute hell run happened at
+    //     bossD < 140 (100->74 at 93px, 100->46 at 74px). Above ~150 he took
+    //     nothing all run. Small bosses could previously be ringed at ~95px.
+    // dayRing/bossFloor/crowdPanic are null/true for the runners: minguk's
+    // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
-        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 0.7, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10 },
-        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4 },
-        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0 }
+        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
+                  dayRing: { early: 130, mid: 72, late: 62 }, crowdPanic: false, bossFloor: 150 },
+        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
+                  dayRing: null, crowdPanic: true, bossFloor: 0 },
+        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
+                  dayRing: null, crowdPanic: true, bossFloor: 0 }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a
@@ -660,6 +683,13 @@
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
     const flightRef = { v: false };  // live flight-mode flag (unkillable chase)
+    // v6.85.2: last boss firing-ring the planner computed, in px. Diagnostic
+    // only — nothing reads it to make a decision. It exists because the ring
+    // is otherwise unobservable from outside planMove, which made the
+    // per-character bossFloor impossible to test: a direction-based test
+    // passes either way, since the contact-danger gradient already pushes
+    // away from a boss regardless of where the ring sits.
+    const bossRingRef = { v: null };
     let lastDeathCause = null;
     let enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };  // rolling: what we're fighting
     // Enemy-scaling telemetry: measure the difficulty curve instead of assuming it.

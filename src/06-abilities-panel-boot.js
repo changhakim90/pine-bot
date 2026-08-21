@@ -499,6 +499,11 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     activeRoster: () => activeRoster,
+                    bossRing: () => bossRingRef.v,
+                    // test-only: age the hell-entry stamp so the 90s entry
+                    // window (`hellRecent`) is past and the boss-ring branch
+                    // is reachable without sleeping for a minute and a half.
+                    ageHellEntry: ms => { if (hellEnteredAt) hellEnteredAt -= (ms || 120000); },
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }

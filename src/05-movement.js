@@ -30,7 +30,13 @@
                     // r*1.9 and dmg*1.5 (source-verified) — the falling body
                     // is a telegraphed AoE strike, not a farm target yet.
                     if (typeof e.fallT === 'number' && e.fallT > 0) {
-                        out.marks.push({ x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 14) * 1.9 + CONFIG.threat.markPad });
+                        // v6.85.2: tagged `drop` so the ANCHOR test can ignore
+                        // it. It stays a real hazard in the danger field (never
+                        // stand under a falling body), but in the day these fire
+                        // constantly — every manual-demo `marks:3` window is a
+                        // passout landing 1-2s later — and `markHere` was
+                        // cancelling the anchor almost permanently because of it.
+                        out.marks.push({ x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 14) * 1.9 + CONFIG.threat.markPad, drop: true });
                         continue;
                     }
                     if (Math.hypot(e.x - p.x, e.y - p.y) < CONFIG.movement.lootRange * 1.3) {
@@ -520,7 +526,13 @@
             // minutes was 44 within 90px (p90 219) at 100% HP — density at
             // depth is the working environment, never an emergency.
             (hellDetected ? Math.round(Math.min(40, Math.max(0, ((typeof G.gameTime === 'number' ? G.gameTime : 0) - 1800) / 120))) : 0);
-        const panic = hpPanic || th.near >= crowdTol;
+        // v6.85.2: a tank profile (charOf().crowdPanic === false) ignores crowd
+        // COUNT entirely and panics on HP alone. Measured: Pat held station at
+        // 100 HP through 50-99 near in the day and 102-156 near in hell, with
+        // freeze up, taking zero damage. crowdTol still drives the gap-escape
+        // and loot-greed terms below for every profile.
+        const crowdPanic = charOf().crowdPanic !== false && th.near >= crowdTol;
+        const panic = hpPanic || crowdPanic;
         const lootMul = M.lootPull * (panic ? M.panicLootDiscount : 1) *
             (hellRecent ? 0.3 : 1) *      // hell entry: survival only, greed later
             (surgeActive ? 0.6 : 1) *     // surges: dodge first, loot after
@@ -674,7 +686,8 @@
         const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !hpPanic;
         flightRef.v = flight;
 
-        const markHere = th.marks.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 50);
+        // v6.85.2: falling-passout drops excluded — see the `drop` tag above.
+        const markHere = th.marks.some(m => !m.drop && Math.hypot(m.x - p.x, m.y - p.y) < m.r + 50);
         // live enemy fire anywhere near us: do NOT plant — keep moving
         const projHere = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + 130);
@@ -931,7 +944,16 @@
                     if ((ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
-                    const ring = (rainbowThisRun && !rainbowRecent)
+                    // v6.85.2: `bossFloor` is a per-character hard minimum on
+                    // the firing ring in hell. Pat's 19-minute hell demo took
+                    // damage at bossD 136 -> 93 (100->74) and 98 -> 74
+                    // (100->46), and nothing at all above ~150. A small boss
+                    // could previously be ringed at e.r+55 (~95px), straight
+                    // inside that band. Gun-era point-blank melting is exempt:
+                    // the rainbow kills before contact matters.
+                    const bossFloor = (hellDetected && !(rainbowThisRun && !rainbowRecent))
+                        ? (charOf().bossFloor || 0) : 0;
+                    let ring = (rainbowThisRun && !rainbowRecent)
                         ? Math.max(e.r + 34, Math.round(e.reach * 0.55))   // DEMO-TUNED: gun-era point-blank boss melting (user p25: 60px)
                         : (CONFIG.rainbowPolicyOverride === 'skip'
                             // FULL-RUN CALIBRATION: the DAY phase sits far out
@@ -948,6 +970,8 @@
                                     : Math.max(e.r + 55, Math.min(e.reach + 10, 150)))
                                 : Math.max(e.reach + 60, 240))
                             : Math.max(e.reach + 10, e.r + 40));
+                    if (bossFloor && ring < bossFloor) ring = bossFloor;
+                    bossRingRef.v = ring;
                     const errNow = Math.abs(Math.hypot(p.x - e.x, p.y - e.y) - ring);
                     const errNew = Math.abs(Math.hypot(nx - e.x, ny - e.y) - ring);
                     gain += M.bossEngageValue * dayFarm * (errNow - errNew) * 0.12;
@@ -991,11 +1015,22 @@
                     // ~245 by minute 30 as everything scales. Day keeps the
                     // tight, build-confidence curve.
                     const hellRing = 115 + Math.min(120, Math.max(0, (gtRing - 1200) / 600 * 120));
-                    const ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                    // v6.85.2: per-character day curve. Pat's manual demo farms
+                    // from 130px in the opening minutes then tightens hard to
+                    // ~72 and ~62 as the build matures — measured off stationary
+                    // poD samples, keyed on gameTime rather than gamePhase()
+                    // because the tightening happens at ~180s, well inside the
+                    // 'early' bucket. Characters without a dayRing keep the
+                    // original minguk-calibrated 118/112/105.
+                    const dr = charOf().dayRing;
+                    const dayRing = dr
+                        ? (gtRing < 180 ? dr.early : (gtRing < 600 ? dr.mid : dr.late))
                         // DAY (minguk-calibrated): hold ~124px — weapons reach,
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
-                        : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105) * slowPad);
+                        : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105);
+                    const ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                        : dayRing * slowPad);
                     const zone = po.r + 18;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);

@@ -79,4 +79,62 @@ if (which === 'hell-unban') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// 4. v6.85.2 Pat calibration: profile fields, falling-passout drop tag,
+//    and the hell boss-ring floor. The fake env boots with no
+//    preferredBartender, so activeChar falls to bartenderRotation[0] = 'pat'.
+if (which === 'pat-profile') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+    pineBot.stop();
+    const prof = () => global.window.pineBotStats().charProfile;
+    test('rotation starts on pat', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
+    test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
+    test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
+    test('pat day ring tightens 130 -> 72 -> 62', () => {
+        const dr = prof().dayRing;
+        assert.ok(dr && dr.early === 130 && dr.mid === 72 && dr.late === 62, JSON.stringify(dr));
+    });
+    test('pat carries a 150px hell boss floor', () => assert.strictEqual(prof().bossFloor, 150));
+
+    // A passout mid-fall is a telegraphed AoE, so it must still be a mark —
+    // but tagged `drop` so it cannot cancel the anchor. A landed one is loot.
+    global.enemies = [
+        { type: 'passout', x: 300, y: 270, r: 20, fallT: 8, hp: 40, maxHp: 40 },
+        { type: 'passout', x: 340, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 2 }
+    ];
+    const th = pineBot.test.gatherThreats(global.player);
+    test('falling passout is a mark', () => assert.ok(th.marks.some(m => m.x === 300), JSON.stringify(th.marks)));
+    test('falling passout mark is tagged drop', () => assert.ok(th.marks.filter(m => m.x === 300).every(m => m.drop === true)));
+    test('landed passout is loot, not a mark', () => {
+        assert.ok(!th.marks.some(m => m.x === 340));
+        assert.ok(th.passouts.some(po => po.x === 340));
+    });
+    done();
+}
+
+// 5. hell boss floor is behavioural: parked inside 150px of a boss in hell,
+//    the planner must move OUTWARD. Pre-6.85.2 a small boss was ringed at
+//    e.r + 55 (~95px) — inside the band where the manual demo lost 26-54 HP.
+if (which === 'boss-floor') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        // boss 100px to the east: r 40 so the old ring would have been ~95px
+        // and the bot would have been happy to sit right here.
+        global.enemies = [{ type: 'boss', x: 370, y: 270, r: 40, reach: 90, hp: 5e6, maxHp: 5e6, speed: 1.0, moving: true }];
+        // past the 90s hell-entry window, otherwise `entryBlock` skips the
+        // whole boss-ring branch and the floor is never exercised
+        pineBot.test.ageHellEntry(120000);
+        const plan = pineBot.test.planMove();
+        test('planner produced a move', () => assert.ok(plan && typeof plan.dx === 'number', 'no plan'));
+        test('boss firing ring was computed', () => assert.ok(typeof pineBot.test.bossRing() === 'number', 'ring ' + pineBot.test.bossRing()));
+        test('hell boss ring is floored at 150 for pat', () => {
+            const r = pineBot.test.bossRing();
+            // unfloored this boss rings at max(r+55, min(reach+10, 150)) = 100
+            assert.ok(r >= 150, 'ring ' + r + ' (expected >= 150)');
+        });
+        done();
+    }, 2000);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
