@@ -53,6 +53,17 @@
         // everyone); a big cluster or a lone passout in range fires anyway
         const harvest = !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
             ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
+        // v6.85.8 (user: "the bot should be using the ultimate more frequently
+        // to kill passouts"). Adding another TRIGGER would have done nothing —
+        // `lootTargets` already fires on any passout within 190px, so every
+        // trigger-shaped version of this was measured redundant. What actually
+        // limits the rate is the RETRY GATE: the bot asks the game for the ult
+        // every ultCooldownMs, so a passout can sit in range for over a second
+        // after the game's own cooldown ends. With a passout in falloff range
+        // the retry drops to 900 ms so the ult goes off as soon as the game
+        // allows it. callGame is a no-op while the real cooldown runs.
+        const poClose = plan.ultFalloff === true && !plan.hpPanic &&
+            plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
         // siege open), bosses in range, and passout clusters. Damage +
@@ -85,7 +96,8 @@
         // ult is retried at double cadence — every passout cleared early is
         // loot, XP, and upgrade potential compounding for the whole run.
         const gtU = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
+        let ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
+        if (poClose) ultGate = Math.min(ultGate, 900);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave)) {

@@ -241,6 +241,46 @@ if (which === 'hell-southside') {
     }, 2000);
 }
 
+// 8. v6.85.8: Pat's ult spirals out with distance falloff.
+if (which === 'ult-falloff') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+    pineBot.stop();
+    pineBot.test.setOwned({ MOJITO: 4 });
+    test('pat carries the falloff ult shape', () =>
+        assert.strictEqual(global.window.pineBotStats().charProfile.ultFalloff, true));
+    global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+    // a tight pair right next to the bot, and one straggler far east. A flat
+    // centroid lands at x=310, dragged off the pair by the straggler; the
+    // weighted aim must stay on the pair.
+    global.enemies = [
+        { type: 'passout', x: 250, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 1 },
+        { type: 'passout', x: 260, y: 290, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 2 },
+        { type: 'passout', x: 460, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 3 }
+    ];
+    const plan = pineBot.test.planMove();
+    test('the aim point is pulled to the near cluster, not the flat centroid', () => {
+        // flat centroid sits ~53px from the bot; the weighted one is far closer
+        assert.ok(plan.poCentroidDist < 40, 'aim dist ' + plan.poCentroidDist);
+    });
+    test('nearest-passout distance is reported', () =>
+        assert.ok(plan.poNearest != null && plan.poNearest <= 25, 'nearest ' + plan.poNearest));
+    // The RETRY GATE is the rate lever, not the trigger list: `lootTargets`
+    // already fires on any passout within 190px, so an extra trigger was
+    // measured redundant and dropped. With a passout in falloff range the
+    // retry drops 1500ms -> 900ms, so a second ask lands inside the window
+    // where the old gate was still waiting.
+    global.enemies = [{ type: 'passout', x: 375, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 9 }];
+    const p2 = pineBot.test.planMove();
+    let ults = 0; global.useUltimate = () => { ults++; };
+    pineBot.test.maybeAbilities(p2);
+    setTimeout(() => {
+        pineBot.test.maybeAbilities(p2);
+        test('a passout in falloff range shortens the ult retry gate', () =>
+            assert.strictEqual(ults, 2, 'ults ' + ults + ' (expected a second ask after 1.0s)'));
+        done();
+    }, 1000);
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -273,4 +313,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

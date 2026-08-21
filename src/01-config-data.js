@@ -397,15 +397,23 @@
     //     Whatever is hurting him in hell is ranged or a telegraph, not
     //     contact and not a swarm (hitNear med 2), so a standoff floor cannot
     //     reach it and only costs uptime. Left in the code as a profile knob.
+    //   * ultFalloff (v6.85.8, user): PAT's ultimate is NOT minguk's. It
+    //     spirals OUTWARD from the bot and the passouts nearest the origin
+    //     take the most damage. A flat centroid is therefore the wrong aim
+    //     point — it averages a spread-out group into a spot that is far from
+    //     all of them. With falloff the aim is the proximity-weighted centre,
+    //     which collapses onto the densest nearby cluster, and a single
+    //     passout at point-blank is already a good ult. Left false for the
+    //     others: only Pat's shape has been described.
     // dayRing/bossFloor/crowdPanic are null/true/0 for the runners: minguk's
     // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
-                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0 },
+                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true },
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
-                  dayRing: null, crowdPanic: true, bossFloor: 0 },
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false },
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
-                  dayRing: null, crowdPanic: true, bossFloor: 0 }
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a

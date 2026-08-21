@@ -723,16 +723,26 @@
             (flameOn ? 1.3 : 1) *       // burn window: harvest everything it touches
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
 
-        // ULT CENTERING (user: the ultimate spirals outward from the bot —
-        // fired from the MIDDLE of a passout group it hits everything):
-        // compute the centroid of farmable passouts in range; the anchor
-        // pulls the bot onto it before the ult fires.
-        let poCx = 0, poCy = 0, poN = 0;
+        // ULT AIMING. The ultimate spirals OUTWARD from the bot, so the aim
+        // point is where the bot's body should be when it fires.
+        // v6.85.8 (user): "the ultimate for Pat is different from minguk's in
+        // that it spirals out and the passouts NEAREST the ultimate get the
+        // most damage." A flat centroid is the wrong aim under falloff — it
+        // averages a spread-out group into a point that can be far from every
+        // member of it. Weighting each passout by 1/(d+60) collapses the aim
+        // onto the densest nearby cluster instead, and leaves a single
+        // point-blank passout as a perfectly good target.
+        const ultFall = charOf().ultFalloff === true;
+        let poCx = 0, poCy = 0, poN = 0, poW = 0, poNearest = null;
         for (const po of th.passouts) {
             if (po.contested) continue;
-            if (Math.hypot(po.x - p.x, po.y - p.y) < 240) { poCx += po.x; poCy += po.y; poN++; }
+            const dpo = Math.hypot(po.x - p.x, po.y - p.y);
+            if (dpo >= 240) continue;
+            const w = ultFall ? 1 / (dpo + 60) : 1;
+            poCx += po.x * w; poCy += po.y * w; poW += w; poN++;
+            if (poNearest == null || dpo < poNearest) poNearest = dpo;
         }
-        if (poN) { poCx /= poN; poCy /= poN; }
+        if (poW) { poCx /= poW; poCy /= poW; }
 
         // CONTACT IMMINENT (hell): a live body whose predicted step lands on
         // us. In hell these scale past what the supers can kill, so the only
@@ -946,24 +956,14 @@
                     if (e.chaserFast && !knocker && !(rainbowThisRun && !rainbowRecent)) continue;   // gun era (demo-tuned): the rainbow melts chargers before contact
                     if (e.freezeAura && !knocker && !(rainbowThisRun && !rainbowRecent)) continue;   // two-top: NEVER ring inside a freeze aura — snipe it remotely
                     if (e.linebacker) continue;   // a charging linebacker is NEVER ringable — kite + homing kill it
-                    // USER: MOJITO snipes bosses AT RANGE — with it leveled and
-                    // passouts available, the bot's body stays on the passout
-                    // farm and lets the sniper handle the boss remotely.
-                    // v6.85.6 (user directive): "the key to the day run is to
-                    // kill all the bosses and get the loot and upgrades to max
-                    // out the ultimate to clear the passouts." Bosses are the
-                    // FUNDING, passouts are what the funded ult harvests — so
-                    // the sniper deferral is a HELL rule only. During the day
-                    // the body goes to the boss and the passouts wait for the
-                    // ult, not the other way round.
-                    // v6.85.7: and in hell it now also yields to SOUTH SIDE.
-                    // 6.85.6 left a hole in its own directive — "use SOUTH SIDE
-                    // to kill bosses in hell" cannot happen if MOJITO + a free
-                    // passout skips boss engagement entirely, because SOUTH
-                    // SIDE is a GROUND weapon: its burn only lands where the
-                    // bot's body is. Sniping is the fallback for when there is
-                    // no zone engine, not a substitute for one.
-                    if (hellDetected && !zoner && (ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
+                    // MOJITO SNIPER DEFERRAL — REMOVED in v6.85.8.
+                    // The rule was: with MOJITO >= 3 and a free passout, leave
+                    // the boss to the sniper and keep the body on the farm.
+                    // 6.85.6 made it hell-only, 6.85.7 made it yield to SOUTH
+                    // SIDE, and the user then settled it outright: "mojito
+                    // doesn't kill the holdouts." The premise was false, so the
+                    // conditional variants were patching a rule that should
+                    // never have existed. Bosses are engaged on their merits.
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
                     // v6.85.2: `bossFloor` is a per-character hard minimum on
@@ -1109,10 +1109,17 @@
 
             // ult centering: with 2+ passouts, drift onto their centroid so
             // the outward spiral catches the whole group
-            if (anchor && poN >= 2) {
+            // v6.85.8: under falloff, ONE passout is worth closing on, and the
+            // `anchor` gate (HP > 0.7 plus OLIVE/NEGRONI >= 2) kept the bot off
+            // the cluster for the whole early day — exactly the window where
+            // the user wants passout loot funding the ult. The gate is now the
+            // safety half of `anchor` only: hurt, or a blast/shot overlapping
+            // the stand position, still suspends it.
+            const ultAimOk = ultFall ? (poN >= 1 && !hpPanic && !markHere && !projHere) : (anchor && poN >= 2);
+            if (ultAimOk) {
                 const eNow = Math.hypot(p.x - poCx, p.y - poCy);
                 const eNew = Math.hypot(nx - poCx, ny - poCy);
-                gain += 14 * (eNow - eNew) * 0.15;
+                gain += (ultFall ? 22 : 14) * (eNow - eNew) * 0.15;
             }
 
             // kiting sweep + gap escape
@@ -1158,6 +1165,7 @@
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
+            poNearest: poNearest == null ? null : Math.round(poNearest), ultFalloff: ultFall,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
             bossNear: th.enemies.some(e => e.boss && !e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 240),
             roamingBoss: th.enemies.some(e => e.boss && !e.wall && !e.stationary && Math.hypot(e.x - p.x, e.y - p.y) < 260),

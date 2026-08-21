@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.7
+// @version      6.85.8
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.7';
+    const SCRIPT_VERSION = '6.85.8';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -399,15 +399,23 @@
     //     Whatever is hurting him in hell is ranged or a telegraph, not
     //     contact and not a swarm (hitNear med 2), so a standoff floor cannot
     //     reach it and only costs uptime. Left in the code as a profile knob.
+    //   * ultFalloff (v6.85.8, user): PAT's ultimate is NOT minguk's. It
+    //     spirals OUTWARD from the bot and the passouts nearest the origin
+    //     take the most damage. A flat centroid is therefore the wrong aim
+    //     point — it averages a spread-out group into a spot that is far from
+    //     all of them. With falloff the aim is the proximity-weighted centre,
+    //     which collapses onto the densest nearby cluster, and a single
+    //     passout at point-blank is already a good ult. Left false for the
+    //     others: only Pat's shape has been described.
     // dayRing/bossFloor/crowdPanic are null/true/0 for the runners: minguk's
     // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
-                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0 },
+                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true },
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
-                  dayRing: null, crowdPanic: true, bossFloor: 0 },
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false },
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
-                  dayRing: null, crowdPanic: true, bossFloor: 0 }
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a
@@ -4135,16 +4143,26 @@
             (flameOn ? 1.3 : 1) *       // burn window: harvest everything it touches
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
 
-        // ULT CENTERING (user: the ultimate spirals outward from the bot —
-        // fired from the MIDDLE of a passout group it hits everything):
-        // compute the centroid of farmable passouts in range; the anchor
-        // pulls the bot onto it before the ult fires.
-        let poCx = 0, poCy = 0, poN = 0;
+        // ULT AIMING. The ultimate spirals OUTWARD from the bot, so the aim
+        // point is where the bot's body should be when it fires.
+        // v6.85.8 (user): "the ultimate for Pat is different from minguk's in
+        // that it spirals out and the passouts NEAREST the ultimate get the
+        // most damage." A flat centroid is the wrong aim under falloff — it
+        // averages a spread-out group into a point that can be far from every
+        // member of it. Weighting each passout by 1/(d+60) collapses the aim
+        // onto the densest nearby cluster instead, and leaves a single
+        // point-blank passout as a perfectly good target.
+        const ultFall = charOf().ultFalloff === true;
+        let poCx = 0, poCy = 0, poN = 0, poW = 0, poNearest = null;
         for (const po of th.passouts) {
             if (po.contested) continue;
-            if (Math.hypot(po.x - p.x, po.y - p.y) < 240) { poCx += po.x; poCy += po.y; poN++; }
+            const dpo = Math.hypot(po.x - p.x, po.y - p.y);
+            if (dpo >= 240) continue;
+            const w = ultFall ? 1 / (dpo + 60) : 1;
+            poCx += po.x * w; poCy += po.y * w; poW += w; poN++;
+            if (poNearest == null || dpo < poNearest) poNearest = dpo;
         }
-        if (poN) { poCx /= poN; poCy /= poN; }
+        if (poW) { poCx /= poW; poCy /= poW; }
 
         // CONTACT IMMINENT (hell): a live body whose predicted step lands on
         // us. In hell these scale past what the supers can kill, so the only
@@ -4358,24 +4376,14 @@
                     if (e.chaserFast && !knocker && !(rainbowThisRun && !rainbowRecent)) continue;   // gun era (demo-tuned): the rainbow melts chargers before contact
                     if (e.freezeAura && !knocker && !(rainbowThisRun && !rainbowRecent)) continue;   // two-top: NEVER ring inside a freeze aura — snipe it remotely
                     if (e.linebacker) continue;   // a charging linebacker is NEVER ringable — kite + homing kill it
-                    // USER: MOJITO snipes bosses AT RANGE — with it leveled and
-                    // passouts available, the bot's body stays on the passout
-                    // farm and lets the sniper handle the boss remotely.
-                    // v6.85.6 (user directive): "the key to the day run is to
-                    // kill all the bosses and get the loot and upgrades to max
-                    // out the ultimate to clear the passouts." Bosses are the
-                    // FUNDING, passouts are what the funded ult harvests — so
-                    // the sniper deferral is a HELL rule only. During the day
-                    // the body goes to the boss and the passouts wait for the
-                    // ult, not the other way round.
-                    // v6.85.7: and in hell it now also yields to SOUTH SIDE.
-                    // 6.85.6 left a hole in its own directive — "use SOUTH SIDE
-                    // to kill bosses in hell" cannot happen if MOJITO + a free
-                    // passout skips boss engagement entirely, because SOUTH
-                    // SIDE is a GROUND weapon: its burn only lands where the
-                    // bot's body is. Sniping is the fallback for when there is
-                    // no zone engine, not a substitute for one.
-                    if (hellDetected && !zoner && (ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
+                    // MOJITO SNIPER DEFERRAL — REMOVED in v6.85.8.
+                    // The rule was: with MOJITO >= 3 and a free passout, leave
+                    // the boss to the sniper and keep the body on the farm.
+                    // 6.85.6 made it hell-only, 6.85.7 made it yield to SOUTH
+                    // SIDE, and the user then settled it outright: "mojito
+                    // doesn't kill the holdouts." The premise was false, so the
+                    // conditional variants were patching a rule that should
+                    // never have existed. Bosses are engaged on their merits.
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
                     // v6.85.2: `bossFloor` is a per-character hard minimum on
@@ -4521,10 +4529,17 @@
 
             // ult centering: with 2+ passouts, drift onto their centroid so
             // the outward spiral catches the whole group
-            if (anchor && poN >= 2) {
+            // v6.85.8: under falloff, ONE passout is worth closing on, and the
+            // `anchor` gate (HP > 0.7 plus OLIVE/NEGRONI >= 2) kept the bot off
+            // the cluster for the whole early day — exactly the window where
+            // the user wants passout loot funding the ult. The gate is now the
+            // safety half of `anchor` only: hurt, or a blast/shot overlapping
+            // the stand position, still suspends it.
+            const ultAimOk = ultFall ? (poN >= 1 && !hpPanic && !markHere && !projHere) : (anchor && poN >= 2);
+            if (ultAimOk) {
                 const eNow = Math.hypot(p.x - poCx, p.y - poCy);
                 const eNew = Math.hypot(nx - poCx, ny - poCy);
-                gain += 14 * (eNow - eNew) * 0.15;
+                gain += (ultFall ? 22 : 14) * (eNow - eNew) * 0.15;
             }
 
             // kiting sweep + gap escape
@@ -4570,6 +4585,7 @@
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
+            poNearest: poNearest == null ? null : Math.round(poNearest), ultFalloff: ultFall,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
             bossNear: th.enemies.some(e => e.boss && !e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 240),
             roamingBoss: th.enemies.some(e => e.boss && !e.wall && !e.stationary && Math.hypot(e.x - p.x, e.y - p.y) < 260),
@@ -4635,6 +4651,17 @@
         // everyone); a big cluster or a lone passout in range fires anyway
         const harvest = !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
             ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
+        // v6.85.8 (user: "the bot should be using the ultimate more frequently
+        // to kill passouts"). Adding another TRIGGER would have done nothing —
+        // `lootTargets` already fires on any passout within 190px, so every
+        // trigger-shaped version of this was measured redundant. What actually
+        // limits the rate is the RETRY GATE: the bot asks the game for the ult
+        // every ultCooldownMs, so a passout can sit in range for over a second
+        // after the game's own cooldown ends. With a passout in falloff range
+        // the retry drops to 900 ms so the ult goes off as soon as the game
+        // allows it. callGame is a no-op while the real cooldown runs.
+        const poClose = plan.ultFalloff === true && !plan.hpPanic &&
+            plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
         // siege open), bosses in range, and passout clusters. Damage +
@@ -4667,7 +4694,8 @@
         // ult is retried at double cadence — every passout cleared early is
         // loot, XP, and upgrade potential compounding for the whole run.
         const gtU = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
+        let ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
+        if (poClose) ultGate = Math.min(ultGate, 900);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave)) {

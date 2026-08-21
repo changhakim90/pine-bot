@@ -22,6 +22,42 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.5+crown+pat | — | | | | | | | `bossFloor` retracted to 0 (second hell demo puts hit-`bossD` at med 264 — not contact). Day ring mid/late 75/66 → 90/80. |
 | 6.85.6+crown+pat | — | | | | | | | User directives: day bosses over the passout farm, TIME STOP station weight, flight survives low HP. |
 | 6.85.7+crown+pat | — | | | | | | | Hell boss engagement no longer deferred to the MOJITO sniper when SOUTH SIDE is owned. |
+| 6.85.8+crown+pat | — | | | | | | | Pat's ult has distance falloff: proximity-weighted aim, one-passout gate, 900ms retry. MOJITO deferral deleted. |
+
+## 6.85.8 — Pat's ultimate has distance falloff; MOJITO deferral deleted
+
+User: *"mojito doesn't kill the holdouts though. The bot should be using
+ultimate more frequently to kill passouts. also ultimate for pat is different
+from minguk in that it spirals out and the passouts nearest the ultimate gets
+most damage."*
+
+**`CHARS.pat.ultFalloff: true`.** Everything downstream keyed on an assumption
+that turned out to be minguk's ult, not Pat's.
+
+- **Aim point.** The bot used the flat centroid of every free passout within
+  240px. Under falloff that is wrong in the one case it matters: a spread-out
+  group averages to a point that is far from *every* member, so the ult lands
+  where the damage is weakest. The aim is now weighted by `1/(d+60)`, which
+  collapses onto the densest nearby cluster. Tested against a two-near-plus-one-
+  far layout, where the flat centroid sits 53px off the pair.
+- **Aim gate.** Closing on the cluster required `anchor` — HP > 0.7 **and**
+  `OLIVE`/`NEGRONI` ≥ 2 **and** 2+ passouts. That kept the bot off the cluster
+  for the entire early day, which is exactly the window where the user wants
+  passout loot funding the ult. Under falloff the gate is now the safety half
+  only (not hurt, no mark or shot overlapping the stand position) and one
+  passout is enough.
+- **Rate.** Adding another ult *trigger* was tried and dropped as measured
+  redundant — `lootTargets` already fires on any passout within 190px. The real
+  limiter is the **retry gate**: the bot only asks the game for the ult every
+  `ultCooldownMs`, so a passout can sit in range for over a second after the
+  game's own cooldown has ended. With a passout inside 120px the retry drops to
+  900ms. *Tested — fails without the change.*
+
+**The MOJITO sniper deferral is deleted.** "With MOJITO ≥ 3 and a free passout,
+leave the boss to the sniper" was a rule built on a false premise. 6.85.6 made
+it hell-only and 6.85.7 made it yield to SOUTH SIDE; both were patching a rule
+that should not have existed. Bosses are now engaged on their merits in both
+phases.
 
 ## 6.85.7 — SOUTH SIDE outranks the MOJITO sniper in hell
 
