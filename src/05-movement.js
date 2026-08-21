@@ -507,7 +507,8 @@
         // a dense late-day field — it was turning all farming off exactly
         // when the loot matters most. hpPanic = actually hurt; panic (crowd
         // included) still governs movement caution and loot greed.
-        const hpPanic = hpRatio < M.panicHp * (1 + 0.25 * late);
+        // v6.85.0: a tank panics later (more HP to spend), a runner sooner
+        const hpPanic = hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -678,8 +679,9 @@
         const projHere = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + 130);
         const dayPhaseNow = !hellDetected && (typeof G.gameTime === 'number' ? G.gameTime : 0) < 1200;
+        // v6.85.0: a tank plants on a busier field than a runner would
         const anchor = !hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
-            (!dayPhaseNow || th.near <= 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
+            (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220));
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
@@ -1040,7 +1042,7 @@
             }
 
             // kiting sweep + gap escape
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? 1.8 : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? 1.8 : 1);
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? 1.8 : 1);
 
             // pull toward the middle of the arena — corners are death traps,

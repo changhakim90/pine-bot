@@ -97,6 +97,32 @@
  *       avoidance to match the deep-hell contact posture.
  *   GINGER BEER stays unbanned in hell: it is MOSCOW MULE's key, and while
  *   its super no longer looks decisive, the cocktail itself does.
+ * ---------------------------------------------------------------------
+ * v6.85.0 — PER-BARTENDER LEARNING + THE PAT EXPERIMENT
+ *   DIFF() sampled across a run (live, 2026-08-21):
+ *       t(s)     hp        speed   spawn  dmg
+ *       0        16        0.5     54     5.1
+ *       600      1.25e3    1.6     8      22.39
+ *       3600     1.03e7    25.1    8      22.39
+ *       15300    5.57e17   403.4   8      22.39
+ *   DAMAGE IS FLAT FROM MINUTE 10. Spawn caps at 8. Only HP (x1.4/180s)
+ *   and SPEED (~quadratic, 403 px/frame at 255 min vs a player at ~3)
+ *   keep growing. So past minute ten the deep game is a STATIONARY
+ *   damage regime gated by the 38-frame invuln window: survival is max
+ *   HP, armor, shield, ult uptime and heal income. Speed is irrelevant —
+ *   which is minguk's entire premise (120 HP, 2.375 speed, "outrun
+ *   everything"). PAT has 180 HP (1.9 speed, SHAKING splash); JOE 100 HP
+ *   (3.0, STIRRING). The hell board's top ten is 9x Pat. Pat has never
+ *   been run with this bot.
+ *   So: learned state (CEM, item/build/roster bandits, LinUCB, hof,
+ *   history) is now NAMESPACED BY BARTENDER — Pat learns from scratch and
+ *   cannot contaminate minguk's ~600 runs of tuning or vice versa —
+ *   while versions/snapshots stay SHARED so compare() shows the
+ *   bartenders side by side. The bartender is part of the version tag
+ *   (6.85.0+crown+pat). A small CHAR profile adjusts what the fixed
+ *   rules cannot learn: tank posture (kite less, anchor more, panic
+ *   later) and a mitigation tilt in the scorer. Everything else is
+ *   shared and the optimizer does the rest.
  * ===================================================================== */
 
 (function () {
@@ -123,7 +149,15 @@
         // pauses, wipe holdouts with the ultimate, and outrun everything on
         // natural speed (the planner reads his speed live: kiting, chase
         // prediction, and chaserFast thresholds all scale automatically).
-        preferredBartender: 'minguk',
+        // v6.85.0 BARTENDER SELECTION. Each bartender has its OWN learned
+        // state and its OWN rows in compare(), so nothing here loses data.
+        //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
+        //   preferredBartender: null + bartenderRotation  -> alternate per run
+        //   both null/empty                               -> learned bandit
+        // Current experiment: cycle PAT and JOE run-by-run (minguk's ~600-run
+        // tuning stays parked, untouched, under his own key).
+        preferredBartender: null,
+        bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate
@@ -318,6 +352,29 @@
     // =================================================================
     const BARTENDERS = ['pat', 'joe', 'minguk'];
     const BARTENDER_TO_BASE_ATTACK = { pat: 'SHAKING', joe: 'STIRRING', minguk: 'AGAVE' };
+    // LIVE-READ BASE STATS (player.maxHp / player.speed at t=0, 2026-08-21).
+    // `tank` = survive by absorbing (HP/armor/shield); `runner` = survive
+    // by spacing (only meaningful before enemy speed passes ours, ~minute 8).
+    const CHARS = {
+        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 0.7, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10 },
+        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4 },
+        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0 }
+    };
+    // The bartender is chosen PER RUN (rotation or bandit), so everything
+    // keyed on it — learned store, version tag, posture profile — is a
+    // function of `activeChar`, never a load-time constant.
+    let activeChar = (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender]) ? CONFIG.preferredBartender
+        : (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length ? CONFIG.bartenderRotation[0] : null);
+    const charOf = () => CHARS[activeChar || 'minguk'];
+    function nextRotationChar() {
+        const rot = (CONFIG.bartenderRotation || []).filter(b => CHARS[b]);
+        if (!rot.length) return null;
+        let i = 0;
+        try { i = parseInt(localStorage.getItem('pineBotRotIdx') || '0', 10) || 0; } catch (e) { }
+        const b = rot[i % rot.length];
+        try { localStorage.setItem('pineBotRotIdx', String((i + 1) % rot.length)); } catch (e) { }
+        return b;
+    }
 
     const COCKTAILS = [
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'MOJITO', 'COSMOPOLITAN',
@@ -574,7 +631,13 @@
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"
     // are two separate rows in the comparison — never averaged together.
-    const SCRIPT_TAG = SCRIPT_VERSION + (CONFIG.scoringProfile === 'crown-6.74' ? '+crown' : '');
+    const scriptTag = () => SCRIPT_VERSION + (CONFIG.scoringProfile === 'crown-6.74' ? '+crown' : '') +
+        (activeChar ? '+' + activeChar : '');
+    // v6.85.0: learned state lives in a PER-BARTENDER store; the version
+    // comparison (versions + snapshots) lives in ONE shared store. minguk
+    // keeps the legacy key so his ~600 runs of tuning carry over untouched.
+    const learnKey = () => CONFIG.learning.storageKey + (activeChar && activeChar !== 'minguk' ? '_' + activeChar : '');
+    const SHARED_KEY = CONFIG.learning.storageKey + '_shared';
 
     // =================================================================
     // BOT STATE

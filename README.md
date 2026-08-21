@@ -46,9 +46,8 @@ In the game tab: the 📸 panel button, or in the console `pineBot.compare()` / 
 
 ## Config knobs worth knowing
 
+- `bartenderRotation`: `['pat','joe']` by default — alternates bartenders each run; set `preferredBartender: 'minguk'` (or `'pat'`/`'joe'`) to pin one, or `bartenderRotation: null` to fall back to the UCB bartender bandit. Each bartender learns in its own localStorage store (`pineBotUCB_v5`, `_pat`, `_joe`); versions/snapshots are shared in `pineBotUCB_v5_shared`. `pineBot.reset()` only clears the active bartender.
 - `scoringProfile`: `'crown-6.74'` (default — the rulebook that beat the crown) or `'6.79'`.
 - `hellUnbanIngredients`: ingredients that join the plan once a run is in hell (`GINGER BEER` → SUPER MOSCOW MULE, the fifth super).
 - `deepHell`: contact posture ramp past the 2-hour mark.
 - `stopOnHellRecord`: pause for manual name entry on a hell #1.
-
-Edited from VS Code Test

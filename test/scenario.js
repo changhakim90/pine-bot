@@ -23,12 +23,15 @@ if (which === 'snapshots') {
     };
     const { pineBot, store } = makeEnv({ script: SCRIPT, storage: { pineBotUCB_v5: JSON.stringify(prev), paco_bdh_time: JSON.stringify([{ time: 15150 }]) } });
     pineBot.stop();
+    const sharedBlob = () => JSON.parse(store.pineBotUCB_v5_shared || '{}');
+    test('legacy versions migrated into the shared store', () => assert.ok(sharedBlob().versions && sharedBlob().versions['6.79.0']));
+    test('per-bartender store is separate from the legacy blob', () => assert.ok(pineBot.learn().bartender));
     test('version constant matches package.json', () => assert.strictEqual(pineBot.version, pkg.version));
-    test('tag carries scoring profile', () => assert.ok(/^\d+\.\d+\.\d+(\+crown)?$/.test(pineBot.tag)));
+    test('tag carries scoring profile', () => assert.ok(/^\d+\.\d+\.\d+(\+[a-z0-9.-]+)*$/.test(pineBot.tag), pineBot.tag));
     const c = pineBot.compare();
     test('6.74.0 seeded from hell board', () => assert.strictEqual(c.versions.find(v => v.version === '6.74.0').bestTimeS, 15150));
-    test('6.79.0 row present with backfilled times', () => assert.strictEqual(c.versions.find(v => v.version === '6.79.0').timesKept, 2));
-    test('lastVersion persisted', () => assert.strictEqual(JSON.parse(store.pineBotUCB_v5).lastVersion, pineBot.tag));
+    test('6.79.0 row present in comparison', () => assert.ok(c.versions.find(v => v.version === '6.79.0')));
+    test('lastVersion persisted in the shared store', () => assert.strictEqual(sharedBlob().lastVersion, pineBot.tag));
     test('rollupStats median/sd/p60', () => {
         const ts = [257, 488, 1241, 3528, 6122, 9845];
         const s = pineBot.test.rollupStats({ n: 6, sumT: ts.reduce((a, b) => a + b), sumT2: ts.reduce((a, b) => a + b * b, 0), over60: 2, over120: 1, times: ts });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.84.0
+// @version      6.85.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -99,6 +99,32 @@
  *       avoidance to match the deep-hell contact posture.
  *   GINGER BEER stays unbanned in hell: it is MOSCOW MULE's key, and while
  *   its super no longer looks decisive, the cocktail itself does.
+ * ---------------------------------------------------------------------
+ * v6.85.0 — PER-BARTENDER LEARNING + THE PAT EXPERIMENT
+ *   DIFF() sampled across a run (live, 2026-08-21):
+ *       t(s)     hp        speed   spawn  dmg
+ *       0        16        0.5     54     5.1
+ *       600      1.25e3    1.6     8      22.39
+ *       3600     1.03e7    25.1    8      22.39
+ *       15300    5.57e17   403.4   8      22.39
+ *   DAMAGE IS FLAT FROM MINUTE 10. Spawn caps at 8. Only HP (x1.4/180s)
+ *   and SPEED (~quadratic, 403 px/frame at 255 min vs a player at ~3)
+ *   keep growing. So past minute ten the deep game is a STATIONARY
+ *   damage regime gated by the 38-frame invuln window: survival is max
+ *   HP, armor, shield, ult uptime and heal income. Speed is irrelevant —
+ *   which is minguk's entire premise (120 HP, 2.375 speed, "outrun
+ *   everything"). PAT has 180 HP (1.9 speed, SHAKING splash); JOE 100 HP
+ *   (3.0, STIRRING). The hell board's top ten is 9x Pat. Pat has never
+ *   been run with this bot.
+ *   So: learned state (CEM, item/build/roster bandits, LinUCB, hof,
+ *   history) is now NAMESPACED BY BARTENDER — Pat learns from scratch and
+ *   cannot contaminate minguk's ~600 runs of tuning or vice versa —
+ *   while versions/snapshots stay SHARED so compare() shows the
+ *   bartenders side by side. The bartender is part of the version tag
+ *   (6.85.0+crown+pat). A small CHAR profile adjusts what the fixed
+ *   rules cannot learn: tank posture (kite less, anchor more, panic
+ *   later) and a mitigation tilt in the scorer. Everything else is
+ *   shared and the optimizer does the rest.
  * ===================================================================== */
 
 (function () {
@@ -106,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.84.0';
+    const SCRIPT_VERSION = '6.85.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -125,7 +151,15 @@
         // pauses, wipe holdouts with the ultimate, and outrun everything on
         // natural speed (the planner reads his speed live: kiting, chase
         // prediction, and chaserFast thresholds all scale automatically).
-        preferredBartender: 'minguk',
+        // v6.85.0 BARTENDER SELECTION. Each bartender has its OWN learned
+        // state and its OWN rows in compare(), so nothing here loses data.
+        //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
+        //   preferredBartender: null + bartenderRotation  -> alternate per run
+        //   both null/empty                               -> learned bandit
+        // Current experiment: cycle PAT and JOE run-by-run (minguk's ~600-run
+        // tuning stays parked, untouched, under his own key).
+        preferredBartender: null,
+        bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate
@@ -320,6 +354,29 @@
     // =================================================================
     const BARTENDERS = ['pat', 'joe', 'minguk'];
     const BARTENDER_TO_BASE_ATTACK = { pat: 'SHAKING', joe: 'STIRRING', minguk: 'AGAVE' };
+    // LIVE-READ BASE STATS (player.maxHp / player.speed at t=0, 2026-08-21).
+    // `tank` = survive by absorbing (HP/armor/shield); `runner` = survive
+    // by spacing (only meaningful before enemy speed passes ours, ~minute 8).
+    const CHARS = {
+        pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 0.7, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10 },
+        joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4 },
+        minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0 }
+    };
+    // The bartender is chosen PER RUN (rotation or bandit), so everything
+    // keyed on it — learned store, version tag, posture profile — is a
+    // function of `activeChar`, never a load-time constant.
+    let activeChar = (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender]) ? CONFIG.preferredBartender
+        : (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length ? CONFIG.bartenderRotation[0] : null);
+    const charOf = () => CHARS[activeChar || 'minguk'];
+    function nextRotationChar() {
+        const rot = (CONFIG.bartenderRotation || []).filter(b => CHARS[b]);
+        if (!rot.length) return null;
+        let i = 0;
+        try { i = parseInt(localStorage.getItem('pineBotRotIdx') || '0', 10) || 0; } catch (e) { }
+        const b = rot[i % rot.length];
+        try { localStorage.setItem('pineBotRotIdx', String((i + 1) % rot.length)); } catch (e) { }
+        return b;
+    }
 
     const COCKTAILS = [
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'MOJITO', 'COSMOPOLITAN',
@@ -576,7 +633,13 @@
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"
     // are two separate rows in the comparison — never averaged together.
-    const SCRIPT_TAG = SCRIPT_VERSION + (CONFIG.scoringProfile === 'crown-6.74' ? '+crown' : '');
+    const scriptTag = () => SCRIPT_VERSION + (CONFIG.scoringProfile === 'crown-6.74' ? '+crown' : '') +
+        (activeChar ? '+' + activeChar : '');
+    // v6.85.0: learned state lives in a PER-BARTENDER store; the version
+    // comparison (versions + snapshots) lives in ONE shared store. minguk
+    // keeps the legacy key so his ~600 runs of tuning carry over untouched.
+    const learnKey = () => CONFIG.learning.storageKey + (activeChar && activeChar !== 'minguk' ? '_' + activeChar : '');
+    const SHARED_KEY = CONFIG.learning.storageKey + '_shared';
 
     // =================================================================
     // BOT STATE
@@ -840,8 +903,22 @@
 
     function loadLearn() {
         let d = null;
-        try { d = JSON.parse(localStorage.getItem(CONFIG.learning.storageKey)); } catch (e) { }
+        try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
         if (!d || typeof d !== 'object') d = {};
+        // SHARED comparison state overlays the per-bartender blob. First
+        // load migrates the legacy blob's versions/snapshots into the shared
+        // store so history is never lost when a new bartender starts fresh.
+        let shared = null;
+        try { shared = JSON.parse(localStorage.getItem(SHARED_KEY)); } catch (e) { }
+        if (!shared || typeof shared !== 'object') {
+            let legacy = null;
+            try { legacy = JSON.parse(localStorage.getItem(CONFIG.learning.storageKey)); } catch (e) { }
+            shared = { versions: (legacy && legacy.versions) || {}, snapshots: (legacy && legacy.snapshots) || [], lastVersion: legacy && legacy.lastVersion };
+        }
+        d.versions = shared.versions || {};
+        d.snapshots = shared.snapshots || [];
+        if (shared.lastVersion && !d.lastVersion) d.lastVersion = shared.lastVersion;
+        d.bartender = activeChar || 'minguk';
         d.items = d.items || {};          // name -> {n, sum}
         d.totalPicks = d.totalPicks || 0;
         d.history = d.history || [];      // recent rewards
@@ -870,10 +947,10 @@
         // makes "which version was best" answerable after the fact: the
         // record is written the moment a new script first loads, before it
         // can touch anything.
-        if (d.lastVersion && d.lastVersion !== SCRIPT_TAG) {
+        if (d.lastVersion && d.lastVersion !== scriptTag()) {
             freezeSnapshot(d, d.lastVersion, 'version-change');
         }
-        d.lastVersion = SCRIPT_TAG;
+        d.lastVersion = scriptTag();
         // BACKFILL (6.81.0): rollups written before the time list existed get
         // their recent times from runLog (last 30 runs carry a version tag),
         // so median / P60 have SOMETHING to work with until fresh runs land.
@@ -951,21 +1028,27 @@
         return d;
     }
     function saveLearn() {
-        try { localStorage.setItem(CONFIG.learning.storageKey, JSON.stringify(learn)); } catch (e) { }
+        try {
+            // shared: versions + snapshots (+ lastVersion for the freeze check)
+            localStorage.setItem(SHARED_KEY, JSON.stringify({ versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion }));
+            // per-bartender: everything else
+            const { versions, snapshots, ...own } = learn;
+            localStorage.setItem(learnKey(), JSON.stringify(own));
+        } catch (e) { }
     }
     function resetLearn() {
         // Snapshots are the historical record — freeze the live version
         // first, then preserve every snapshot across the reset.
         let keep = [];
         try {
-            freezeSnapshot(learn, SCRIPT_TAG, 'pre-reset');
+            freezeSnapshot(learn, scriptTag(), 'pre-reset');
             keep = (learn.snapshots || []).slice();
         } catch (e) { }
-        try { localStorage.removeItem(CONFIG.learning.storageKey); } catch (e) { }
+        try { localStorage.removeItem(learnKey()); } catch (e) { }   // this bartender only; shared history untouched
         learn = loadLearn();
         if (keep.length) { learn.snapshots = keep; saveLearn(); }
         applyParams(DEFAULT_PARAMS);
-        setStatus('learning reset (version snapshots kept)');
+        setStatus('learning reset for ' + (activeChar || 'minguk') + ' (other bartenders + version snapshots kept)');
     }
 
     // ---- VERSION COMPARISON ------------------------------------------
@@ -1030,7 +1113,7 @@
             note: epochs.size > 1
                 ? 'meanReward spans MULTIPLE reward epochs — compare meanTimeS/bestTimeS instead'
                 : 'single reward epoch — all fields comparable',
-            current: SCRIPT_TAG,
+            current: scriptTag(),
             bestPeak: bestByTime ? { version: bestByTime.version, bestTimeS: bestByTime.bestTimeS } : null,
             bestAverage: bestByMean ? { version: bestByMean.version, meanTimeS: bestByMean.meanTimeS, medianTimeS: bestByMean.medianTimeS, runs: bestByMean.runs } : null,
             bestDeepRunRate: bestByP60 ? { version: bestByP60.version, p60: bestByP60.p60, p120: bestByP60.p120, runs: bestByP60.runs } : null,
@@ -1047,9 +1130,9 @@
     // the script), and hand-annotate any version's row.
     function snapshotNow(reason) {
         learn = loadLearn();
-        const ok = freezeSnapshot(learn, SCRIPT_TAG, reason || 'manual');
+        const ok = freezeSnapshot(learn, scriptTag(), reason || 'manual');
         saveLearn();
-        setStatus(ok ? '📸 snapshot saved: ' + SCRIPT_TAG : '📸 nothing to snapshot yet (no runs on ' + SCRIPT_TAG + ')');
+        setStatus(ok ? '📸 snapshot saved: ' + scriptTag() : '📸 nothing to snapshot yet (no runs on ' + scriptTag() + ')');
         return ok;
     }
     function noteVersion(tag, patch) {
@@ -2084,6 +2167,13 @@
         // rest of the roster.
         if (!atCap && ((type === 'weapon' && /^(SOUTH SIDE|NEGRONI)$/.test(name)) ||
             (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|DRY VERMOUTH)$/.test(name)))) add(10, 'minguk-core');
+        // v6.85.0 MITIGATION TILT: DIFF() proves damage is flat from minute 10,
+        // so deep hell is won by HP, armor, shield and ult uptime. A tank
+        // bartender leans harder into exactly those cards.
+        if (charOf().mitigationTilt && !atCap && (
+            (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|TOMATO JUICE)$/.test(name)) ||
+            (type === 'weapon' && name === 'NEGRONI') || type === 'ult'))
+            add(charOf().mitigationTilt, 'tank-mitigation');
         // KNOCKBACK TO LEVEL 6 (v6.84.0 — the measured lever). VODKA CRANBERRY
         // and MOSCOW MULE gain their shove at Lv6 with NO super required, and
         // between them they are the primary of four of the all-time top runs
@@ -2753,7 +2843,7 @@
             supers: supersThisRun, crafts: craftsThisRun,
             hell: hellRunEnded, day: dayClearedThisRun, rainbow: rainbowThisRun, rbp: rainbowChoice || undefined,
             gen: learn.cem.gen, champ: championRun, roster: activeRoster,
-            v: SCRIPT_TAG
+            v: scriptTag()
         });
         if (learn.runLog.length > 30) learn.runLog.shift();
 
@@ -2764,7 +2854,7 @@
         // the version's TOP-N runs, so a frozen snapshot carries its best
         // runs with it.)
         {
-            const vs = learn.versions[SCRIPT_TAG] || {
+            const vs = learn.versions[scriptTag()] || {
                 n: 0, sumT: 0, bestT: 0, sumR: 0, sumD: 0, sumS: 0, hell: 0, day: 0,
                 sumSupers: 0, deaths: {}, top: [], epoch: REWARD_EPOCH, firstRun: learn.runs
             };
@@ -2793,7 +2883,7 @@
             });
             vs.top.sort((a, b) => b.t - a.t);   // ranked by the crown metric: survival time
             vs.top = vs.top.slice(0, CONFIG.learning.versionTopRuns);
-            learn.versions[SCRIPT_TAG] = vs;
+            learn.versions[scriptTag()] = vs;
         }
 
         endTrial(reward);
@@ -2805,7 +2895,7 @@
         console.log('%c[PineBot] RUN END', 'font-weight:bold;color:#ffd98a',
             `\n  time ${Math.round(stats.time)}s   downs ${stats.downs}   sales ${stats.sales}` +
             `\n  reward ${reward.toFixed(3)} — ${verdict}` +
-            `\n  version: ${SCRIPT_TAG}   roster: ${activeRoster || '(none)'}   build: ${primaryCocktail || '(none)'}` +
+            `\n  version: ${scriptTag()}   roster: ${activeRoster || '(none)'}   build: ${primaryCocktail || '(none)'}` +
             `\n  picks: ${runPicks.join(', ') || '(none)'}` +
             `\n  milestones: supers ${supersThisRun}, crafts ${craftsThisRun}` +
             `${dayClearedThisRun ? ', DAY CLEARED' : ''}${hellRunEnded ? ', HELL' : ''}${rainbowThisRun ? ', RAINBOW!' : ''}` +
@@ -2818,13 +2908,42 @@
     // SCREEN AUTOMATION — driven by the game's own `state`
     // =================================================================
     function chooseBartender() {
-        if (CONFIG.preferredBartender) return CONFIG.preferredBartender;
-        let best = BARTENDERS[0], bestScore = -Infinity;
-        for (const b of BARTENDERS) {
-            const s = ucbScore(BARTENDER_TO_BASE_ATTACK[b]) + Math.random() * 0.05;
-            if (s > bestScore) { bestScore = s; best = b; }
+        let b = null;
+        if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender]) b = CONFIG.preferredBartender;
+        else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        if (!b) {
+            let best = BARTENDERS[0], bestScore = -Infinity;
+            for (const c of BARTENDERS) {
+                const s = ucbScore(BARTENDER_TO_BASE_ATTACK[c]) + Math.random() * 0.05;
+                if (s > bestScore) { bestScore = s; best = c; }
+            }
+            b = best;
         }
-        return best;
+        // v6.85.0: switching bartender switches the learned store, the
+        // posture profile and the version tag for everything that follows
+        // (beginTrial reloads `learn` from the new key).
+        if (b !== activeChar) { activeChar = b; learn = loadLearn(); log('bartender →', b, '| store', learnKey(), '| tag', scriptTag()); }
+        return b;
+    }
+
+    function worldPickerVisible() {
+        return [...document.querySelectorAll('.wb-play, .char, [onclick*="startGame"], [onclick*="selectWorldBartender"]')]
+            .some(el => visible(el));
+    }
+    // Start the run with the bartender the rotation / preference / bandit
+    // chose. startGame(charKey) takes the key directly (verified from its
+    // source), so we call it ourselves instead of clicking the game's START
+    // button, whose onclick carries whichever bartender the player last
+    // highlighted. selectWorldBartender() is called first so the game's
+    // own highlight/save state agrees with what we start.
+    function startWithBartender() {
+        const b = chooseBartender();
+        bartenderThisRun = b;
+        if (hasGame('selectWorldBartender')) safe(() => window.selectWorldBartender(b));
+        if (hasGame('startGame')) { callGame('startGame', b); startRun(); return true; }
+        const el = findByText(new RegExp('^' + b + '$', 'i'));
+        if (el) { clickEl(el); startRun(); return true; }
+        return false;
     }
 
     // Hell detection is latched ONLY while actually playing. The results
@@ -3010,15 +3129,15 @@
         title() {
             return !!callFirst(['goSelect']) || clickText(/^(start|play)/i);
         },
-        select() {
-            const b = chooseBartender();
-            bartenderThisRun = b;
-            if (hasGame('startGame')) { callGame('startGame', b); startRun(); return true; }
-            const el = findByText(new RegExp('^' + b + '$', 'i'));
-            if (el) { clickEl(el); startRun(); return true; }
-            return false;
-        },
+        select() { return startWithBartender() || false; },
         world() {
+            // v6.85.1 LIVE-VERIFIED: the 'world' screen IS the bartender
+            // picker. Its START button (.wb-play) is hard-wired to
+            // startGame('<highlighted world bartender>') — minguk by default —
+            // so clicking "start" here silently ignored the rotation. If a
+            // start control is on screen, start with OUR bartender instead;
+            // otherwise this is the post-start crawl: reveal/skip it.
+            if (worldPickerVisible() && startWithBartender()) return true;
             return !!callFirst(['revealGame', 'skipIntro']) || clickText(/^(enter|go|start|open)/i);
         },
         intro() {
@@ -3746,7 +3865,8 @@
         // a dense late-day field — it was turning all farming off exactly
         // when the loot matters most. hpPanic = actually hurt; panic (crowd
         // included) still governs movement caution and loot greed.
-        const hpPanic = hpRatio < M.panicHp * (1 + 0.25 * late);
+        // v6.85.0: a tank panics later (more HP to spend), a runner sooner
+        const hpPanic = hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -3917,8 +4037,9 @@
         const projHere = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + 130);
         const dayPhaseNow = !hellDetected && (typeof G.gameTime === 'number' ? G.gameTime : 0) < 1200;
+        // v6.85.0: a tank plants on a busier field than a runner would
         const anchor = !hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
-            (!dayPhaseNow || th.near <= 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
+            (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220));
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
@@ -4279,7 +4400,7 @@
             }
 
             // kiting sweep + gap escape
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? 1.8 : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? 1.8 : 1);
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? 1.8 : 1);
 
             // pull toward the middle of the arena — corners are death traps,
@@ -4514,7 +4635,7 @@
         el.onmouseenter = () => { el.style.opacity = '1'; el.style.background = 'rgba(16,16,22,.95)'; };
         el.onmouseleave = () => { el.style.opacity = '.75'; el.style.background = 'rgba(16,16,22,.55)'; };
         el.innerHTML =
-            '<div style="font-weight:700;margin-bottom:5px;color:#ffd98a">🍸 Pine Bot v' + SCRIPT_TAG + '</div>' +
+            '<div style="font-weight:700;margin-bottom:5px;color:#ffd98a">🍸 Pine Bot v' + scriptTag() + '</div>' +
             '<div style="margin-bottom:6px">' +
             '<button id="pbStart" style="cursor:pointer">▶ Start</button> ' +
             '<button id="pbStop" style="cursor:pointer">■ Stop</button> ' +
@@ -4543,7 +4664,7 @@
             const st = G.state;
             const p = lastPlan;
             const hidden = document.hidden === true;
-            const vs = (learn.versions || {})[SCRIPT_TAG];
+            const vs = (learn.versions || {})[scriptTag()];
             infoEl.innerHTML =
                 'tab: ' + TAB_ID + '   runs(all tabs): ' + learn.runs +
                 (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : '') + '<br>' +
@@ -4577,8 +4698,9 @@
         const half = Math.floor(log.length / 2);
         return {
             report: 'PINE BOT STATS — paste this to Claude for tuning advice',
-            version: SCRIPT_TAG,
+            version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
+            bartender: activeChar || '(bandit)', charProfile: charOf(),
             runsTotal: learn.runs,
             runsLogged: log.length,
             byVersion: versionComparison(),
@@ -4625,7 +4747,7 @@
         try { keysWritable = writeKeyFlag('__pinebot_probe', true); writeKeyFlag('__pinebot_probe', false); } catch (e) { }
 
         const report = {
-            version: SCRIPT_TAG,
+            version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
             tab: TAB_ID,
             backgroundThrottled: document.hidden === true,
@@ -4816,7 +4938,7 @@
             window.pineBot = {
                 start: startBot, stop: stopBot, diagnose, reset: resetLearn,
                 config: CONFIG, learn: () => learn, plan: () => lastPlan, state: () => G.state,
-                version: SCRIPT_VERSION, tag: SCRIPT_TAG,
+                version: SCRIPT_VERSION, tag: scriptTag(),
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
@@ -4839,7 +4961,10 @@
             window.pineBotStats = buildStatsReport;
         } catch (e) { }
         if (CONFIG.autoStart) setTimeout(startBot, 900);
-        log('v' + SCRIPT_TAG + ' loaded (scoring profile: ' + CONFIG.scoringProfile + '). window.pineBot available — pineBot.compare() for the version table.');
+        // v6.83.1: end-to-end release test — no behaviour change. If this line
+        // shows in the console after a self-update, the whole pipeline works.
+        log('v' + scriptTag() + ' loaded (scoring profile: ' + CONFIG.scoringProfile + '). window.pineBot available — pineBot.compare() for the version table.');
+        log('release pipeline check: 6.83.2 arrived via Violentmonkey AUTO-UPDATE ✔');
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

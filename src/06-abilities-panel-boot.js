@@ -181,7 +181,7 @@
         el.onmouseenter = () => { el.style.opacity = '1'; el.style.background = 'rgba(16,16,22,.95)'; };
         el.onmouseleave = () => { el.style.opacity = '.75'; el.style.background = 'rgba(16,16,22,.55)'; };
         el.innerHTML =
-            '<div style="font-weight:700;margin-bottom:5px;color:#ffd98a">🍸 Pine Bot v' + SCRIPT_TAG + '</div>' +
+            '<div style="font-weight:700;margin-bottom:5px;color:#ffd98a">🍸 Pine Bot v' + scriptTag() + '</div>' +
             '<div style="margin-bottom:6px">' +
             '<button id="pbStart" style="cursor:pointer">▶ Start</button> ' +
             '<button id="pbStop" style="cursor:pointer">■ Stop</button> ' +
@@ -210,7 +210,7 @@
             const st = G.state;
             const p = lastPlan;
             const hidden = document.hidden === true;
-            const vs = (learn.versions || {})[SCRIPT_TAG];
+            const vs = (learn.versions || {})[scriptTag()];
             infoEl.innerHTML =
                 'tab: ' + TAB_ID + '   runs(all tabs): ' + learn.runs +
                 (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : '') + '<br>' +
@@ -244,8 +244,9 @@
         const half = Math.floor(log.length / 2);
         return {
             report: 'PINE BOT STATS — paste this to Claude for tuning advice',
-            version: SCRIPT_TAG,
+            version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
+            bartender: activeChar || '(bandit)', charProfile: charOf(),
             runsTotal: learn.runs,
             runsLogged: log.length,
             byVersion: versionComparison(),
@@ -292,7 +293,7 @@
         try { keysWritable = writeKeyFlag('__pinebot_probe', true); writeKeyFlag('__pinebot_probe', false); } catch (e) { }
 
         const report = {
-            version: SCRIPT_TAG,
+            version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
             tab: TAB_ID,
             backgroundThrottled: document.hidden === true,
@@ -483,7 +484,7 @@
             window.pineBot = {
                 start: startBot, stop: stopBot, diagnose, reset: resetLearn,
                 config: CONFIG, learn: () => learn, plan: () => lastPlan, state: () => G.state,
-                version: SCRIPT_VERSION, tag: SCRIPT_TAG,
+                version: SCRIPT_VERSION, tag: scriptTag(),
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
@@ -506,7 +507,10 @@
             window.pineBotStats = buildStatsReport;
         } catch (e) { }
         if (CONFIG.autoStart) setTimeout(startBot, 900);
-        log('v' + SCRIPT_TAG + ' loaded (scoring profile: ' + CONFIG.scoringProfile + '). window.pineBot available — pineBot.compare() for the version table.');
+        // v6.83.1: end-to-end release test — no behaviour change. If this line
+        // shows in the console after a self-update, the whole pipeline works.
+        log('v' + scriptTag() + ' loaded (scoring profile: ' + CONFIG.scoringProfile + '). window.pineBot available — pineBot.compare() for the version table.');
+        log('release pipeline check: 6.83.2 arrived via Violentmonkey AUTO-UPDATE ✔');
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

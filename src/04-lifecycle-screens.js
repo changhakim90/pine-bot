@@ -175,7 +175,7 @@
             supers: supersThisRun, crafts: craftsThisRun,
             hell: hellRunEnded, day: dayClearedThisRun, rainbow: rainbowThisRun, rbp: rainbowChoice || undefined,
             gen: learn.cem.gen, champ: championRun, roster: activeRoster,
-            v: SCRIPT_TAG
+            v: scriptTag()
         });
         if (learn.runLog.length > 30) learn.runLog.shift();
 
@@ -186,7 +186,7 @@
         // the version's TOP-N runs, so a frozen snapshot carries its best
         // runs with it.)
         {
-            const vs = learn.versions[SCRIPT_TAG] || {
+            const vs = learn.versions[scriptTag()] || {
                 n: 0, sumT: 0, bestT: 0, sumR: 0, sumD: 0, sumS: 0, hell: 0, day: 0,
                 sumSupers: 0, deaths: {}, top: [], epoch: REWARD_EPOCH, firstRun: learn.runs
             };
@@ -215,7 +215,7 @@
             });
             vs.top.sort((a, b) => b.t - a.t);   // ranked by the crown metric: survival time
             vs.top = vs.top.slice(0, CONFIG.learning.versionTopRuns);
-            learn.versions[SCRIPT_TAG] = vs;
+            learn.versions[scriptTag()] = vs;
         }
 
         endTrial(reward);
@@ -227,7 +227,7 @@
         console.log('%c[PineBot] RUN END', 'font-weight:bold;color:#ffd98a',
             `\n  time ${Math.round(stats.time)}s   downs ${stats.downs}   sales ${stats.sales}` +
             `\n  reward ${reward.toFixed(3)} — ${verdict}` +
-            `\n  version: ${SCRIPT_TAG}   roster: ${activeRoster || '(none)'}   build: ${primaryCocktail || '(none)'}` +
+            `\n  version: ${scriptTag()}   roster: ${activeRoster || '(none)'}   build: ${primaryCocktail || '(none)'}` +
             `\n  picks: ${runPicks.join(', ') || '(none)'}` +
             `\n  milestones: supers ${supersThisRun}, crafts ${craftsThisRun}` +
             `${dayClearedThisRun ? ', DAY CLEARED' : ''}${hellRunEnded ? ', HELL' : ''}${rainbowThisRun ? ', RAINBOW!' : ''}` +
@@ -240,13 +240,42 @@
     // SCREEN AUTOMATION — driven by the game's own `state`
     // =================================================================
     function chooseBartender() {
-        if (CONFIG.preferredBartender) return CONFIG.preferredBartender;
-        let best = BARTENDERS[0], bestScore = -Infinity;
-        for (const b of BARTENDERS) {
-            const s = ucbScore(BARTENDER_TO_BASE_ATTACK[b]) + Math.random() * 0.05;
-            if (s > bestScore) { bestScore = s; best = b; }
+        let b = null;
+        if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender]) b = CONFIG.preferredBartender;
+        else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        if (!b) {
+            let best = BARTENDERS[0], bestScore = -Infinity;
+            for (const c of BARTENDERS) {
+                const s = ucbScore(BARTENDER_TO_BASE_ATTACK[c]) + Math.random() * 0.05;
+                if (s > bestScore) { bestScore = s; best = c; }
+            }
+            b = best;
         }
-        return best;
+        // v6.85.0: switching bartender switches the learned store, the
+        // posture profile and the version tag for everything that follows
+        // (beginTrial reloads `learn` from the new key).
+        if (b !== activeChar) { activeChar = b; learn = loadLearn(); log('bartender →', b, '| store', learnKey(), '| tag', scriptTag()); }
+        return b;
+    }
+
+    function worldPickerVisible() {
+        return [...document.querySelectorAll('.wb-play, .char, [onclick*="startGame"], [onclick*="selectWorldBartender"]')]
+            .some(el => visible(el));
+    }
+    // Start the run with the bartender the rotation / preference / bandit
+    // chose. startGame(charKey) takes the key directly (verified from its
+    // source), so we call it ourselves instead of clicking the game's START
+    // button, whose onclick carries whichever bartender the player last
+    // highlighted. selectWorldBartender() is called first so the game's
+    // own highlight/save state agrees with what we start.
+    function startWithBartender() {
+        const b = chooseBartender();
+        bartenderThisRun = b;
+        if (hasGame('selectWorldBartender')) safe(() => window.selectWorldBartender(b));
+        if (hasGame('startGame')) { callGame('startGame', b); startRun(); return true; }
+        const el = findByText(new RegExp('^' + b + '$', 'i'));
+        if (el) { clickEl(el); startRun(); return true; }
+        return false;
     }
 
     // Hell detection is latched ONLY while actually playing. The results
@@ -432,15 +461,15 @@
         title() {
             return !!callFirst(['goSelect']) || clickText(/^(start|play)/i);
         },
-        select() {
-            const b = chooseBartender();
-            bartenderThisRun = b;
-            if (hasGame('startGame')) { callGame('startGame', b); startRun(); return true; }
-            const el = findByText(new RegExp('^' + b + '$', 'i'));
-            if (el) { clickEl(el); startRun(); return true; }
-            return false;
-        },
+        select() { return startWithBartender() || false; },
         world() {
+            // v6.85.1 LIVE-VERIFIED: the 'world' screen IS the bartender
+            // picker. Its START button (.wb-play) is hard-wired to
+            // startGame('<highlighted world bartender>') — minguk by default —
+            // so clicking "start" here silently ignored the rotation. If a
+            // start control is on screen, start with OUR bartender instead;
+            // otherwise this is the post-start crawl: reveal/skip it.
+            if (worldPickerVisible() && startWithBartender()) return true;
             return !!callFirst(['revealGame', 'skipIntro']) || clickText(/^(enter|go|start|open)/i);
         },
         intro() {

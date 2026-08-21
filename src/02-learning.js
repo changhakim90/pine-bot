@@ -56,8 +56,22 @@
 
     function loadLearn() {
         let d = null;
-        try { d = JSON.parse(localStorage.getItem(CONFIG.learning.storageKey)); } catch (e) { }
+        try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
         if (!d || typeof d !== 'object') d = {};
+        // SHARED comparison state overlays the per-bartender blob. First
+        // load migrates the legacy blob's versions/snapshots into the shared
+        // store so history is never lost when a new bartender starts fresh.
+        let shared = null;
+        try { shared = JSON.parse(localStorage.getItem(SHARED_KEY)); } catch (e) { }
+        if (!shared || typeof shared !== 'object') {
+            let legacy = null;
+            try { legacy = JSON.parse(localStorage.getItem(CONFIG.learning.storageKey)); } catch (e) { }
+            shared = { versions: (legacy && legacy.versions) || {}, snapshots: (legacy && legacy.snapshots) || [], lastVersion: legacy && legacy.lastVersion };
+        }
+        d.versions = shared.versions || {};
+        d.snapshots = shared.snapshots || [];
+        if (shared.lastVersion && !d.lastVersion) d.lastVersion = shared.lastVersion;
+        d.bartender = activeChar || 'minguk';
         d.items = d.items || {};          // name -> {n, sum}
         d.totalPicks = d.totalPicks || 0;
         d.history = d.history || [];      // recent rewards
@@ -86,10 +100,10 @@
         // makes "which version was best" answerable after the fact: the
         // record is written the moment a new script first loads, before it
         // can touch anything.
-        if (d.lastVersion && d.lastVersion !== SCRIPT_TAG) {
+        if (d.lastVersion && d.lastVersion !== scriptTag()) {
             freezeSnapshot(d, d.lastVersion, 'version-change');
         }
-        d.lastVersion = SCRIPT_TAG;
+        d.lastVersion = scriptTag();
         // BACKFILL (6.81.0): rollups written before the time list existed get
         // their recent times from runLog (last 30 runs carry a version tag),
         // so median / P60 have SOMETHING to work with until fresh runs land.
@@ -167,21 +181,27 @@
         return d;
     }
     function saveLearn() {
-        try { localStorage.setItem(CONFIG.learning.storageKey, JSON.stringify(learn)); } catch (e) { }
+        try {
+            // shared: versions + snapshots (+ lastVersion for the freeze check)
+            localStorage.setItem(SHARED_KEY, JSON.stringify({ versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion }));
+            // per-bartender: everything else
+            const { versions, snapshots, ...own } = learn;
+            localStorage.setItem(learnKey(), JSON.stringify(own));
+        } catch (e) { }
     }
     function resetLearn() {
         // Snapshots are the historical record — freeze the live version
         // first, then preserve every snapshot across the reset.
         let keep = [];
         try {
-            freezeSnapshot(learn, SCRIPT_TAG, 'pre-reset');
+            freezeSnapshot(learn, scriptTag(), 'pre-reset');
             keep = (learn.snapshots || []).slice();
         } catch (e) { }
-        try { localStorage.removeItem(CONFIG.learning.storageKey); } catch (e) { }
+        try { localStorage.removeItem(learnKey()); } catch (e) { }   // this bartender only; shared history untouched
         learn = loadLearn();
         if (keep.length) { learn.snapshots = keep; saveLearn(); }
         applyParams(DEFAULT_PARAMS);
-        setStatus('learning reset (version snapshots kept)');
+        setStatus('learning reset for ' + (activeChar || 'minguk') + ' (other bartenders + version snapshots kept)');
     }
 
     // ---- VERSION COMPARISON ------------------------------------------
@@ -246,7 +266,7 @@
             note: epochs.size > 1
                 ? 'meanReward spans MULTIPLE reward epochs — compare meanTimeS/bestTimeS instead'
                 : 'single reward epoch — all fields comparable',
-            current: SCRIPT_TAG,
+            current: scriptTag(),
             bestPeak: bestByTime ? { version: bestByTime.version, bestTimeS: bestByTime.bestTimeS } : null,
             bestAverage: bestByMean ? { version: bestByMean.version, meanTimeS: bestByMean.meanTimeS, medianTimeS: bestByMean.medianTimeS, runs: bestByMean.runs } : null,
             bestDeepRunRate: bestByP60 ? { version: bestByP60.version, p60: bestByP60.p60, p120: bestByP60.p120, runs: bestByP60.runs } : null,
@@ -263,9 +283,9 @@
     // the script), and hand-annotate any version's row.
     function snapshotNow(reason) {
         learn = loadLearn();
-        const ok = freezeSnapshot(learn, SCRIPT_TAG, reason || 'manual');
+        const ok = freezeSnapshot(learn, scriptTag(), reason || 'manual');
         saveLearn();
-        setStatus(ok ? '📸 snapshot saved: ' + SCRIPT_TAG : '📸 nothing to snapshot yet (no runs on ' + SCRIPT_TAG + ')');
+        setStatus(ok ? '📸 snapshot saved: ' + scriptTag() : '📸 nothing to snapshot yet (no runs on ' + scriptTag() + ')');
         return ok;
     }
     function noteVersion(tag, patch) {

@@ -571,6 +571,13 @@
         // rest of the roster.
         if (!atCap && ((type === 'weapon' && /^(SOUTH SIDE|NEGRONI)$/.test(name)) ||
             (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|DRY VERMOUTH)$/.test(name)))) add(10, 'minguk-core');
+        // v6.85.0 MITIGATION TILT: DIFF() proves damage is flat from minute 10,
+        // so deep hell is won by HP, armor, shield and ult uptime. A tank
+        // bartender leans harder into exactly those cards.
+        if (charOf().mitigationTilt && !atCap && (
+            (type === 'passive' && /^(OLIVE|SWEET VERMOUTH|TOMATO JUICE)$/.test(name)) ||
+            (type === 'weapon' && name === 'NEGRONI') || type === 'ult'))
+            add(charOf().mitigationTilt, 'tank-mitigation');
         // KNOCKBACK TO LEVEL 6 (v6.84.0 — the measured lever). VODKA CRANBERRY
         // and MOSCOW MULE gain their shove at Lv6 with NO super required, and
         // between them they are the primary of four of the all-time top runs
