@@ -19,6 +19,38 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 
 | 6.85.3+crown+pat | — | | | | | | | Pat pinned, no rotation. Identical play logic to 6.85.2 — **pool the two `+pat` rows.** |
 
+## 6.85.4 — day-ring correction (6.85.2 was measured wrong)
+
+Demo index 2 — the second Pat day run, `endGt` 1236, which I skipped in 6.85.2
+as "redundant" — was read properly. It contradicts the opening figure I shipped.
+
+Percentiles over every sample carrying a `poD`:
+
+| window | p25 | median | p75 | 6.85.2 shipped |
+|---|---|---|---|---|
+| 0–180s | 166 | 210 | 240 | **130** |
+| 180–600s | 78 | 105 | 171 | 72 |
+| 600–1200s | 71 | 85 | 96 | 62 |
+
+The mid and late figures survive: they sit on idx2's p25, which is the right
+estimator for a farming station, since the median is inflated by transit
+between passouts. The opening figure does not survive. 6.85.2's 130 came from
+eyeballing stationary samples in idx1 alone, which biased tight, and early day
+is exactly where ~29% of runs die — so it erred in the worst direction.
+
+`dayRing` is now **165 / 75 / 66**: the mean of the two demos' station
+estimates, with the opening taking the wider read. n=2. Provisional.
+
+Two other corrections to the 6.85.2 write-up, both from idx2:
+
+- **Dashing is unresolved.** idx2 has 18 dashes against idx1's 4. The claim
+  that low dash usage was a minguk artefact does not hold — it is not even
+  consistent within Pat.
+- **The build was not the cause of idx1's death.** idx2 picked CAMPARI,
+  NEGRONI, OLIVE and VODKA CRANBERRY — the sustain line idx1 lacked — and
+  still died at `gt` 1236, at the hell gate. The "no NEGRONI killed it"
+  inference was weaker than it was presented.
+
 ## 6.85.3 — Pat pinned
 
 `preferredBartender: 'pat'`, rotation off. Config only; the planner and scoring

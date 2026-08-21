@@ -89,9 +89,18 @@ if (which === 'pat-profile') {
     test('pat is pinned as the active bartender', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
     test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
     test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
-    test('pat day ring tightens 130 -> 72 -> 62', () => {
+    test('pat day ring tightens 165 -> 75 -> 66', () => {
         const dr = prof().dayRing;
-        assert.ok(dr && dr.early === 130 && dr.mid === 72 && dr.late === 62, JSON.stringify(dr));
+        assert.ok(dr && dr.early === 165 && dr.mid === 75 && dr.late === 66, JSON.stringify(dr));
+    });
+    test('pat day ring is monotonically tightening', () => {
+        const dr = prof().dayRing;
+        assert.ok(dr.early > dr.mid && dr.mid > dr.late, JSON.stringify(dr));
+    });
+    test('pat opening ring is wider than the old flat minguk curve', () => {
+        // the 6.85.2 regression: 130 was TIGHTER than minguk's 118 by only
+        // 12px, when both manual demos show Pat opening far wider than that.
+        assert.ok(prof().dayRing.early > 118 * 1.3, 'early ' + prof().dayRing.early);
     });
     test('pat carries a 150px hell boss floor', () => assert.strictEqual(prof().bossFloor, 150));
 
