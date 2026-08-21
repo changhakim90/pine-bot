@@ -158,4 +158,99 @@ if (which === 'boss-floor') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// 6. v6.85.6 user directives.
+//    (a) day: kill the bosses, the loot funds the ult, the ult clears the
+//        passouts — so a boss is not skipped in favour of a passout farm.
+//    (b) hell + TIME STOP pause: hold a SOUTH SIDE firing station on the
+//        paused boss, and never inside it.
+//    (c) mobs past killable: flight stays on at low HP and the ult fires.
+if (which === 'directives') {
+    // --- (a) day boss engagement, MOJITO sniper deferral is hell-only ---
+    {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+        pineBot.stop();
+        pineBot.test.setOwned({ MOJITO: 4, OLIVE: 3 });
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        global.enemies = [
+            { type: 'boss', x: 400, y: 270, r: 40, reach: 90, hp: 4000, maxHp: 4000, speed: 1.0, moving: true },
+            { type: 'passout', x: 250, y: 260, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 7 }
+        ];
+        pineBot.test.planMove();
+        // bossRing starts null and is only written inside the boss-engage
+        // branch, so a number proves the branch was not `continue`d past.
+        test('day boss is engaged despite MOJITO + passouts on the field', () =>
+            assert.ok(typeof pineBot.test.bossRing() === 'number', 'ring ' + pineBot.test.bossRing()));
+        // the ult is what clears the passouts, so it must outrank every
+        // non-rainbow card. Rainbow is force-skipped, so this is #1 overall.
+        const ult = pineBot.test.scoreCard({ n: 'ULTIMATE', type: 'ult', lv: 2, maxlv: 6 }, 0, []);
+        const cocktail = pineBot.test.scoreCard({ n: 'NEGRONI', type: 'weapon', lv: 2, maxlv: 6 }, 0, []);
+        test('ult outranks a roster cocktail during the day', () =>
+            assert.ok(ult.score > cocktail.score, ult.score + ' vs ' + cocktail.score));
+        done();
+    }
+}
+
+if (which === 'time-stop') {
+    // --- (b) SOUTH SIDE station on a paused boss ---
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.setOwned({ 'SOUTH SIDE': 4 });
+        pineBot.test.ageHellEntry(120000);
+        // parked 60px from a frozen boss: inside the 0.8 x station guard
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        global.enemies = [
+            { type: 'boss', x: 330, y: 270, r: 40, reach: 90, hp: 5e6, maxHp: 5e6, speed: 1.0, moving: false, frozenUntil: 1e5 },
+            { type: 'mob', x: 300, y: 300, r: 14, hp: 900, maxHp: 900, speed: 1.0, moving: false, frozenUntil: 1e5 }
+        ];
+        const plan = pineBot.test.planMove();
+        // NOTE: these are coverage + invariant checks, not discrimination
+        // tests. The 26 -> 44 weight raise changes which bid wins on a
+        // contested field, which no fake-env fixture reproduces honestly.
+        test('the time-stop stacking branch is live', () => assert.strictEqual(plan.stacking, true));
+        test('the pause is detected', () => assert.strictEqual(plan.pauseActive, true));
+        test('flight is off while a pause holds the field', () => assert.strictEqual(plan.flight, false));
+        // station = max(150, r+90) = 150; guard at 120. From 60px out the
+        // planner must open the gap, never close it.
+        test('parked inside the station, the planner backs off the paused boss', () => {
+            const dNow = Math.hypot(330 - 270, 0);
+            const dNew = Math.hypot(330 - (270 + plan.dx * 6), 270 - (270 + plan.dy * 6));
+            assert.ok(dNew > dNow, 'dNow ' + dNow.toFixed(1) + ' dNew ' + dNew.toFixed(1));
+        });
+        done();
+    }, 2000);
+}
+
+if (which === 'flight') {
+    // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.ageHellEntry(120000);
+        // 33% HP: below panicHp, so pre-6.85.6 `!hpPanic` switched flight off
+        global.player = { x: 270, y: 270, hp: 60, maxHp: 180, speed: 1.9 };
+        global.enemies = [0, 1, 2, 3, 4, 5].map(i => ({
+            type: 'mob', x: 270 + 70 * Math.cos(i), y: 270 + 70 * Math.sin(i),
+            r: 14, hp: 9e9, maxHp: 9e9, speed: 3.0, moving: true
+        }));
+        const plan = pineBot.test.planMove();
+        test('hpPanic is set at 33% HP', () => assert.strictEqual(plan.hpPanic, true));
+        test('flight stays on at low HP against unkillable bodies', () =>
+            assert.strictEqual(plan.flight, true));
+        let ults = 0, dashes = 0;
+        global.useUltimate = () => { ults++; };
+        global.tryDash = () => { dashes++; };
+        pineBot.test.maybeAbilities(plan);
+        // the ult path here is `defensive` (panic && near >= 4), not ultSpam —
+        // see the note in maybeAbilities. Asserted because the directive names
+        // it, not because 6.85.6 changed it.
+        test('the ult fires during a low-HP flight', () => assert.ok(ults > 0, 'ults ' + ults));
+        // coverage only: with 6 bodies at 70px the danger score fires the dash
+        // regardless. What 6.85.6 changes is the GATE (1300 ms -> 300 ms via
+        // plan.flight), which a single maybeAbilities call cannot observe.
+        test('the dash fires during a low-HP flight', () => assert.ok(dashes > 0, 'dashes ' + dashes));
+        done();
+    }, 2000);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

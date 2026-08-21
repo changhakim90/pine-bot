@@ -70,6 +70,12 @@
         // the ult goes off on cooldown — killing is how a TIME STOP drops,
         // and the invincibility window is free survival either way.
         const gtDeep = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        // NOTE (v6.85.6): dropping `!hpPanic` here was tried and reverted —
+        // it is unreachable. Flight requires near >= 4, hpPanic implies panic,
+        // and `defensive` (panic && near >= 4) already fires the ult in every
+        // low-HP flight state. The directive's "using ultimate" is satisfied
+        // by that path; the fix that actually mattered was flight itself
+        // staying on at low HP, which is what opens the 300 ms dash gate.
         const ultSpam = !plan.hpPanic && (plan.flight === true || (hellDetected && gtDeep > 4800));
         // DEEP HELL (v6.82.0): a body about to land on us at depth is the
         // hit that ends 68% of runs — if the ult is up, its invincibility
@@ -504,6 +510,10 @@
                     // window (`hellRecent`) is past and the boss-ring branch
                     // is reachable without sleeping for a minute and a half.
                     ageHellEntry: ms => { if (hellEnteredAt) hellEnteredAt -= (ms || 120000); },
+                    // test-only: seed the level table. Several planner branches
+                    // (zoner / MOJITO sniper / anchor) key on owned levels that
+                    // are otherwise only learned from level-up cards.
+                    setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }

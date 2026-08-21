@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.5
+// @version      6.85.6
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.5';
+    const SCRIPT_VERSION = '6.85.6';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -4094,8 +4094,16 @@
         // FLIGHT MODE: in hell, with no pause holding the field and the
         // bodies scaled past killable, fighting is not an option — run,
         // dash, and get to a time-stop pickup. Pause ends it.
+        // v6.85.6 (user directive): "once mobs become unkillable the bot
+        // should constantly dash away and run away while using ultimate."
+        // `!hpPanic` switched flight OFF at low HP — exactly when running
+        // matters most. The panic posture that replaced it does NOT open the
+        // 300 ms dash gate (that keys on plan.flight), so the bot got less
+        // mobile the closer it came to dying. The crowd gates are unchanged:
+        // loosening them is not something the directive settles, and there is
+        // no measurement behind 4-vs-3.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
-        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !hpPanic;
+        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4;
         flightRef.v = flight;
 
         // v6.85.2: falling-passout drops excluded — see the `drop` tag above.
@@ -4353,7 +4361,14 @@
                     // USER: MOJITO snipes bosses AT RANGE — with it leveled and
                     // passouts available, the bot's body stays on the passout
                     // farm and lets the sniper handle the boss remotely.
-                    if ((ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
+                    // v6.85.6 (user directive): "the key to the day run is to
+                    // kill all the bosses and get the loot and upgrades to max
+                    // out the ultimate to clear the passouts." Bosses are the
+                    // FUNDING, passouts are what the funded ult harvests — so
+                    // the sniper deferral is a HELL rule only. During the day
+                    // the body goes to the boss and the passouts wait for the
+                    // ult, not the other way round.
+                    if (hellDetected && (ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
                     // v6.85.2: `bossFloor` is a per-character hard minimum on
@@ -4386,7 +4401,13 @@
                     bossRingRef.v = ring;
                     const errNow = Math.abs(Math.hypot(p.x - e.x, p.y - e.y) - ring);
                     const errNew = Math.abs(Math.hypot(nx - e.x, ny - e.y) - ring);
-                    gain += M.bossEngageValue * dayFarm * (errNow - errNew) * 0.12;
+                    // v6.85.6: day bosses outrank the passout farm (user).
+                    // The passout pull is already amplified 1.35x by dayFarm
+                    // before 1200s, which made a boss and a passout roughly
+                    // equal bids; the boss is worth more because its loot is
+                    // what levels the ult that then clears the passouts.
+                    const dayBossPush = (!hellDetected && gtNow2 < 1200) ? 1.5 : 1;
+                    gain += M.bossEngageValue * dayFarm * dayBossPush * (errNow - errNew) * 0.12;
                 }
             }
 
@@ -4473,11 +4494,22 @@
             // hugged). Hold a SOUTH SIDE firing station ~150px out: the
             // flame rain and CAMPARI shred still land, but the wake-up burst
             // can't reach. Pull toward the station from either side.
+            // v6.85.6 (user directive): "use SOUTH SIDE to kill bosses in hell
+            // while not staying too close when the bot picked up TIME STOP."
+            // The station distance was already right (150px, from the 81-min
+            // stall run) and the spring is symmetric, so "not too close" was
+            // already handled — an explicit inner danger term was tried and
+            // measured to change nothing, because at 60px the spring alone
+            // already bids 50+ to step outward. What was wrong is the WEIGHT:
+            // 26 is about what an ordinary passout detour bids, so on a busy
+            // field the station lost to the farm and the free damage window
+            // went unused. 44 makes the paused boss the priority it was
+            // described as.
             if (stopBoss) {
                 const station = Math.max(150, (stopBoss.r || 40) + 90);
                 const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - station);
                 const eNewS = Math.abs(Math.hypot(nx - stopBoss.x, ny - stopBoss.y) - station);
-                gain += 26 * (eNowS - eNewS) * 0.2;
+                gain += 44 * (eNowS - eNewS) * 0.2;
             }
 
             // ult centering: with 2+ passouts, drift onto their centroid so
@@ -4613,6 +4645,12 @@
         // the ult goes off on cooldown — killing is how a TIME STOP drops,
         // and the invincibility window is free survival either way.
         const gtDeep = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        // NOTE (v6.85.6): dropping `!hpPanic` here was tried and reverted —
+        // it is unreachable. Flight requires near >= 4, hpPanic implies panic,
+        // and `defensive` (panic && near >= 4) already fires the ult in every
+        // low-HP flight state. The directive's "using ultimate" is satisfied
+        // by that path; the fix that actually mattered was flight itself
+        // staying on at low HP, which is what opens the 300 ms dash gate.
         const ultSpam = !plan.hpPanic && (plan.flight === true || (hellDetected && gtDeep > 4800));
         // DEEP HELL (v6.82.0): a body about to land on us at depth is the
         // hit that ends 68% of runs — if the ult is up, its invincibility
@@ -5047,6 +5085,10 @@
                     // window (`hellRecent`) is past and the boss-ring branch
                     // is reachable without sleeping for a minute and a half.
                     ageHellEntry: ms => { if (hellEnteredAt) hellEnteredAt -= (ms || 120000); },
+                    // test-only: seed the level table. Several planner branches
+                    // (zoner / MOJITO sniper / anchor) key on owned levels that
+                    // are otherwise only learned from level-up cards.
+                    setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
                 }

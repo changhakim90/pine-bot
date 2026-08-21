@@ -20,6 +20,51 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.3+crown+pat | — | | | | | | | Pat pinned, no rotation. Identical play logic to 6.85.2 — **pool the two `+pat` rows.** |
 | 6.85.4+crown+pat | — | | | | | | | Day ring opening 130 → 165 (6.85.2 measured one demo by eye). |
 | 6.85.5+crown+pat | — | | | | | | | `bossFloor` retracted to 0 (second hell demo puts hit-`bossD` at med 264 — not contact). Day ring mid/late 75/66 → 90/80. |
+| 6.85.6+crown+pat | — | | | | | | | User directives: day bosses over the passout farm, TIME STOP station weight, flight survives low HP. |
+
+## 6.85.6 — three user directives
+
+Doctrine, not measurement. Nothing here comes from a demo; each change is
+tagged with whether a test discriminates it.
+
+**"The key to the day run is to kill all the bosses and get the loot and
+upgrades to max out the ultimate to clear the passouts."**
+
+- The MOJITO sniper deferral (`MOJITO >= 3` + any free passout ⇒ skip boss
+  engagement entirely and stay on the farm) is now a **hell-only** rule. In the
+  day the body goes to the boss and the passouts wait for the ult. *Tested —
+  fails without the change.*
+- Day boss engagement gets ×1.5 before 1200s. `dayFarm` was already amplifying
+  the passout pull 1.35× in the same window, which made a boss and a passout
+  near-equal bids; the boss is worth more because its loot is what levels the
+  ult. *Weight change, not discriminated by a test.*
+- The ult is already the top-priority card at 320 (only the rainbow's 400 beats
+  it, and the rainbow is force-skipped). No change — now covered by a test so
+  it cannot silently regress.
+
+**"Use SOUTH SIDE to kill bosses in hell while not staying too close when the
+bot picked up TIME STOP."** The station itself was already right — 150px, from
+the 81-minute stall run, and the spring is symmetric so "not too close" was
+already handled. An explicit inner-danger term was written, measured, and
+**removed**: at 60px the spring alone already bids 50+ to step outward, so the
+guard changed nothing. What was actually wrong is the weight: 26 is roughly
+what an ordinary passout detour bids, so on a busy field the station lost to
+the farm and the free damage window went unused. Now 44. *Weight change, not
+discriminated by a test; the branch and the pause detection are covered.*
+
+**"Once mobs become unkillable the bot should constantly dash away and run away
+while using ultimate."** Flight mode no longer switches off at `hpPanic`. That
+gate meant the bot became *less* mobile as it approached death: the panic
+posture that replaced flight does not open the 300 ms dash gate, which keys on
+`plan.flight`. *Tested — fails without the change.*
+
+Two things were tried here and reverted rather than shipped:
+
+- Loosening the crowd gates (`near >= 6 → 4`, `>= 4 → 3`). The directive does
+  not settle 4-vs-3 and nothing measures it.
+- Making `ultSpam` unconditional on HP. Unreachable: flight needs `near >= 4`,
+  `hpPanic` implies `panic`, and `defensive` (`panic && near >= 4`) already
+  fires the ult in every low-HP flight state.
 
 ## 6.85.5 — bossFloor retracted, mid/late day ring widened
 
