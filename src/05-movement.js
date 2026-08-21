@@ -956,7 +956,14 @@
                     // the sniper deferral is a HELL rule only. During the day
                     // the body goes to the boss and the passouts wait for the
                     // ult, not the other way round.
-                    if (hellDetected && (ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
+                    // v6.85.7: and in hell it now also yields to SOUTH SIDE.
+                    // 6.85.6 left a hole in its own directive — "use SOUTH SIDE
+                    // to kill bosses in hell" cannot happen if MOJITO + a free
+                    // passout skips boss engagement entirely, because SOUTH
+                    // SIDE is a GROUND weapon: its burn only lands where the
+                    // bot's body is. Sniping is the fallback for when there is
+                    // no zone engine, not a substitute for one.
+                    if (hellDetected && !zoner && (ownedLevels['MOJITO'] || 0) >= 3 && th.passouts.some(po => !po.contested)) continue;
                     // the firing ring must sit OUTSIDE the boss's contact
                     // buffer — bosses hurt on touch (user-verified, all of them)
                     // v6.85.2: `bossFloor` is a per-character hard minimum on

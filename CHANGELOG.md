@@ -21,6 +21,19 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.4+crown+pat | — | | | | | | | Day ring opening 130 → 165 (6.85.2 measured one demo by eye). |
 | 6.85.5+crown+pat | — | | | | | | | `bossFloor` retracted to 0 (second hell demo puts hit-`bossD` at med 264 — not contact). Day ring mid/late 75/66 → 90/80. |
 | 6.85.6+crown+pat | — | | | | | | | User directives: day bosses over the passout farm, TIME STOP station weight, flight survives low HP. |
+| 6.85.7+crown+pat | — | | | | | | | Hell boss engagement no longer deferred to the MOJITO sniper when SOUTH SIDE is owned. |
+
+## 6.85.7 — SOUTH SIDE outranks the MOJITO sniper in hell
+
+6.85.6 left a hole in its own directive. "Use SOUTH SIDE to kill bosses in
+hell" cannot happen while `MOJITO >= 3` plus any free passout skips boss
+engagement outright — SOUTH SIDE is a **ground** weapon, its burn only lands
+where the bot's body is, so deferring to a remote sniper means the zone engine
+never touches the boss at all. 6.85.6 made that deferral hell-only (day fixed);
+it now also yields to `zoner` inside hell. Sniping survives as the fallback for
+a build with no zone engine, which is what it was for.
+
+*Tested — `hell-southside` fails without the change.*
 
 ## 6.85.6 — three user directives
 

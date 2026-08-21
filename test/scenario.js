@@ -221,6 +221,26 @@ if (which === 'time-stop') {
     }, 2000);
 }
 
+// 7. v6.85.7: SOUTH SIDE is a GROUND weapon, so the MOJITO sniper deferral
+//    must not skip boss engagement in hell when the zone engine is owned.
+if (which === 'hell-southside') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.setOwned({ MOJITO: 4, 'SOUTH SIDE': 4, OLIVE: 3 });
+        pineBot.test.ageHellEntry(120000);
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        global.enemies = [
+            { type: 'boss', x: 420, y: 270, r: 40, reach: 90, hp: 5e6, maxHp: 5e6, speed: 1.0, moving: true },
+            { type: 'passout', x: 240, y: 250, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 5 }
+        ];
+        pineBot.test.planMove();
+        test('hell boss is engaged when SOUTH SIDE is owned, despite MOJITO', () =>
+            assert.ok(typeof pineBot.test.bossRing() === 'number', 'ring ' + pineBot.test.bossRing()));
+        done();
+    }, 2000);
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -253,4 +273,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
