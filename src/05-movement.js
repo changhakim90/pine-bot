@@ -39,12 +39,24 @@
                         out.marks.push({ x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 14) * 1.9 + CONFIG.threat.markPad, drop: true });
                         continue;
                     }
-                    if (Math.hypot(e.x - p.x, e.y - p.y) < CONFIG.movement.lootRange * 1.3) {
+                    // v6.85.10 (user: "there's too many passouts" / "it needs
+                    // to clear ... passouts in day"). This used to cut off at
+                    // lootRange*1.3 = 312px. On a 540x540 field that is a
+                    // LOCAL window: parked in a corner, the bot could not see
+                    // most of the floor, so a backlog on the far side was
+                    // invisible and it never travelled to clear it — it just
+                    // re-farmed whatever was next to it while the pile grew.
+                    // The whole field is gathered now; `far` marks the ones
+                    // outside the old window so the planner can treat them as
+                    // a travel target rather than a station.
+                    {
+                        const dpo0 = Math.hypot(e.x - p.x, e.y - p.y);
                         out.passouts.push({
                             x: e.x, y: e.y, r: (typeof e.r === 'number' ? e.r : 12),
                             hp: typeof e.hp === 'number' ? e.hp : 40,
                             maxHp: typeof e.maxHp === 'number' ? e.maxHp : (typeof e.hp === 'number' ? e.hp : 40),
-                            id: typeof e.id === 'number' ? e.id : 0   // lower id = fell first
+                            id: typeof e.id === 'number' ? e.id : 0,  // lower id = fell first
+                            far: dpo0 >= CONFIG.movement.lootRange * 1.3
                         });
                     }
                     continue;
@@ -228,8 +240,20 @@
             for (const e of out.enemies) if (!e.wall && Math.hypot(e.x - x, e.y - y) < r) n++;
             return n;
         };
-        for (const po of out.passouts) po.contested = chasersNear(po.x, po.y, 85) >= 3;   // late-day density made 2 flag EVERY passout
-        for (const e of out.enemies) if (e.wall) e.contested = chasersNear(e.x, e.y, 100) >= 3;
+        // v6.85.10 (user: "there's too many passouts", screenshot at 17:59
+        // with ~20 uncleared passouts on the floor and 21 live bodies). The
+        // threshold was an ABSOLUTE count, so it is density-blind: at late-day
+        // crowding almost every passout has 3 bodies within 85px, every one
+        // trips `contested`, and the farm shuts off exactly when the floor is
+        // thickest with loot. The 2 -> 3 bump in an earlier version was the
+        // same bug being papered over one notch at a time. "Contested" has to
+        // mean *busier than the field already is*, so the bar now rises with
+        // the live body count: ~3 on an empty floor, ~7 at 21 bodies.
+        const fieldBodies = out.enemies.reduce((n, e) => n + (e.wall ? 0 : 1), 0);
+        const contestTol = Math.max(3, Math.round(3 + fieldBodies / 6));
+        out.contestTol = contestTol;
+        for (const po of out.passouts) po.contested = chasersNear(po.x, po.y, 85) >= contestTol;
+        for (const e of out.enemies) if (e.wall) e.contested = chasersNear(e.x, e.y, 100) >= contestTol;
 
         // FINALE CHASE RIVAL (source-verified, live-diagnosed): during the
         // day-end chase, `finale.rival` hunts the player and hits for HALF
@@ -749,6 +773,26 @@
         }
         if (poW) { poCx /= poW; poCy /= poW; }
 
+        // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
+        // no booking mobs and passouts in day" — with a 17:59 screenshot
+        // showing ~20 uncleared passouts). Once nothing farmable is left in
+        // the local window the bot had no reason to go anywhere, so it sat and
+        // re-farmed its corner while the far pile grew. Pick exactly ONE
+        // distant target and walk to it: oldest first, since they despawn and
+        // the user's kill order is FIFO, frailest as the tie-break. Day only
+        // (hell is about survival, not the floor), healthy only, and never
+        // while a NO BOOKING wall or the finale rival owns the field.
+        const gtTrek = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        let trekPo = null;
+        if (!hellDetected && gtTrek < 1200 && !hpPanic && !th.rival && !rainbowRecent && !wallFocus &&
+            !th.passouts.some(po => !po.contested && !po.far)) {
+            for (const po of th.passouts) {
+                if (po.contested || !po.far) continue;
+                if (!trekPo || po.id < trekPo.id ||
+                    (po.id === trekPo.id && po.maxHp < trekPo.maxHp)) trekPo = po;
+            }
+        }
+
         // CONTACT IMMINENT (hell): a live body whose predicted step lands on
         // us. In hell these scale past what the supers can kill, so the only
         // answers are the dash and the ult's invincibility window.
@@ -1020,7 +1064,7 @@
                 // that FELL FIRST (lowest id) before it despawns.
                 let frailHp = Infinity, firstId = Infinity;
                 for (const po of th.passouts) {
-                    if (po.contested) continue;
+                    if (po.contested || po.far) continue;
                     if (po.maxHp < frailHp) frailHp = po.maxHp;
                     if (po.id < firstId) firstId = po.id;
                 }
@@ -1029,6 +1073,11 @@
                 // base-attack work — cut the detour incentive.
                 for (const po of th.passouts) {
                     if (po.contested) continue;   // surrounded by live enemies: not worth the dive
+                    // v6.85.10: a far passout is a TRAVEL target, not a
+                    // station. Twenty of them scattered across the field each
+                    // applying a full ring gradient sums to mush and the bot
+                    // stands still; the single-target trek below handles them.
+                    if (po.far) continue;
                     if (wallFocus) continue;      // NO BOOKING first (user priority)
                     // SOURCE-VERIFIED: the game's contact-damage loop has NO
                     // passout exemption — touching a passout hurts exactly
@@ -1116,6 +1165,15 @@
             // field the station lost to the farm and the free damage window
             // went unused. 44 makes the paused boss the priority it was
             // described as.
+            // FIELD TREK: close on the one chosen distant passout. Plain
+            // distance, not a ring — the ring gradient takes over as soon as
+            // it comes inside the local window and stops being `far`.
+            if (trekPo) {
+                const eNowT = Math.hypot(p.x - trekPo.x, p.y - trekPo.y);
+                const eNewT = Math.hypot(nx - trekPo.x, ny - trekPo.y);
+                gain += 26 * (eNowT - eNewT) * 0.2 * dayFarm;
+            }
+
             if (stopBoss) {
                 const station = Math.max(150, (stopBoss.r || 40) + 90);
                 const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - station);
@@ -1182,6 +1240,8 @@
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
             poNearest: poNearest == null ? null : Math.round(poNearest), ultFalloff: ultFall,
+            poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
+            contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
             bossNear: th.enemies.some(e => e.boss && !e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 240),
             roamingBoss: th.enemies.some(e => e.boss && !e.wall && !e.stationary && Math.hypot(e.x - p.x, e.y - p.y) < 260),

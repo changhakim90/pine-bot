@@ -213,7 +213,12 @@
         // Passouts keep spawning = loot piles waiting to be harvested — the
         // ultimate clears them wholesale (user strategy), and raw DPS cashes
         // them out too.
-        if (type === 'ult' && passoutAvg > 0.5) add(Math.round(10 + 10 * Math.min(1, passoutAvg / 3)), 'passout-farm');
+        // v6.85.10: the /3 ceiling meant a 20-passout floor scored identically
+        // to a 3-passout floor — every passout-pressure signal in the scorer
+        // saturates at 3, so the pick rules literally cannot see a backlog.
+        // The ult is the designated passout clear (user), so it is the one that
+        // should keep climbing with the pile.
+        if (type === 'ult' && passoutAvg > 0.5) add(Math.round(10 + 22 * Math.min(1, passoutAvg / 8)), 'passout-farm');
 
         // The DPS race: enemies' HP and damage scale over the run. When our
         // measured kill rate falls behind the measured spawn pressure and

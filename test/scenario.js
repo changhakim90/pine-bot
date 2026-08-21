@@ -305,6 +305,55 @@ if (which === 'flame-cross') {
     done();
 }
 
+// 10. v6.85.10: the passout backlog. Gather is field-wide, `contested` scales
+//     with local crowding, and with the local window empty the bot treks to
+//     the oldest distant passout instead of sitting in its corner.
+if (which === 'backlog') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+
+    // --- crowding: 21 bodies inside the 200px threat radius (the 17:59
+    // screenshot read "21e"), four of them loosely around a near passout.
+    global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+    const crowd = [];
+    // 17 bodies packed around (170,170) — inside the 200px threat radius but
+    // well clear of the test passout — and exactly 4 around the passout itself.
+    for (let i = 0; i < 17; i++) crowd.push({ type: 'mob', x: 170 + 30 * Math.cos(i), y: 170 + 30 * Math.sin(i), r: 14, hp: 500, maxHp: 500, speed: 1.0, moving: true });
+    for (let i = 0; i < 4; i++) crowd.push({ type: 'mob', x: 350 + 14 * Math.cos(i * 1.6), y: 350 + 14 * Math.sin(i * 1.6), r: 14, hp: 500, maxHp: 500, speed: 1.0, moving: true });
+    global.enemies = crowd.concat([{ type: 'passout', x: 350, y: 350, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 2 }]);
+    const busy = pineBot.test.gatherThreats(global.player);
+    test('contested threshold scales with local crowding', () =>
+        assert.ok(busy.contestTol >= 6, 'tol ' + busy.contestTol + ' at ' + busy.enemies.length + ' bodies'));
+    test('4 chasers no longer flag a passout as contested at this density', () => {
+        const po = busy.passouts.find(x => x.id === 2);
+        assert.ok(po, 'passout missing');
+        assert.strictEqual(po.contested, false);
+    });
+
+    // --- reach: two passouts past the old 312px gather window, nothing near.
+    global.player = { x: 60, y: 60, hp: 180, maxHp: 180, speed: 1.9 };
+    global.enemies = [
+        { type: 'passout', x: 480, y: 480, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 3 },
+        { type: 'passout', x: 500, y: 300, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 11 }
+    ];
+    const th = pineBot.test.gatherThreats(global.player);
+    test('passouts beyond the old 312px window are gathered', () => {
+        assert.strictEqual(th.passouts.length, 2, 'got ' + th.passouts.length);
+        assert.ok(th.passouts.every(po => po.far === true), JSON.stringify(th.passouts.map(po => po.far)));
+    });
+    const plan = pineBot.test.planMove();
+    test('the planner picks a trek target', () => assert.ok(plan.trek != null, 'trek ' + plan.trek));
+    test('the trek heads for the OLDEST passout (id 3), not the nearer one', () => {
+        // id 3 sits at (480,480) on the 45-degree bearing; id 11 at (500,300)
+        // is ~85px closer. FIFO must win.
+        const n = Math.hypot(420, 420);
+        const closing = plan.dx * (420 / n) + plan.dy * (420 / n);
+        assert.ok(closing > 0.6, 'closing ' + closing.toFixed(2));
+    });
+    test('the field passout count is reported', () => assert.strictEqual(plan.poField, 2));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -337,4 +386,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

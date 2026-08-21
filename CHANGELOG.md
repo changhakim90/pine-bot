@@ -24,6 +24,58 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.7+crown+pat | — | | | | | | | Hell boss engagement no longer deferred to the MOJITO sniper when SOUTH SIDE is owned. |
 | 6.85.8+crown+pat | — | | | | | | | Pat's ult has distance falloff: proximity-weighted aim, one-passout gate, 900ms retry. MOJITO deferral deleted. |
 | 6.85.9+crown+pat | — | | | | | | | Flame cross: passout station collapses to contact range while it burns; pickup value roughly doubled with passouts up. |
+| 6.85.10+crown+pat | — | | | | | | | Passout backlog: field-wide gather (was a 312px window), FIFO trek target, density-scaled `contested`. |
+
+## 6.85.10 — the passout backlog was invisible
+
+User, with a screenshot at 17:59 showing ~20 uncleared passouts on the floor
+and a panel reading `21e 3p 26m 6L`: *"there's too many passouts"*, then *"it
+needs to clear all bosses including no booking mobs and passouts in day"*.
+
+Three separate mechanisms were keeping the floor from draining. The first is
+the one that matters.
+
+**1. The bot could only see passouts within 312px.** `gatherThreats` cut
+passouts off at `lootRange * 1.3`. On a 540×540 field that is a *local window*:
+parked in a corner, most of the floor did not exist to the planner. A backlog
+on the far side was not deprioritised — it was **invisible**, so there was
+never any reason to travel, and the bot re-farmed its corner while the pile
+grew. The whole field is gathered now, with anything outside the old window
+tagged `far`.
+
+**2. Nothing pulled the bot across the field.** Twenty scattered passouts each
+applying a full ring gradient sums to mush, so `far` ones are excluded from the
+station loop and get a single **trek target** instead: when nothing farmable is
+left in the local window, pick one distant passout and walk to it. Oldest first
+(they despawn, and the user's kill order is FIFO), frailest as the tie-break.
+Day only, healthy only, and never while a NO BOOKING wall or the finale rival
+owns the field.
+
+**3. `contested` was density-blind.** A passout with 3 live bodies within 85px
+was skipped as a baited trap. That is an *absolute* count, so at late-day
+crowding essentially every passout tripped it and the farm shut off exactly
+when the floor was thickest with loot. (An earlier version bumped 2 → 3, which
+was the same bug papered over one notch.) The bar now rises with the live body
+count — ~3 on an empty floor, ~7 at the 21 bodies the screenshot showed.
+
+Also: the ult's `passout-farm` bonus was `10 + 10 * min(1, passoutAvg/3)`, so a
+20-passout floor scored identically to a 3-passout floor. Every passout-pressure
+signal in the scorer saturates at 3 — the pick rules literally could not see a
+backlog. The ult's is now `10 + 22 * min(1, passoutAvg/8)`.
+
+**Note on `passoutAvg`:** it is a rolling mean of `th.passouts.length`, which is
+now field-wide rather than local, so its scale has changed. Other consumers
+(`siegeField`, `loot-radius`, the CEM's farm-richness feature) still threshold
+at 1 and saturate at 3 and will now trip more readily. Deliberate, but untuned.
+
+**Not addressed:** NO BOOKING walls are still gathered only within
+`threat.enemyRange` (200px), so a distant wall is as invisible as a distant
+passout was. Fixing that means touching the threat gather, which also drives the
+danger field, crowd counts and panic — too broad to do blind. Bosses already got
+a ×1.5 day engagement push in 6.85.6.
+
+*Tested — `backlog` covers all three, and each assertion was verified to fail
+against the unfixed source.*
 
 ## 6.85.9 — the flame cross is a body-centred burn
 
