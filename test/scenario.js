@@ -210,6 +210,33 @@ if (which === 'time-stop') {
         test('the time-stop stacking branch is live', () => assert.strictEqual(plan.stacking, true));
         test('the pause is detected', () => assert.strictEqual(plan.pauseActive, true));
         test('flight is off while a pause holds the field', () => assert.strictEqual(plan.flight, false));
+        // v6.85.11: `!projHere` used to gate the whole branch, and in hell a
+        // shot is nearly always within 130px, so it almost never opened.
+        test('a live projectile no longer closes the stacking window', () => {
+            global.eprojectiles = [{ x: 300, y: 300, r: 6, vx: 0, vy: 0 }];
+            const p2 = pineBot.test.planMove();
+            global.eprojectiles = [];
+            assert.strictEqual(p2.stacking, true);
+        });
+        // gathered radius is padded by the enemy profile (56 here, not the
+        // raw 40), so assert against the safe ring rather than a magic number.
+        test('with time on the freeze, the station is inside the safe ring', () =>
+            assert.ok(plan.stackStation < 150, 'station ' + plan.stackStation));
+        test('parked at the OLD 150px station, a long freeze pulls the bot in', () => {
+            // boss r 40 at (330,270); 150px out is exactly where the flat
+            // station used to park. Burn range is 80, so the planner must
+            // close. Pre-6.85.11 it sat still here.
+            global.player = { x: 180, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+            const p3 = pineBot.test.planMove();
+            global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+            assert.ok(p3.dx > 0.5, 'dx ' + p3.dx.toFixed(2) + ' (expected eastward, toward the boss)');
+        });
+        test('as the freeze runs down, the station falls back to safe (150)', () => {
+            global.enemies[0].frozenUntil = 61;   // 60 frames left: over the 45 drop cut, under 120
+            const p4 = pineBot.test.planMove();
+            global.enemies[0].frozenUntil = 1e5;
+            assert.ok(p4.stackStation >= 150, 'station ' + p4.stackStation);
+        });
         // station = max(150, r+90) = 150; guard at 120. From 60px out the
         // planner must open the gap, never close it.
         test('parked inside the station, the planner backs off the paused boss', () => {

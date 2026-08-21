@@ -811,14 +811,28 @@
         // SOUTH SIDE owned, the paused boss is a free damage sponge — stand
         // ON it and let the burn zones stack. Only while the freeze has
         // ≥0.75s left (the karaoke lesson: leave BEFORE it wakes).
+        // v6.85.11 (user: "the bot is not using SOUTH SIDE attacks well for
+        // frozen bosses in hell"). `!projHere` gated the WHOLE branch, and
+        // projHere is true whenever any enemy shot sits within q.r + 130 —
+        // which in hell is very nearly always. The stacking window therefore
+        // almost never opened in a real run. A frozen boss cannot act; the
+        // reason to fear a shot is unrelated to whether we stack on it, and
+        // the danger field still routes around live projectiles on its own.
         let stopBoss = null;
-        if (hellDetected && zoner && !projHere) {
+        if (hellDetected && zoner) {
             for (const e of th.enemies) {
                 if (!e.boss || e.wall || !e.frozen || e.frozenLeft < 45) continue;
                 const dd = Math.hypot(e.x - p.x, e.y - p.y);
-                if (!stopBoss || dd < stopBoss.d) stopBoss = { x: e.x, y: e.y, d: dd, r: e.r };
+                if (!stopBoss || dd < stopBoss.d) stopBoss = { x: e.x, y: e.y, d: dd, r: e.r, left: e.frozenLeft };
             }
         }
+
+        // Hoisted so the reported diagnostic is literally the number the
+        // planner steers to — a separately-computed label can drift from the
+        // behaviour and then "tests" the label instead of the bot.
+        const stopStation = stopBoss
+            ? ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90))
+            : null;
 
         let best = null;
         const N = M.samples;
@@ -1175,9 +1189,17 @@
             }
 
             if (stopBoss) {
-                const station = Math.max(150, (stopBoss.r || 40) + 90);
-                const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - station);
-                const eNewS = Math.abs(Math.hypot(nx - stopBoss.x, ny - stopBoss.y) - station);
+                // v6.85.11: SOUTH SIDE is a GROUND weapon — the same fact that
+                // drove 6.85.7 and 6.85.9. Its burn lands where the bot's body
+                // is, so a flat 150px station meant the boss was never inside
+                // the zones at all and the "stacking" window did nothing. The
+                // station is now two-phase: while the freeze has real time left
+                // (>2s) stand at burn range so the rain covers the body, and as
+                // the clock runs down fall back to the old safe ring so the
+                // wake-up burst cannot reach. The <45-frame exclusion above
+                // still drops the target entirely before it moves.
+                const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - stopStation);
+                const eNewS = Math.abs(Math.hypot(nx - stopBoss.x, ny - stopBoss.y) - stopStation);
                 gain += 44 * (eNowS - eNewS) * 0.2;
             }
 
@@ -1235,7 +1257,7 @@
             pauseActive, contactImminent, flight, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

@@ -25,6 +25,36 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.8+crown+pat | — | | | | | | | Pat's ult has distance falloff: proximity-weighted aim, one-passout gate, 900ms retry. MOJITO deferral deleted. |
 | 6.85.9+crown+pat | — | | | | | | | Flame cross: passout station collapses to contact range while it burns; pickup value roughly doubled with passouts up. |
 | 6.85.10+crown+pat | — | | | | | | | Passout backlog: field-wide gather (was a 312px window), FIFO trek target, density-scaled `contested`. |
+| 6.85.11+crown+pat | — | | | | | | | Frozen-boss stacking: `!projHere` gate removed (it suppressed the branch in hell), two-phase station at SOUTH SIDE burn range. |
+
+## 6.85.11 — the frozen-boss stacking window barely existed
+
+User: *"the bot is not using SOUTH SIDE attacks well for frozen bosses in
+hell."* Two separate reasons, and the first one means 6.85.6's weight raise was
+tuning a branch that almost never ran.
+
+**1. `!projHere` gated the entire branch.** `projHere` is true whenever any
+enemy shot sits within `q.r + 130` of the bot — in hell that is very nearly
+always. So the stacking window opened only on a quiet screen, which hell does
+not have. A frozen boss cannot act; whether a shot is in flight elsewhere has
+nothing to do with whether we should be standing in our own burn zones, and the
+danger field already routes around live projectiles on its own. Gate removed.
+*Tested — fails without the change.*
+
+**2. The station was outside SOUTH SIDE's reach.** The same fact that drove
+6.85.7 and 6.85.9: SOUTH SIDE is a **ground** weapon, its rain lands where the
+bot's body is. A flat 150px station meant the boss was never inside the zones,
+so "stacking" was orbiting an inert body at range. The station is two-phase now
+— while the freeze has real time left (>2s) the bot stands at burn range
+(`r + 40`, ~96px on a gathered radius), and as the clock runs down it falls back
+to the old safe ring so the wake-up burst cannot reach. The existing
+`frozenLeft < 45` cut still drops the target entirely before it moves.
+*Tested — fails without the change.*
+
+The `stackStation` diagnostic now reports the number the planner actually steers
+to, rather than a separately computed label. The first version of this test
+asserted the label and passed against unfixed source — a label can drift from
+the behaviour, and then the test measures the label.
 
 ## 6.85.10 — the passout backlog was invisible
 
