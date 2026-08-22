@@ -35,6 +35,24 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.18+crown+pat | — | | | | | | | Off-canvas day bosses gathered to 480px (ring pull only) — the bot hugs the nearest edge instead of forgetting them. |
 | 6.85.19+crown+pat | **52** | **1244** | 1370 | 5193 | 0.06 | 0 | 0.54 | **Recovery confirmed: z=+3.16 vs the 6.85.16 regression, statistically level with 6.85.12.** Supers 0.9. |
 | 6.85.20+crown+pat | — | | | | | | | Bossless deep-hell flight eases kite 1.8→1.25 (grind in the SOUTH SIDE wake for timestop drops); chased flight unchanged. |
+| 6.85.21+crown+pat | — | | | | | | | Rainbow Gun skip is a hard veto (−500, was 18) — it could previously win a bad pool with no re-rolls left. |
+
+## 6.85.21 — skip is now a veto: the Rainbow Gun leak
+
+User: *"rainbowgun is still appearing."* Correct — forced-skip was never a
+refusal. The skip path scored the gun card at **18**, while avoided fillers
+score *negative* and weak cards score under 18. So in a bad pool with no
+re-rolls left, the gun was the best-scoring card and the bot took it against
+its own policy. The 25-minute-window logic also re-derived the policy per call
+and gave the pre-window gun the same 18, so the leak existed at every game
+time.
+
+With skip policy the gun now scores **−500** — it loses to literally anything
+else the pool offers. Only an all-rainbow pool could force it. The take-policy
+path (400 in window, 18 before it) is unchanged, and the hell hard-lock stays.
+
+*Tested — `gun-veto`: a day-banned filler outbids the gun; both assertions fail
+against the 18-point version.*
 
 ## 6.85.20 — bossless deep-hell flight is a grind, not a flee
 

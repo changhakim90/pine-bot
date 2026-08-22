@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.20
+// @version      6.85.21
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.20';
+    const SCRIPT_VERSION = '6.85.21';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -1834,11 +1834,17 @@
                 // threshold, so weak pools get re-rolled instead of pulling
                 // the trigger early.
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                if (gtNow >= CONFIG.strategy.rainbowReadyS) {
-                    if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
-                    if (rainbowChoice === 'take') add(400, 'RAINBOW');
-                    else add(18, 'no-rainbow-path');   // exploring the pure-supers crown route
-                } else add(18, 'rainbow-too-early');
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
+                // v6.85.21 (user: "rainbowgun is still appearing"). Skip
+                // scored the gun at 18 — a REFUSAL that outbid every avoided
+                // filler (they score negative) and every weak card under 18.
+                // In a bad pool with no re-rolls left, 18 won and the bot
+                // took the gun against its own policy. A skip is now a hard
+                // veto (-500): the gun loses to literally anything else the
+                // pool offers, and only an all-rainbow pool can force it.
+                if (rainbowChoice !== 'take') { add(-500, 'no-gun-skip-policy'); break; }
+                if (gtNow >= CONFIG.strategy.rainbowReadyS) add(400, 'RAINBOW');
+                else add(18, 'rainbow-too-early');   // take policy: wait for the 25-min window
                 break;
             }
             case 'rbstat': add(220, 'rainbow-stat'); break;

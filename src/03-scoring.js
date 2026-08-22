@@ -140,11 +140,17 @@
                 // threshold, so weak pools get re-rolled instead of pulling
                 // the trigger early.
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                if (gtNow >= CONFIG.strategy.rainbowReadyS) {
-                    if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
-                    if (rainbowChoice === 'take') add(400, 'RAINBOW');
-                    else add(18, 'no-rainbow-path');   // exploring the pure-supers crown route
-                } else add(18, 'rainbow-too-early');
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
+                // v6.85.21 (user: "rainbowgun is still appearing"). Skip
+                // scored the gun at 18 — a REFUSAL that outbid every avoided
+                // filler (they score negative) and every weak card under 18.
+                // In a bad pool with no re-rolls left, 18 won and the bot
+                // took the gun against its own policy. A skip is now a hard
+                // veto (-500): the gun loses to literally anything else the
+                // pool offers, and only an all-rainbow pool can force it.
+                if (rainbowChoice !== 'take') { add(-500, 'no-gun-skip-policy'); break; }
+                if (gtNow >= CONFIG.strategy.rainbowReadyS) add(400, 'RAINBOW');
+                else add(18, 'rainbow-too-early');   // take policy: wait for the 25-min window
                 break;
             }
             case 'rbstat': add(220, 'rainbow-stat'); break;

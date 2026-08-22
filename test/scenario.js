@@ -720,6 +720,21 @@ if (which === 'grind') {
     }, 2000);
 }
 
+// 20. v6.85.21: skip policy is a hard veto on the Rainbow Gun.
+if (which === 'gun-veto') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1600 } });
+    pineBot.stop();
+    const gun = { n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 1 };
+    const filler = { n: 'GINGER BEER', type: 'passive', lv: 0, maxlv: 6 };   // day-banned, scores negative
+    const g = pineBot.test.scoreCard(gun, 0, [gun, filler]);
+    const f = pineBot.test.scoreCard(filler, 1, [gun, filler]);
+    test('with skip policy the gun scores a hard veto (< -100)', () =>
+        assert.ok(g.score < -100, 'gun ' + g.score + ' (' + g.why + ')'));
+    test('even a day-banned filler outbids the vetoed gun', () =>
+        assert.ok(f.score > g.score, 'filler ' + f.score + ' vs gun ' + g.score));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -752,4 +767,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
