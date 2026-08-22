@@ -36,7 +36,49 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.19+crown+pat | **52** | **1244** | 1370 | 5193 | 0.06 | 0 | 0.54 | **Recovery confirmed: z=+3.16 vs the 6.85.16 regression, statistically level with 6.85.12.** Supers 0.9. |
 | 6.85.20+crown+pat | — | | | | | | | Bossless deep-hell flight eases kite 1.8→1.25 (grind in the SOUTH SIDE wake for timestop drops); chased flight unchanged. |
 | 6.85.21+crown+pat | — | | | | | | | Rainbow Gun skip is a hard veto (−500, was 18) — it could previously win a bad pool with no re-rolls left. |
-| 6.85.22+crown+pat | — | | | | | | | CEM reaches the doctrine constants (6 new dims: pat rings, kill-order transit, stop-boss pull, grind kite); enemy-type threat weights learned from attributed damage. |
+| 6.85.22+crown+pat | **273** | **843** | 961 | 5585 | 0.02 | 0 | 0.18 | **REGRESSION, z=−3.1.** Null-poisoned params (suicide day ring, ×0 transit charge) + enemy-fear ratchet. Postmortem in 6.85.23. |
+| 6.85.23+crown+pat | — | | | | | | | Emergency repair: dims withdrawn, applyParams hardened against null, `sanitizeCem()` every trial, multiplier instrument-only. |
+
+## 6.85.23 — EMERGENCY: 6.85.22 postmortem and repair
+
+6.85.22 ran 273 times overnight: **median 843, hell 0.18, supers 0.1, z=−3.1**
+— the worst regression of the project, immediately after 6.85.21's n=17 posted
+the best p60 in the Pat series (0.29). Both 6.85.22 mechanisms were at fault,
+in different ways:
+
+**1. The six new CEM dimensions were added to a LIVE learner with no stored
+mean/sigma.** Every sample drew `NaN`. Worse: `JSON.stringify(NaN)` is `null`,
+`isFinite(null)` is `true` (null coerces to 0) — so after the first refit the
+poisoned means round-tripped through storage as `null` and **`applyParams`
+applied them**: `patRing.early = null` collapsed the day station to a ~20px
+suicide ring on top of the passouts, and `killOrderDist = null` multiplied
+transit by zero — resurrecting the exact frailest-first regression of 6.85.14.
+Champion runs and every post-refit run played these params.
+
+**2. The enemy-type multiplier ratcheted.** Attribution assigned every hit —
+mark, projectile, DoT included — to the *nearest* type, so the commonest types
+climbed to the 2.2 fear cap within ~10 runs and persisted in the learn store.
+
+Repair, all teeth-checked:
+
+- The six dims are **withdrawn from TUNABLE** (knobs stay in CONFIG, settable
+  and testable). Adding a dimension to a live learner requires seeding
+  `mean = default, sigma = (max−min)/4` first — one at a time, on a measured
+  baseline.
+- `applyParams` is **hardened**: only `typeof === 'number' && isFinite` values
+  are ever applied.
+- **`sanitizeCem()`** runs at every trial begin: strips non-finite/null values
+  from `mean/sigma/pc`, resets a poisoned step size, cleans `batch`/`hof`
+  vectors, and deletes the stored `enemyTypeMul` ratchet.
+- The multiplier is **no longer applied** to the danger field. Attribution
+  keeps recording (`pineBot.enemyThreat()`, instrument only). Re-applying it
+  requires sole-candidate attribution, not nearest-type.
+
+The 273 poisoned runs also fed 27 CEM refits; the sanitizer plus rank-based
+elites should recover, but watch `genHistory` and expect some drift.
+
+*Scenario `cem-heal` (5 assertions) + the flipped multiplier assertion in
+`learned`. Verified failing without the sanitizer.*
 
 ## 6.85.22 — the learner reaches the tactics, and enemy types are learned
 

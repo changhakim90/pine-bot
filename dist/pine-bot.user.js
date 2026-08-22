@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.22
+// @version      6.85.23
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.22';
+    const SCRIPT_VERSION = '6.85.23';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -674,15 +674,15 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 },
-        // v6.85.22: the doctrine constants join the search. Bounds bracket
-        // the demo-measured p25 band (rings) or the hand-tuned value ±~50%.
-        'patRing.early': { min: 130, max: 200 },
-        'patRing.mid': { min: 70, max: 120 },
-        'patRing.late': { min: 60, max: 110 },
-        'movement.killOrderDist': { min: 0.2, max: 1.0 },
-        'movement.stopBossPull': { min: 20, max: 70 },
-        'movement.grindKiteMul': { min: 1.0, max: 1.8 }
+        'movement.bossEngageValue': { min: 10, max: 36 }
+        // v6.85.23: the six 6.85.22 dims are WITHDRAWN from the search.
+        // They never actually sampled (the stored CEM state had no mean or
+        // sigma for them, so every draw was NaN and applyParams skipped it)
+        // but the NaN entries poisoned the batch/hof/step-size state across
+        // 27 refits. The knobs stay in CONFIG (settable, testable); adding a
+        // dimension to a LIVE learner requires seeding mean=default and
+        // sigma=(max-min)/4 first — do that, one dimension at a time, only
+        // on a version whose baseline is already measured.
     };
 
     function getParam(path) {
@@ -699,8 +699,12 @@
 
     function applyParams(p) {
         if (!p) return;
-        // isFinite guard: NaN is typeof 'number' and would poison every score
-        for (const k of Object.keys(TUNABLE)) if (isFinite(p[k])) setParam(k, p[k]);
+        // v6.85.23 HARDENED: isFinite(null) is TRUE (null coerces to 0), and
+        // JSON round-trips NaN as null — so a poisoned store could apply
+        // null params (patRing.early null -> a 20px suicide station;
+        // killOrderDist null -> x0 = the frailest-first regression). Only a
+        // genuine finite number is ever applied.
+        for (const k of Object.keys(TUNABLE)) if (typeof p[k] === 'number' && isFinite(p[k])) setParam(k, p[k]);
     }
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"
@@ -1305,6 +1309,33 @@
     // old mean-comparison optimizers let single outliers steer everything.
     function bestParams() { return learn.cem ? learn.cem.mean : DEFAULT_PARAMS; }
 
+    // v6.85.23: sanitize the CEM state. 6.85.22 added TUNABLE keys with no
+    // stored mean/sigma, so 273 runs sampled NaN for them; the NaN entries
+    // rode into batch/hof vectors and the step-size update, freezing
+    // exploration. Strip every non-finite value and reset ss if poisoned.
+    function sanitizeCem() {
+        try {
+            const c = learn && learn.cem;
+            if (!c) return;
+            const bad = v => !(typeof v === 'number' && isFinite(v));   // null survives JSON and passes isFinite!
+            for (const tbl of [c.mean, c.sigma, c.pc]) {
+                if (!tbl) continue;
+                for (const k of Object.keys(tbl)) if (bad(tbl[k])) delete tbl[k];
+            }
+            if (bad(c.ss)) c.ss = 1;
+            const clean = arr => Array.isArray(arr) ? arr.map(e => {
+                if (e && e.p) for (const k of Object.keys(e.p)) if (bad(e.p[k])) delete e.p[k];
+                return e;
+            }) : arr;
+            c.batch = clean(c.batch);
+            learn.hof = clean(learn.hof);
+            // v6.85.23: the 6.85.22 enemy-type multipliers stopped being
+            // applied, and stored ratcheted values must not linger in case a
+            // future version applies them again. Cleared once here.
+            if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+        } catch (e) { }
+    }
+
     function gauss() {
         let u = 0, v = 0;
         while (!u) u = Math.random();
@@ -1333,6 +1364,7 @@
         // MULTI-TAB: re-read shared storage to pick up other tabs' progress
         // before this run counts itself in.
         learn = loadLearn();
+        sanitizeCem();   // v6.85.23: purge NaN-poisoned CEM state + stale enemyTypeMul every trial
         learn.runs++;
         if (learn.runs <= CONFIG.learning.tuningWarmupRuns) {
             championRun = false;
@@ -3710,11 +3742,17 @@
                     // double-counted the same field as body-centred damage and
                     // shoved the engagement ring 130px out for nothing.
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
-                    // v6.85.22: static profile weight x learned per-type
-                    // multiplier. Types that actually damage us drift up
-                    // (bounded 0.6-2.2), silent types drift back to 1 — the
-                    // threat model tracks THIS game's reality, not the guess.
-                    w: prof.weight * armorEase * ((learn && learn.enemyTypeMul && learn.enemyTypeMul[t0]) || 1),
+                    // v6.85.23: the 6.85.22 learned multiplier is NO LONGER
+                    // APPLIED — it caused the worst regression of the project
+                    // (n=273, median 843, supers 0.1, z=-3.1). The attribution
+                    // assigned every hit, including mark/proj/DoT hits, to the
+                    // NEAREST type, so the most common types ratcheted to the
+                    // 2.2 cap within ~10 runs and persisted in the learn
+                    // store: the bot feared ordinary mobs at 2.2x and stopped
+                    // farming. Attribution keeps recording (instrument only,
+                    // pineBot.enemyThreat()); applying it again requires
+                    // sole-candidate attribution, not nearest-type.
+                    w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the

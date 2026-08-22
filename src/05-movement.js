@@ -192,11 +192,17 @@
                     // double-counted the same field as body-centred damage and
                     // shoved the engagement ring 130px out for nothing.
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
-                    // v6.85.22: static profile weight x learned per-type
-                    // multiplier. Types that actually damage us drift up
-                    // (bounded 0.6-2.2), silent types drift back to 1 — the
-                    // threat model tracks THIS game's reality, not the guess.
-                    w: prof.weight * armorEase * ((learn && learn.enemyTypeMul && learn.enemyTypeMul[t0]) || 1),
+                    // v6.85.23: the 6.85.22 learned multiplier is NO LONGER
+                    // APPLIED — it caused the worst regression of the project
+                    // (n=273, median 843, supers 0.1, z=-3.1). The attribution
+                    // assigned every hit, including mark/proj/DoT hits, to the
+                    // NEAREST type, so the most common types ratcheted to the
+                    // 2.2 cap within ~10 runs and persisted in the learn
+                    // store: the bot feared ordinary mobs at 2.2x and stopped
+                    // farming. Attribution keeps recording (instrument only,
+                    // pineBot.enemyThreat()); applying it again requires
+                    // sole-candidate attribution, not nearest-type.
+                    w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the

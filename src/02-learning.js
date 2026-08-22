@@ -340,6 +340,33 @@
     // old mean-comparison optimizers let single outliers steer everything.
     function bestParams() { return learn.cem ? learn.cem.mean : DEFAULT_PARAMS; }
 
+    // v6.85.23: sanitize the CEM state. 6.85.22 added TUNABLE keys with no
+    // stored mean/sigma, so 273 runs sampled NaN for them; the NaN entries
+    // rode into batch/hof vectors and the step-size update, freezing
+    // exploration. Strip every non-finite value and reset ss if poisoned.
+    function sanitizeCem() {
+        try {
+            const c = learn && learn.cem;
+            if (!c) return;
+            const bad = v => !(typeof v === 'number' && isFinite(v));   // null survives JSON and passes isFinite!
+            for (const tbl of [c.mean, c.sigma, c.pc]) {
+                if (!tbl) continue;
+                for (const k of Object.keys(tbl)) if (bad(tbl[k])) delete tbl[k];
+            }
+            if (bad(c.ss)) c.ss = 1;
+            const clean = arr => Array.isArray(arr) ? arr.map(e => {
+                if (e && e.p) for (const k of Object.keys(e.p)) if (bad(e.p[k])) delete e.p[k];
+                return e;
+            }) : arr;
+            c.batch = clean(c.batch);
+            learn.hof = clean(learn.hof);
+            // v6.85.23: the 6.85.22 enemy-type multipliers stopped being
+            // applied, and stored ratcheted values must not linger in case a
+            // future version applies them again. Cleared once here.
+            if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+        } catch (e) { }
+    }
+
     function gauss() {
         let u = 0, v = 0;
         while (!u) u = Math.random();
@@ -368,6 +395,7 @@
         // MULTI-TAB: re-read shared storage to pick up other tabs' progress
         // before this run counts itself in.
         learn = loadLearn();
+        sanitizeCem();   // v6.85.23: purge NaN-poisoned CEM state + stale enemyTypeMul every trial
         learn.runs++;
         if (learn.runs <= CONFIG.learning.tuningWarmupRuns) {
             championRun = false;

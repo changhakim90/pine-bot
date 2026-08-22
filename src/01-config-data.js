@@ -672,15 +672,15 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 },
-        // v6.85.22: the doctrine constants join the search. Bounds bracket
-        // the demo-measured p25 band (rings) or the hand-tuned value ±~50%.
-        'patRing.early': { min: 130, max: 200 },
-        'patRing.mid': { min: 70, max: 120 },
-        'patRing.late': { min: 60, max: 110 },
-        'movement.killOrderDist': { min: 0.2, max: 1.0 },
-        'movement.stopBossPull': { min: 20, max: 70 },
-        'movement.grindKiteMul': { min: 1.0, max: 1.8 }
+        'movement.bossEngageValue': { min: 10, max: 36 }
+        // v6.85.23: the six 6.85.22 dims are WITHDRAWN from the search.
+        // They never actually sampled (the stored CEM state had no mean or
+        // sigma for them, so every draw was NaN and applyParams skipped it)
+        // but the NaN entries poisoned the batch/hof/step-size state across
+        // 27 refits. The knobs stay in CONFIG (settable, testable); adding a
+        // dimension to a LIVE learner requires seeding mean=default and
+        // sigma=(max-min)/4 first — do that, one dimension at a time, only
+        // on a version whose baseline is already measured.
     };
 
     function getParam(path) {
@@ -697,8 +697,12 @@
 
     function applyParams(p) {
         if (!p) return;
-        // isFinite guard: NaN is typeof 'number' and would poison every score
-        for (const k of Object.keys(TUNABLE)) if (isFinite(p[k])) setParam(k, p[k]);
+        // v6.85.23 HARDENED: isFinite(null) is TRUE (null coerces to 0), and
+        // JSON round-trips NaN as null — so a poisoned store could apply
+        // null params (patRing.early null -> a 20px suicide station;
+        // killOrderDist null -> x0 = the frailest-first regression). Only a
+        // genuine finite number is ever applied.
+        for (const k of Object.keys(TUNABLE)) if (typeof p[k] === 'number' && isFinite(p[k])) setParam(k, p[k]);
     }
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"

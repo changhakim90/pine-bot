@@ -779,8 +779,11 @@ if (which === 'learned') {
     const w1 = pineBot.test.gatherThreats(global.player).enemies[0].w;
     pineBot.test.setEnemyMul({ bomber: 2.0 });
     const w2 = pineBot.test.gatherThreats(global.player).enemies[0].w;
-    test('a learned 2x multiplier doubles the type weight in the danger field', () =>
-        assert.ok(Math.abs(w2 / w1 - 2) < 0.01, 'w1 ' + w1 + ' w2 ' + w2));
+    // v6.85.23: the multiplier is INSTRUMENT-ONLY — applying it caused the
+    // worst regression of the project (fear of common types ratcheted to the
+    // 2.2 cap and the bot stopped farming). The weight must NOT move.
+    test('a stored 2x multiplier does NOT change the danger-field weight', () =>
+        assert.ok(Math.abs(w2 / w1 - 1) < 0.01, 'w1 ' + w1 + ' w2 ' + w2));
     // --- (d) damage near a typed enemy is attributed to that type.
     pineBot.test.setEnemyMul({});
     global.player.hp = 170;
@@ -791,6 +794,34 @@ if (which === 'learned') {
     test('the HP drop is attributed to the nearby enemy type', () =>
         assert.ok(ht.bomber >= 19, JSON.stringify(ht)));
     done();
+}
+
+// 22. v6.85.23: the CEM sanitizer heals NaN-poisoned state from 6.85.22.
+if (which === 'cem-heal') {
+    const poisoned = {
+        runs: 200, bartender: 'pat', rewardEpoch: 2,
+        cem: { mean: { 'movement.standoff': 120, 'patRing.early': NaN }, sigma: { 'movement.standoff': 20, 'patRing.early': NaN },
+               pc: { 'movement.standoff': NaN }, ss: NaN, batch: [{ r: 1, p: { 'movement.standoff': 118, 'patRing.mid': NaN } }] },
+        hof: [{ r: 3, p: { 'movement.standoff': 115, 'movement.killOrderDist': NaN } }],
+        enemyTypeMul: { mob: 2.2, bomber: 2.0 }
+    };
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
+        storage: { pineBotUCB_v5_pat: JSON.stringify(poisoned) } });
+    setTimeout(() => {
+        pineBot.stop();
+        const L = pineBot.learn();
+        test('non-finite CEM means/sigmas are stripped', () =>
+            assert.ok(!('patRing.early' in (L.cem.mean || {})) && isFinite(L.cem.mean['movement.standoff'])));
+        test('the step size is reset to a finite value', () => assert.ok(isFinite(L.cem.ss)));
+        test('NaN entries are stripped from hof vectors', () =>
+            assert.ok(!('movement.killOrderDist' in L.hof[0].p)));
+        test('the ratcheted enemyTypeMul store is cleared', () =>
+            assert.strictEqual(L.enemyTypeMul, undefined));
+        const sp = pineBot.test.sampleParams();
+        test('sampling is finite again for every dimension', () =>
+            assert.ok(Object.keys(sp).every(k => isFinite(sp[k])), JSON.stringify(sp).slice(0, 120)));
+        done();
+    }, 2200);
 }
 
 if (which === 'flight') {
@@ -825,4 +856,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
