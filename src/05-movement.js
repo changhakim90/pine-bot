@@ -1154,11 +1154,25 @@
                 // USER KILL ORDER: the frailest passout (lowest max HP) dies
                 // first — fastest loot per second — and among peers, the one
                 // that FELL FIRST (lowest id) before it despawns.
-                let frailHp = Infinity, firstId = Infinity;
+                // v6.85.14 FOCUS FIRE (user: "still not clearing the
+                // passouts towards the 10 minute mark and it keeps piling up
+                // ... delaying the upgrades when entering initial hell mode").
+                // The bug: frailHp/firstId were computed for the USER KILL
+                // ORDER and then NEVER USED — every free passout applied its
+                // own ring gradient simultaneously, so with several on the
+                // field the bot steered toward the SUM of the pulls: a
+                // compromise point between rings (probe: 3 passouts, heading
+                // chosen toward the farthest). It orbited between them,
+                // finished none, and the pile grew while their maxHp scaled.
+                // Now exactly ONE passout is the station target, in the
+                // USER KILL ORDER as originally documented: FRAILEST first
+                // (lowest maxHp = fastest loot per second), fell-first
+                // (lowest id) as the tie-break — and the others contribute
+                // only their contact-zone danger.
+                let tgtPo = null;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
-                    if (po.maxHp < frailHp) frailHp = po.maxHp;
-                    if (po.id < firstId) firstId = po.id;
+                    if (!tgtPo || po.maxHp < tgtPo.maxHp || (po.maxHp === tgtPo.maxHp && po.id < tgtPo.id)) tgtPo = po;
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
                 // with CR as the only cocktail, farming them is slow
@@ -1224,7 +1238,9 @@
                         // only — no farm attraction until we're off the body
                         danger += 55 * (1 - Math.min(1, d1 / (zone + 30)));
                     } else {
-                        gain += M.passoutValue * (crOnly ? 0.4 : 1) *
+                        // v6.85.14: attraction comes from the ONE kill-order
+                        // target; every other passout is body-avoidance only.
+                        if (po === tgtPo) gain += M.passoutValue * (crOnly ? 0.4 : 1) *
                             (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
                         // never enter the contact zone, never cut through the
                         // body to reach the far side of the firing ring

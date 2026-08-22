@@ -496,6 +496,29 @@ if (which === 'damage-audit') {
     done();
 }
 
+// 13. v6.85.14: focus fire. With several passouts up, the station gradient
+//     comes from ONE kill-order target, not the sum of all of them.
+if (which === 'focus-fire') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
+    pineBot.stop();
+    global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
+    // frail old passout WEST at 120px; two tougher ones EAST/NORTHEAST whose
+    // summed pull outweighed the single west one under the old code (probe:
+    // the pre-fix heading was northeast, toward the farthest).
+    global.enemies = [
+        { type: 'passout', x: 150, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 3 },
+        { type: 'passout', x: 380, y: 300, r: 20, fallT: 0, hp: 70, maxHp: 70, id: 5 },
+        { type: 'passout', x: 420, y: 130, r: 20, fallT: 0, hp: 70, maxHp: 70, id: 9 }
+    ];
+    let pl;
+    for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();   // let smoothing settle
+    test('the heading closes on the frailest/oldest passout, not the sum', () =>
+        assert.ok(pl.dx < -0.5, 'dx ' + pl.dx.toFixed(2) + ' (expected westward toward id 3)'));
+    test('all three passouts are still visible and free', () =>
+        assert.strictEqual(pl.poFree, 3, JSON.stringify([pl.poField, pl.poFree])));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -528,4 +551,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

@@ -28,6 +28,32 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.11+crown+pat | — | | | | | | | Frozen-boss stacking: `!projHere` gate removed (it suppressed the branch in hell), two-phase station at SOUTH SIDE burn range. |
 | 6.85.12+crown+pat | **145** | **1247** | 1756 | 14115 | 0.12 | 0.01 | 0.53 | **z=5.26 vs the 6.85.1 baseline — the first significant result in the project.** Freeze aura fix; `bossHitRange()` instrument. All five top runs have 4 supers. |
 | 6.85.13+crown+pat | — | | | | | | | Instrument only: `pineBot.damageAudit()`. No behaviour change — the classifier is byte-identical so verdicts stay comparable with the 145-run row. |
+| 6.85.14+crown+pat | — | | | | | | | Focus fire: the passout kill order was computed but never used — one station target now, others are avoidance only. |
+
+## 6.85.14 — focus fire: the kill order was computed and never used
+
+User: *"still not clearing the passouts towards the 10 minute mark and it keeps
+piling up ... delaying the upgrades when entering initial hell mode."*
+
+The farm loop computed `frailHp` and `firstId` for the "USER KILL ORDER" — and
+then **never referenced either**. Every free passout applied its own ring
+gradient simultaneously, so with several on the field the bot steered toward
+the SUM of the pulls: a compromise point between rings. A probe at gt 650 with
+three passouts showed the chosen heading pointing at the *farthest* one (its
+error term dominates the sum). The bot orbited between targets, finished none,
+and the pile grew while each one's maxHp kept scaling — so by the finale the
+floor was littered with uncollected loot and XP, which is exactly the missing
+upgrade funding at hell entry.
+
+Now exactly **one** passout is the station target, in the kill order as
+originally documented: frailest first (lowest maxHp = fastest loot per second),
+fell-first (lowest id) as the tie-break. Every other passout contributes only
+its contact-zone danger — visible, avoided, never a competing attraction. The
+6.85.10 trek already handled the out-of-window backlog the same single-target
+way; this closes the same bug inside the window.
+
+*Tested — `focus-fire` fails against the unfixed source (heading flips from the
+summed direction to the kill-order target).*
 
 ## 6.85.13 — instrument dangerAccum
 
