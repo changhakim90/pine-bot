@@ -731,6 +731,7 @@
     // bosses at ~264px median, which the 200px threat gather cannot see, so
     // reading bossD off `th.enemies` would be blind exactly where it counts.
     const nearestBossRef = { v: Infinity };
+    const poFreeRef = { v: 0 };   // free passouts in the local window, set by gatherThreats
     const DMG_AUDIT_KEY = 'pineBotDmgAudit';
     let dmgAudit = (() => {
         const blank = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };

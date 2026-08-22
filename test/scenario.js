@@ -557,6 +557,55 @@ if (which === 'item-stop') {
     }, 2000);
 }
 
+// 15. v6.85.16: flame anchor + filler loot discount.
+if (which === 'flame-anchor') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
+    pineBot.stop();
+    // crowded 10-minute field: 6 mobs inside nearbyRadius, NO OLIVE/NEGRONI,
+    // a live enemy shot 100px away — every old anchor gate fails.
+    global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
+    global.eprojectiles = [{ x: 370, y: 270, r: 6, vx: 0, vy: 0 }];
+    const mobs = [];
+    for (let i = 0; i < 6; i++) mobs.push({ type: 'mob', x: 270 + 70 * Math.cos(i), y: 270 + 70 * Math.sin(i), r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true });
+    global.enemies = mobs.concat([{ type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 4 }]);
+    const cold = pineBot.test.planMove();
+    test('crowded field without the cross: no anchor (old gates hold)', () =>
+        assert.strictEqual(cold.anchor, false));
+    global.player.fireCrossUntil = 1e5;
+    const hot = pineBot.test.planMove();
+    global.eprojectiles = [];
+    test('same field with the cross burning: ANCHORED', () =>
+        assert.strictEqual(hot.anchor, true, JSON.stringify({ anchor: hot.anchor, flameAnchor: hot.flameAnchor })));
+    test('flameAnchor is reported', () => assert.strictEqual(hot.flameAnchor, true));
+
+    // filler discount: with a free passout up, a coin is worth less than half
+    // a bill; without passouts they revert to the table.
+    delete global.player.fireCrossUntil;
+    global.pickups = [
+        { x: 300, y: 270, kind: 'coin' },
+        { x: 305, y: 270, kind: 'bill' }
+    ];
+    const lootWithPo = pineBot.test.gatherLoot(global.player, 1);
+    const coin = lootWithPo.find(l => l.kind === 'coin'), bill = lootWithPo.find(l => l.kind === 'bill');
+    test('with a passout up, filler coin is discounted below half a bill', () =>
+        assert.ok(coin.v * 2 <= bill.v + 1, JSON.stringify({ coin: coin.v, bill: bill.v })));
+    test('a day tip is VITAL-grade: full pull, immune to discounts', () => {
+        const keep = global.pickups;
+        global.pickups = [{ x: 320, y: 270, kind: 'tip' }];
+        const l = pineBot.test.gatherLoot(global.player, 1);
+        global.pickups = keep;
+        assert.strictEqual(l[0].vital, true, JSON.stringify(l[0]));
+    });
+    test('during the burn, even bills yield to the station', () => {
+        global.player.fireCrossUntil = 1e5;
+        const l2 = pineBot.test.gatherLoot(global.player, 1);
+        delete global.player.fireCrossUntil;
+        const b2 = l2.find(l => l.kind === 'bill');
+        assert.ok(b2.v < bill.v, JSON.stringify({ burning: b2.v, normal: bill.v }));
+    });
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -589,4 +638,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

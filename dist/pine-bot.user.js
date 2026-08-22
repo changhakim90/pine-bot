@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.15
+// @version      6.85.16
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.15';
+    const SCRIPT_VERSION = '6.85.16';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -733,6 +733,7 @@
     // bosses at ~264px median, which the 200px threat gather cannot see, so
     // reading bossD off `th.enemies` would be blind exactly where it counts.
     const nearestBossRef = { v: Infinity };
+    const poFreeRef = { v: 0 };   // free passouts in the local window, set by gatherThreats
     const DMG_AUDIT_KEY = 'pineBotDmgAudit';
     let dmgAudit = (() => {
         const blank = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
@@ -3779,6 +3780,7 @@
         const contestTol = Math.max(3, Math.round(3 + fieldBodies / 6));
         out.contestTol = contestTol;
         for (const po of out.passouts) po.contested = chasersNear(po.x, po.y, 85) >= contestTol;
+        poFreeRef.v = out.passouts.reduce((n, po) => n + ((po.contested || po.far) ? 0 : 1), 0);
         for (const e of out.enemies) if (e.wall) e.contested = chasersNear(e.x, e.y, 100) >= contestTol;
 
         // FINALE CHASE RIVAL (source-verified, live-diagnosed): during the
@@ -3911,11 +3913,40 @@
                 // highest-leverage loot in the game. Grab them, especially
                 // early, where one upgrade compounds for the whole run.
                 v = 40 + (gamePhase() === 'early' ? 10 : 0) + Math.round(8 * dpsDeficit);
+                // v6.85.16 (user: "pick up tip rewards from killing bosses
+                // faster to upgrade faster — even if boss is on the field in
+                // day"). A tip drops where a boss died, which is usually next
+                // to the OTHER bosses — inside the fear gradient, where lootMul
+                // and the danger field starve its pull until the area clears
+                // and the run's compounding window is gone. During the day at
+                // healthy HP a tip is VITAL-grade: full pull, immune to the
+                // greed discounts and the burn-window yield, worth one contact
+                // tick exactly like a heal is.
+                const gtTip = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                if (kind === 'tip' && !hellDetected && gtTip < 1200 && hpRatio > 0.45) vital = true;
             } else if (kind === 'coin' || kind === 'bill') {
                 // Gold buys weapon upgrades — when we're losing the damage
                 // race, gold IS damage. Scale it up with the deficit.
                 v += Math.round(8 * dpsDeficit);
             }
+            // v6.85.16 FILLER vs PAYOFF (user: "it seems to treat the feed
+            // filler mark rewards as the same loot reward as the passouts").
+            // Passouts drop bill/tip (source-verified); the ordinary mob feed
+            // scatters coins. Per-item the table ranks them correctly, but the
+            // loot pull is summed over the floor — a CARPET of filler coins
+            // out-pulls the two bills a passout station will produce, and the
+            // bot leaves the station to vacuum the feed. While a free passout
+            // is up, filler (coins and unknown junk kinds) is halved: it is
+            // not deleted — the magnet and the walk between stations still
+            // collect it — it just can no longer outbid the payoff loot.
+            const filler = kind === 'coin' || !(kind in PICKUP_VALUE);
+            if (filler && !vital && poFreeRef.v >= 1) v = Math.round(v * 0.5);
+            // And during a flame window the station IS the payoff — a loot
+            // detour that breaks the burn costs more than any pickup is
+            // worth. Everything non-vital yields while the cross burns.
+            const flameNow = typeof p.fireCrossUntil === 'number' &&
+                p.fireCrossUntil > (safe(() => frame, 0) || 0);
+            if (flameNow && !vital && kind !== 'timestop') v = Math.round(v * 0.45);
             // FLIGHT: a time-stop pickup is the only thing that ends an
             // unkillable chase — it outvalues everything else on the floor.
             if (flightRef.v) {
@@ -4293,10 +4324,23 @@
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + 130);
         const dayPhaseNow = !hellDetected && (typeof G.gameTime === 'number' ? G.gameTime : 0) < 1200;
         // v6.85.0: a tank plants on a busier field than a runner would
-        const anchor = !hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
+        // v6.85.16 FLAME ANCHOR (user: "the pat bot is not anchoring to
+        // fully utilize the flame cross to defeat the passouts"). The normal
+        // anchor demands a quiet field (near <= 4 for Pat), OLIVE/NEGRONI >= 2
+        // and no shot within 130px — a 10-minute field fails all three almost
+        // permanently. Without anchor the kite pull runs at FULL strength and
+        // drags the bot off the station, so the 6.85.9 collapsed flame ring
+        // was being fought by kiting for the whole burn window: the cross
+        // burned while the bot slid away from the passout. While the cross is
+        // up with a free passout in reach, the burn IS the defense (`caution`
+        // already scales 0.72x under flame) — anchor unconditionally on
+        // everything except being hurt, the rival chase, and flight.
+        const flameAnchor = flameOn && !hpPanic && !th.rival && !rainbowRecent && !flight &&
+            th.passouts.some(po => !po.contested && !po.far && Math.hypot(po.x - p.x, po.y - p.y) < 260);
+        const anchor = flameAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
-            (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220));
+            (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
         // no-booking walls — a CR-only build farms both at base-attack speed,
         // so the detour incentive is cut for each. (Hoisted out of the
@@ -4836,7 +4880,7 @@
             pauseActive, contactImminent, flight, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

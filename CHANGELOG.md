@@ -30,6 +30,48 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.13+crown+pat | — | | | | | | | Instrument only: `pineBot.damageAudit()`. No behaviour change — the classifier is byte-identical so verdicts stay comparable with the 145-run row. |
 | 6.85.14+crown+pat | — | | | | | | | Focus fire: the passout kill order was computed but never used — one station target now, others are avoidance only. |
 | 6.85.15+crown+pat | — | | | | | | | TIME STOP freezes via `player.timeStopUntil`, which never sets `e.frozenUntil` — the stacking window had never opened on the item. Now it does. |
+| 6.85.16+crown+pat | — | | | | | | | Flame anchor; filler coins halved while a passout is up; loot yields during the burn; day boss tips are vital-grade. |
+
+## 6.85.16 — flame anchor; filler loot no longer outbids the payoff
+
+User, three observations in sequence: *"still not clearing the pass outs after
+10 minute mark"*, *"the pat bot is not anchoring to fully utilize the flame
+cross to defeat the passouts"*, *"it seems to treat the feed filler mark
+rewards as the same loot reward as the passouts"* — and the pile now forms *"even
+earlier in 6 minute mark"*, where they are *"killable with even low level
+ultimates"*.
+
+**Flame anchor.** The anchor requires a quiet field (near ≤ 4 for Pat),
+OLIVE/NEGRONI ≥ 2, and no enemy shot within 130px. A 6–10 minute field fails
+all three nearly permanently — so the bot never anchored, the kite pull ran at
+FULL strength, and the 6.85.9 collapsed flame ring spent every burn window
+being dragged off the passout by kiting. While the cross burns with a free
+passout in reach, the bot now anchors unconditionally except when hurt, chased
+by the rival, or in flight (`caution` already scales 0.72× under flame — the
+burn is the defense). *Tested — fails without the change.*
+
+**Filler vs payoff.** Passouts drop bill/tip (source-verified); the ordinary
+mob feed scatters coins. The value table ranks a single coin below a single
+bill correctly, but the loot pull sums over the floor — a CARPET of filler
+coins outbids the two bills a station produces, and the bot leaves the station
+to vacuum the feed. With a free passout up, filler (coins + unknown junk kinds)
+is halved; it is still collected by the magnet and the walk between stations,
+it just cannot outbid the payoff. And during a burn window all non-vital loot
+yields ×0.45 (time stops excepted) — a detour that breaks the burn costs more
+than any pickup is worth. *Both tested — fail without the change.*
+
+**Day tips are VITAL-grade.** User: *"the bot needs to pick up tip rewards from
+killing bosses faster to upgrade faster — even if boss is on the field in day."*
+A tip drops where a boss died, which is usually next to the OTHER bosses —
+inside the fear gradient, where `lootMul` and the danger field starve its pull
+until the area clears and the compounding window is gone. During the day at
+HP > 45%, a tip now carries the same `vital` flag as an emergency heal: full
+pull at `lootPull × 1.2`, immune to the greed discounts, the burn-window yield,
+and the flight discount, and worth one contact tick exactly as a heal is.
+*Tested — fails without the change.*
+
+Plumbing: `poFreeRef` is set by `gatherThreats` directly (the previous signal,
+`lastPlan.poFree`, was one frame stale and absent outside the live loop).
 
 ## 6.85.15 — TIME STOP never set the flag the bot was watching
 
