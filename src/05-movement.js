@@ -98,7 +98,22 @@
                 // hell is excluded entirely (deep-hell giants overlapping
                 // the field from off-canvas must keep their old invisibility
                 // — engaging them would send the bot corner-chasing).
-                const distantBoss = d > R && t0 === 'boss' && !hellDetected && d < 480 &&
+                // v6.85.19: hell small bosses (r <= 90) join the extension —
+                // only the giants keep the exclusion (corner-chasing risk).
+                // v6.85.19 (user: "not attacking the inner ring even if time
+                // stop is applied"): a FROZEN boss of ANY size also joins.
+                // The corner-chasing danger that justifies excluding live
+                // giants does not exist while the field is stopped — and the
+                // stacking target selection can only pick bosses the gather
+                // kept, so a stopped giant beyond 200px (or off-canvas) was
+                // invisible at exactly the moment SOUTH SIDE should be
+                // stacking on its hit circle.
+                const frEarly = safe(() => frame, null);
+                const frozenNow = frEarly != null &&
+                    ((typeof e.frozenUntil === 'number' && e.frozenUntil > frEarly) ||
+                     (typeof p.timeStopUntil === 'number' && p.timeStopUntil > frEarly));
+                const distantBoss = d > R && t0 === 'boss' && d < 480 &&
+                    (!hellDetected || (typeof e.r === 'number' && e.r <= 90) || frozenNow) &&
                     !(e.wall === true || /nobook/i.test(bc0 + ' ' + t0));
                 if (d > R && !distantBoss) continue;
                 const prof = enemyProfile(e);
@@ -179,7 +194,12 @@
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
                     w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
-                    frozen, frozenLeft, distant: distantBoss
+                    frozen, frozenLeft, distant: distantBoss,
+                    // v6.85.19: centre beyond the field bounds — most of the
+                    // hit circle is unreachable, so any standoff ring must
+                    // collapse to the sliver of body that pokes on-canvas.
+                    offCanvas: (() => { const fw2 = safe(() => W, 540) || 540, fh2 = safe(() => H, 540) || 540;
+                        return e.x < 0 || e.x > fw2 || e.y < 0 || e.y > fh2; })()
                 });
                 // A wall next to you is not a swarm closing in — it never
                 // counts toward "surrounded" panic.
@@ -1209,6 +1229,19 @@
                                 : Math.max(e.reach + 60, 240))
                             : Math.max(e.reach + 10, e.r + 40));
                     if (bossFloor && ring < bossFloor) ring = bossFloor;
+                    // v6.85.19 (user: "the bot is still not able to register
+                    // the hit radius that's invisible ... outside the visible
+                    // canvas"). 6.85.18 added the PULL toward an off-canvas
+                    // boss but left the normal standoff ring (240 day), which
+                    // is outside weapon reach of a body that is mostly beyond
+                    // the edge — the bot approached, parked, and never hit it.
+                    // When the centre is off-canvas the standoff logic is
+                    // moot (the body cannot chase onto the field any faster
+                    // than it drifts), so the station collapses to just
+                    // outside the contact band of whatever sliver of the hit
+                    // circle reaches on-canvas. The edge-clamped candidates
+                    // then hug the nearest edge/corner point automatically.
+                    if (e.offCanvas) ring = Math.min(ring, (e.r || 40) + 34);
                     bossRingRef.v = ring;
                     const errNow = Math.abs(Math.hypot(p.x - e.x, p.y - e.y) - ring);
                     const errNew = Math.abs(Math.hypot(nx - e.x, ny - e.y) - ring);

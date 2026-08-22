@@ -33,6 +33,32 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.16+crown+pat | — | | | | | | | Flame anchor; filler coins halved while a passout is up; loot yields during the burn; day boss tips are vital-grade. |
 | 6.85.17+crown+pat | — | | | | | | | Kill order charges for transit: target = min(hp + 0.5×dist). Sim: 8 → 13 passouts cleared (+62%). |
 | 6.85.18+crown+pat | — | | | | | | | Off-canvas day bosses gathered to 480px (ring pull only) — the bot hugs the nearest edge instead of forgetting them. |
+| 6.85.19+crown+pat | — | | | | | | | Off-canvas station collapses to the hit circle (`e.r+34`, was the 240 standoff); hell smalls (r≤90) join the gather extension. |
+
+## 6.85.19 — the station targets the hit circle, not the standoff
+
+User: *"the bot is still not able to register the hit radius that's invisible
+for bots because they are outside the visible canvas ... by hit radius I mean
+the blue inner circle inside the two rings of the bosses."*
+
+6.85.18 added the PULL toward an off-canvas boss but kept the normal standoff
+ring — 240px in the day. For a boss whose body is mostly beyond the edge, a
+240px station is outside weapon reach: the bot approached, parked, and never
+landed a hit. The blue inner circle is the body circle `e.r` (source-verified
+in 6.85.15: damage registers at `dist < z.r + e.r`), so the only thing that
+matters is overlapping whatever sliver of that circle reaches on-canvas.
+
+- **When the boss centre is off the field, the ring collapses to `e.r + 34`** —
+  just outside the contact band of the hit circle. The edge-clamped candidate
+  positions then hug the nearest edge/corner point automatically, as close to
+  the circle as the field allows. Standoff logic is moot there: the body cannot
+  chase onto the field any faster than it drifts.
+- **Hell small bosses (r ≤ 90) join the 480px gather extension.** Only the
+  deep-hell giants keep the exclusion (engaging them corner-chases into the
+  known death trap).
+
+*Tested — `edge-boss` extended: the ring reads < 120 where the old standoff was
+240; fails without the collapse.*
 
 ## 6.85.18 — off-canvas bosses exist again
 

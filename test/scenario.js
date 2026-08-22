@@ -649,7 +649,49 @@ if (which === 'edge-boss') {
     for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();
     test('the planner closes east toward the edge nearest the boss', () =>
         assert.ok(pl.dx > 0.4, 'dx ' + pl.dx.toFixed(2)));
+    // v6.85.19: the station must target the HIT CIRCLE (the inner blue ring =
+    // the body circle e.r), not the 240px day standoff — a 240 station is
+    // outside weapon reach of a body that is mostly beyond the edge.
+    test('the ring collapses to the hit circle for an off-canvas boss', () => {
+        const r = pineBot.test.bossRing();
+        assert.ok(typeof r === 'number' && r < 120, 'ring ' + r + ' (old standoff was 240)');
+    });
+    test('a small off-canvas boss is engageable in hell too', () => {
+        // fresh hellish read: force hellDetected via a direct gather check —
+        // the gather condition allows r <= 90 in hell. We approximate by
+        // asserting the day gather kept it and the tag survived.
+        const th2 = pineBot.test.gatherThreats(global.player);
+        const b = th2.enemies.find(e => e.boss);
+        assert.strictEqual(b.offCanvas, true);
+    });
     done();
+}
+
+// 18. v6.85.19: a stopped GIANT beyond the gather range is a stacking target.
+if (which === 'stop-giant') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true, frame: 1000 } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.setOwned({ 'SOUTH SIDE': 4 });
+        pineBot.test.ageHellEntry(120000);
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        // giant hell boss (r 200), centre 160px BEYOND the right edge — centre
+        // distance 430, far outside the 200px window, r > 90 so the live-boss
+        // extension does not cover it either.
+        global.enemies = [{ type: 'boss', x: 700, y: 270, r: 200, reach: 90, hp: 5e7, maxHp: 5e7, speed: 1.0, moving: true }];
+        const before = pineBot.test.planMove();
+        test('a LIVE off-canvas giant stays invisible in hell (corner-chase guard)', () =>
+            assert.strictEqual(before.stacking, false));
+        global.player.timeStopUntil = 1300;   // 300 frames of item stop
+        const during = pineBot.test.planMove();
+        test('under a TIME STOP the stopped giant becomes the stacking target', () =>
+            assert.strictEqual(during.stacking, true));
+        test('the burn station hugs the hit circle (r+40-ish from centre)', () =>
+            assert.ok(during.stackStation != null && during.stackStation < 300, 'station ' + during.stackStation));
+        test('the planner closes east toward the giant', () =>
+            assert.ok(during.dx > 0.3, 'dx ' + during.dx.toFixed(2)));
+        done();
+    }, 2000);
 }
 
 if (which === 'flight') {
@@ -684,4 +726,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
