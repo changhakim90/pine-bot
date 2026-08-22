@@ -161,6 +161,27 @@
         for (const k of Object.keys(dangerAccum)) {
             if (dangerAccum[k] > dmax) { dmax = dangerAccum[k]; lastDeathCause = k; }
         }
+        // v6.85.22: learned per-type threat multiplier. Each type's share of
+        // this run's attributed HP loss pulls its multiplier toward
+        // 1 + 3*share (EMA, clamped 0.6-2.2); types that did nothing drift
+        // back toward 1. gatherThreats multiplies the static profile weight
+        // by this, so the danger field fears what has actually been hurting
+        // THIS bartender, learned across runs.
+        try {
+            const totalHit = Object.values(hitTypeRun).reduce((a, b) => a + b, 0);
+            if (totalHit > 0) {
+                const mul = learn.enemyTypeMul || (learn.enemyTypeMul = {});
+                for (const k of Object.keys(hitTypeRun)) {
+                    const share = hitTypeRun[k] / totalHit;
+                    const target = 1 + 3 * share;
+                    mul[k] = Math.max(0.6, Math.min(2.2, 0.85 * (mul[k] || 1) + 0.15 * target));
+                }
+                for (const k of Object.keys(learn.enemyTypeMul)) {
+                    if (!(k in hitTypeRun)) learn.enemyTypeMul[k] = 0.9 * learn.enemyTypeMul[k] + 0.1;
+                }
+            }
+            hitTypeRun = {};
+        } catch (e) { }
         // v6.85.13: persist the damage audit so a page reload does not lose it.
         // Written once per run, not per damage event — this is on the run-end
         // path, never in the frame loop. The event ring is trimmed hard because

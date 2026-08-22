@@ -195,6 +195,7 @@ if (which === 'time-stop') {
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
     setTimeout(() => {
         pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
         pineBot.test.setOwned({ 'SOUTH SIDE': 4 });
         pineBot.test.ageHellEntry(120000);
         // parked 60px from a frozen boss: inside the 0.8 x station guard
@@ -313,6 +314,7 @@ if (which === 'ult-falloff') {
 if (which === 'flame-cross') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 60 } });
     pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     const po = { type: 'passout', x: 435, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 4 };
     const run = flame => {
         global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
@@ -338,6 +340,7 @@ if (which === 'flame-cross') {
 if (which === 'backlog') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
 
     // --- crowding: 21 bodies inside the 200px threat radius (the 17:59
     // screenshot read "21e"), four of them loosely around a near passout.
@@ -501,6 +504,7 @@ if (which === 'damage-audit') {
 if (which === 'focus-fire') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
     pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
     // frail old passout WEST at 120px; two tougher ones EAST/NORTHEAST whose
     // summed pull outweighed the single west one under the old code (probe:
@@ -612,6 +616,7 @@ if (which === 'flame-anchor') {
 if (which === 'kill-order') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
     pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
     // the FRAILEST passout (40hp) is 230px east; a 55hp one is 160px west.
     // frailest-first goes east (score-blind); loot-per-second goes west:
@@ -633,6 +638,7 @@ if (which === 'kill-order') {
 if (which === 'edge-boss') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
     pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
     // boss 100px beyond the right edge (field is 540 wide): centre distance
     // 370 — far outside the old 200px gather window.
@@ -672,6 +678,7 @@ if (which === 'stop-giant') {
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true, frame: 1000 } });
     setTimeout(() => {
         pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
         pineBot.test.setOwned({ 'SOUTH SIDE': 4 });
         pineBot.test.ageHellEntry(120000);
         global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
@@ -701,6 +708,7 @@ if (which === 'grind') {
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
     setTimeout(() => {
         pineBot.stop();
+    pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
         pineBot.test.ageHellEntry(120000);
         global.player = { x: 270, y: 270, hp: 120, maxHp: 180, speed: 1.9 };
         const pack = [0,1,2,3,4,5].map(i => ({ type: 'mob', x: 270 + 70*Math.cos(i), y: 270 + 70*Math.sin(i), r: 14, hp: 9e9, maxHp: 9e9, speed: 3.0, moving: true }));
@@ -732,6 +740,56 @@ if (which === 'gun-veto') {
         assert.ok(g.score < -100, 'gun ' + g.score + ' (' + g.why + ')'));
     test('even a day-banned filler outbids the vetoed gun', () =>
         assert.ok(f.score > g.score, 'filler ' + f.score + ' vs gun ' + g.score));
+    done();
+}
+
+// 21. v6.85.22: the doctrine constants are CEM-searchable, and enemy-type
+//     threat weights are LEARNED from attributed damage.
+if (which === 'learned') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
+    // --- (a) killOrderDist is live: same field, coefficient flips the target.
+    const field = [
+        { type: 'passout', x: 110, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 8 },
+        { type: 'passout', x: 500, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 2 }
+    ];
+    global.enemies = field;
+    pineBot.test.setParam('movement.killOrderDist', 0.9);
+    let pl; for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();
+    test('killOrderDist 0.9: transit dominates, near target wins (west)', () =>
+        assert.ok(pl.dx < -0.4, 'dx ' + pl.dx.toFixed(2)));
+    pineBot.test.setParam('movement.killOrderDist', 0.05);
+    for (let i = 0; i < 12; i++) pl = pineBot.test.planMove();
+    test('killOrderDist 0.05: frailty dominates, far target wins (east)', () =>
+        assert.ok(pl.dx > 0.4, 'dx ' + pl.dx.toFixed(2)));
+    pineBot.test.applyDefaults();
+    // --- (b) patRing is live: widen the mid ring, the station moves out.
+    pineBot.test.setParam('patRing.late', 118);   // gt 650 = the late bucket
+    global.enemies = [{ type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 }];
+    // dist 110 < ring 118+20: the planner must OPEN the gap (move west)
+    let pw; for (let i = 0; i < 8; i++) pw = pineBot.test.planMove();
+    test('patRing.late 118: parked at 110px, the planner backs out to the wider ring', () =>
+        assert.ok(pw.dx < -0.3, 'dx ' + pw.dx.toFixed(2)));
+    pineBot.test.applyDefaults();
+    // --- (c) learned enemy-type weight multiplies the danger field.
+    global.enemies = [{ type: 'bomber', x: 340, y: 270, r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true }];
+    pineBot.test.setEnemyMul({});
+    const w1 = pineBot.test.gatherThreats(global.player).enemies[0].w;
+    pineBot.test.setEnemyMul({ bomber: 2.0 });
+    const w2 = pineBot.test.gatherThreats(global.player).enemies[0].w;
+    test('a learned 2x multiplier doubles the type weight in the danger field', () =>
+        assert.ok(Math.abs(w2 / w1 - 2) < 0.01, 'w1 ' + w1 + ' w2 ' + w2));
+    // --- (d) damage near a typed enemy is attributed to that type.
+    pineBot.test.setEnemyMul({});
+    global.player.hp = 170;
+    pineBot.test.planMove();
+    global.player.hp = 150;
+    pineBot.test.planMove();
+    const ht = pineBot.test.hitTypes();
+    test('the HP drop is attributed to the nearby enemy type', () =>
+        assert.ok(ht.bomber >= 19, JSON.stringify(ht)));
     done();
 }
 
@@ -767,4 +825,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

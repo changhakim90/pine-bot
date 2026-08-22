@@ -526,6 +526,9 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    setParam: (k, v) => setParam(k, v),
+                    setEnemyMul: obj => { learn.enemyTypeMul = obj; },
+                    hitTypes: () => Object.assign({}, hitTypeRun),
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
@@ -573,6 +576,12 @@
                 };
             };
             window.pineBot.damageEvents = () => dmgAudit.ev.slice();
+            // v6.85.22: the learned per-type threat multipliers and the raw
+            // per-type damage attribution behind them.
+            window.pineBot.enemyThreat = () => ({
+                learnedMul: Object.assign({}, (learn && learn.enemyTypeMul) || {}),
+                damageByType: Object.assign({}, dmgAudit.byType || {})
+            });
             window.pineBot.resetDamageAudit = () => {
                 dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
                 try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }

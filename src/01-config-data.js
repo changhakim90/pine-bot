@@ -233,6 +233,9 @@
             standoffPull: 1.3,   // how hard we hold that distance (kills = sales)
             lootPull: 1.0,        // global multiplier on pickup attraction
             lootRange: 240,       // pickups further than this are ignored
+            killOrderDist: 0.5,    // hp-per-px transit charge in the passout kill order (6.85.17)
+            stopBossPull: 44,      // frozen-boss station weight (6.85.6/11)
+            grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
@@ -354,7 +357,13 @@
         stopOnTopRecord: false,   // normal closing-time records are ignored; set true to also stop on a rank-#1 run
         autoEnterHell: true,      // after surviving the 20-minute day, go straight into Hell mode
 
-        canvasSelector: 'canvas'
+        canvasSelector: 'canvas',
+
+        // v6.85.22 — hand-tuned constants promoted to CEM-searchable knobs.
+        // Every value here was set by eye or from one demo during the
+        // 6.85.x calibration; the CEM can now optimise them against the
+        // actual run reward instead. Defaults = the shipped 6.85.21 values.
+        patRing: { early: 165, mid: 90, late: 80 }
     };
 
     // =================================================================
@@ -663,7 +672,15 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 }
+        'movement.bossEngageValue': { min: 10, max: 36 },
+        // v6.85.22: the doctrine constants join the search. Bounds bracket
+        // the demo-measured p25 band (rings) or the hand-tuned value ±~50%.
+        'patRing.early': { min: 130, max: 200 },
+        'patRing.mid': { min: 70, max: 120 },
+        'patRing.late': { min: 60, max: 110 },
+        'movement.killOrderDist': { min: 0.2, max: 1.0 },
+        'movement.stopBossPull': { min: 20, max: 70 },
+        'movement.grindKiteMul': { min: 1.0, max: 1.8 }
     };
 
     function getParam(path) {
@@ -711,6 +728,9 @@
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
+    // v6.85.22: HP lost near each enemy TYPE this run. Feeds the learned
+    // per-type threat multiplier at run end — measured fear, not static fear.
+    let hitTypeRun = {};
     // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
     // `dangerAccum`'s own classifier is left byte-identical so death verdicts
     // stay comparable with the 145-run 6.85.12 sample. This records the

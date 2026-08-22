@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.21
+// @version      6.85.22
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.21';
+    const SCRIPT_VERSION = '6.85.22';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -235,6 +235,9 @@
             standoffPull: 1.3,   // how hard we hold that distance (kills = sales)
             lootPull: 1.0,        // global multiplier on pickup attraction
             lootRange: 240,       // pickups further than this are ignored
+            killOrderDist: 0.5,    // hp-per-px transit charge in the passout kill order (6.85.17)
+            stopBossPull: 44,      // frozen-boss station weight (6.85.6/11)
+            grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
@@ -356,7 +359,13 @@
         stopOnTopRecord: false,   // normal closing-time records are ignored; set true to also stop on a rank-#1 run
         autoEnterHell: true,      // after surviving the 20-minute day, go straight into Hell mode
 
-        canvasSelector: 'canvas'
+        canvasSelector: 'canvas',
+
+        // v6.85.22 — hand-tuned constants promoted to CEM-searchable knobs.
+        // Every value here was set by eye or from one demo during the
+        // 6.85.x calibration; the CEM can now optimise them against the
+        // actual run reward instead. Defaults = the shipped 6.85.21 values.
+        patRing: { early: 165, mid: 90, late: 80 }
     };
 
     // =================================================================
@@ -665,7 +674,15 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 }
+        'movement.bossEngageValue': { min: 10, max: 36 },
+        // v6.85.22: the doctrine constants join the search. Bounds bracket
+        // the demo-measured p25 band (rings) or the hand-tuned value ±~50%.
+        'patRing.early': { min: 130, max: 200 },
+        'patRing.mid': { min: 70, max: 120 },
+        'patRing.late': { min: 60, max: 110 },
+        'movement.killOrderDist': { min: 0.2, max: 1.0 },
+        'movement.stopBossPull': { min: 20, max: 70 },
+        'movement.grindKiteMul': { min: 1.0, max: 1.8 }
     };
 
     function getParam(path) {
@@ -713,6 +730,9 @@
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
+    // v6.85.22: HP lost near each enemy TYPE this run. Feeds the learned
+    // per-type threat multiplier at run end — measured fear, not static fear.
+    let hitTypeRun = {};
     // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
     // `dangerAccum`'s own classifier is left byte-identical so death verdicts
     // stay comparable with the 145-run 6.85.12 sample. This records the
@@ -2938,6 +2958,27 @@
         for (const k of Object.keys(dangerAccum)) {
             if (dangerAccum[k] > dmax) { dmax = dangerAccum[k]; lastDeathCause = k; }
         }
+        // v6.85.22: learned per-type threat multiplier. Each type's share of
+        // this run's attributed HP loss pulls its multiplier toward
+        // 1 + 3*share (EMA, clamped 0.6-2.2); types that did nothing drift
+        // back toward 1. gatherThreats multiplies the static profile weight
+        // by this, so the danger field fears what has actually been hurting
+        // THIS bartender, learned across runs.
+        try {
+            const totalHit = Object.values(hitTypeRun).reduce((a, b) => a + b, 0);
+            if (totalHit > 0) {
+                const mul = learn.enemyTypeMul || (learn.enemyTypeMul = {});
+                for (const k of Object.keys(hitTypeRun)) {
+                    const share = hitTypeRun[k] / totalHit;
+                    const target = 1 + 3 * share;
+                    mul[k] = Math.max(0.6, Math.min(2.2, 0.85 * (mul[k] || 1) + 0.15 * target));
+                }
+                for (const k of Object.keys(learn.enemyTypeMul)) {
+                    if (!(k in hitTypeRun)) learn.enemyTypeMul[k] = 0.9 * learn.enemyTypeMul[k] + 0.1;
+                }
+            }
+            hitTypeRun = {};
+        } catch (e) { }
         // v6.85.13: persist the damage audit so a page reload does not lose it.
         // Written once per run, not per damage event — this is on the run-end
         // path, never in the frame loop. The event ring is trimmed hard because
@@ -3669,9 +3710,13 @@
                     // double-counted the same field as body-centred damage and
                     // shoved the engagement ring 130px out for nothing.
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
-                    w: prof.weight * armorEase,
+                    // v6.85.22: static profile weight x learned per-type
+                    // multiplier. Types that actually damage us drift up
+                    // (bounded 0.6-2.2), silent types drift back to 1 — the
+                    // threat model tracks THIS game's reality, not the guess.
+                    w: prof.weight * armorEase * ((learn && learn.enemyTypeMul && learn.enemyTypeMul[t0]) || 1),
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
-                    frozen, frozenLeft, distant: distantBoss,
+                    frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the
                     // hit circle is unreachable, so any standoff ring must
                     // collapse to the sliver of body that pokes on-canvas.
@@ -4163,6 +4208,19 @@
             } else {
                 for (const c of cands) bump(dmgAudit.cls, c);
                 if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
+            }
+            // v6.85.22: nearest gathered enemy type within 140px carries
+            // the per-type attribution for the learned threat multiplier.
+            let nearT = null, nearTD = 140;
+            for (const e2 of th.enemies) {
+                const dd2 = Math.hypot(e2.x - p.x, e2.y - p.y);
+                if (dd2 < nearTD) { nearTD = dd2; nearT = e2.t || (e2.boss ? 'boss' : 'mob'); }
+            }
+            if (nearT) {
+                hitTypeRun[nearT] = (hitTypeRun[nearT] || 0) + loss;
+                const bt = dmgAudit.byType || (dmgAudit.byType = {});
+                const b2 = bt[nearT] || (bt[nearT] = { n: 0, hp: 0 });
+                b2.n++; b2.hp += loss;
             }
             dmgAudit.ev.push({
                 gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
@@ -4773,7 +4831,7 @@
                 let tgtPo = null, tgtScore = Infinity;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
-                    const sc = po.maxHp + 0.5 * Math.hypot(po.x - p.x, po.y - p.y);
+                    const sc = po.maxHp + M.killOrderDist * Math.hypot(po.x - p.x, po.y - p.y);
                     if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
@@ -4813,8 +4871,10 @@
                     // 'early' bucket. Characters without a dayRing keep the
                     // original minguk-calibrated 118/112/105.
                     const dr = charOf().dayRing;
+                    // v6.85.22: the pat curve now reads CONFIG.patRing so the
+                    // CEM can search it. CHARS keeps the calibrated defaults.
                     const dayRing = dr
-                        ? (gtRing < 180 ? dr.early : (gtRing < 600 ? dr.mid : dr.late))
+                        ? (gtRing < 180 ? CONFIG.patRing.early : (gtRing < 600 ? CONFIG.patRing.mid : CONFIG.patRing.late))
                         // DAY (minguk-calibrated): hold ~124px — weapons reach,
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
@@ -4896,7 +4956,7 @@
                 // still drops the target entirely before it moves.
                 const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - stopStation);
                 const eNewS = Math.abs(Math.hypot(nx - stopBoss.x, ny - stopBoss.y) - stopStation);
-                gain += 44 * (eNowS - eNewS) * 0.2;
+                gain += M.stopBossPull * (eNowS - eNewS) * 0.2;
             }
 
             // ult centering: with 2+ passouts, drift onto their centroid so
@@ -4915,8 +4975,8 @@
             }
 
             // kiting sweep + gap escape
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? 1.25 : 1.8) : 1);
-            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? 1.25 : 1.8) : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
             // and a mob rush must bend the path INWARD, never into a corner
@@ -5498,6 +5558,9 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    setParam: (k, v) => setParam(k, v),
+                    setEnemyMul: obj => { learn.enemyTypeMul = obj; },
+                    hitTypes: () => Object.assign({}, hitTypeRun),
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     reloadLearn: () => { learn = loadLearn(); }
@@ -5545,6 +5608,12 @@
                 };
             };
             window.pineBot.damageEvents = () => dmgAudit.ev.slice();
+            // v6.85.22: the learned per-type threat multipliers and the raw
+            // per-type damage attribution behind them.
+            window.pineBot.enemyThreat = () => ({
+                learnedMul: Object.assign({}, (learn && learn.enemyTypeMul) || {}),
+                damageByType: Object.assign({}, dmgAudit.byType || {})
+            });
             window.pineBot.resetDamageAudit = () => {
                 dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
                 try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }

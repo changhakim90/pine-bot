@@ -36,6 +36,47 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.19+crown+pat | **52** | **1244** | 1370 | 5193 | 0.06 | 0 | 0.54 | **Recovery confirmed: z=+3.16 vs the 6.85.16 regression, statistically level with 6.85.12.** Supers 0.9. |
 | 6.85.20+crown+pat | — | | | | | | | Bossless deep-hell flight eases kite 1.8→1.25 (grind in the SOUTH SIDE wake for timestop drops); chased flight unchanged. |
 | 6.85.21+crown+pat | — | | | | | | | Rainbow Gun skip is a hard veto (−500, was 18) — it could previously win a bad pool with no re-rolls left. |
+| 6.85.22+crown+pat | — | | | | | | | CEM reaches the doctrine constants (6 new dims: pat rings, kill-order transit, stop-boss pull, grind kite); enemy-type threat weights learned from attributed damage. |
+
+## 6.85.22 — the learner reaches the tactics, and enemy types are learned
+
+User: *"Is there any way to have some reinforcement learning engine on the
+attack radius, movement, and other tactics ... also on enemy attacks and enemy
+types?"*
+
+The engine already exists — the CEM does per-run evolutionary policy search
+over 25 movement/threat/strategy dimensions, with rank-based elites and a
+hall-of-fame anchor. What it could NOT reach was (a) every constant hand-tuned
+during the 6.85.x calibration, and (b) the per-enemy-type threat weights,
+which were static forever. Both are now learnable:
+
+**Six new CEM dimensions** (bounds bracket the demo-measured band or the
+hand-tuned value): `patRing.early/mid/late` (the day station curve),
+`movement.killOrderDist` (the 6.85.17 transit charge), `movement.stopBossPull`
+(the frozen-boss station weight), `movement.grindKiteMul` (the 6.85.20
+bossless-flight pressure). Defaults = the shipped 6.85.21 values, so behaviour
+is unchanged until the CEM finds better.
+
+**Learned enemy-type threat.** The damage audit now attributes every HP drop
+to the nearest gathered enemy TYPE (within 140px), and at run end each type's
+share of the run's damage pulls a per-type multiplier toward `1 + 3×share`
+(EMA, clamped 0.6–2.2; silent types decay back to 1). `gatherThreats`
+multiplies the static profile weight by it — so the danger field fears what
+has actually been hurting this bartender, per learn store, across runs.
+`pineBot.enemyThreat()` shows the learned multipliers and the raw per-type
+damage table.
+
+What this is NOT: within-run RL on micro-decisions. One run = one sample, run
+noise is huge (sd ≈ mean), and the frame budget is real — per-run black-box
+search over a bounded parameter space plus measured-damage weight adaptation
+is the honest version of "RL" this environment supports. Expect the new
+dimensions to need ~50+ runs before the CEM's mean drifts anywhere meaningful.
+
+*Tested — `learned`: both killOrderDist extremes flip the target choice, a
+widened patRing pushes the station out, a 2× learned multiplier doubles the
+danger-field weight, and an HP drop is attributed to the nearby type. Teeth-
+checked on both mechanisms. Movement scenarios now pin `applyDefaults()` since
+params are CEM-sampled per run.*
 
 ## 6.85.21 — skip is now a veto: the Rainbow Gun leak
 

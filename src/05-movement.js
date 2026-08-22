@@ -192,9 +192,13 @@
                     // double-counted the same field as body-centred damage and
                     // shoved the engagement ring 130px out for nothing.
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
-                    w: prof.weight * armorEase,
+                    // v6.85.22: static profile weight x learned per-type
+                    // multiplier. Types that actually damage us drift up
+                    // (bounded 0.6-2.2), silent types drift back to 1 — the
+                    // threat model tracks THIS game's reality, not the guess.
+                    w: prof.weight * armorEase * ((learn && learn.enemyTypeMul && learn.enemyTypeMul[t0]) || 1),
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
-                    frozen, frozenLeft, distant: distantBoss,
+                    frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the
                     // hit circle is unreachable, so any standoff ring must
                     // collapse to the sliver of body that pokes on-canvas.
@@ -686,6 +690,19 @@
             } else {
                 for (const c of cands) bump(dmgAudit.cls, c);
                 if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
+            }
+            // v6.85.22: nearest gathered enemy type within 140px carries
+            // the per-type attribution for the learned threat multiplier.
+            let nearT = null, nearTD = 140;
+            for (const e2 of th.enemies) {
+                const dd2 = Math.hypot(e2.x - p.x, e2.y - p.y);
+                if (dd2 < nearTD) { nearTD = dd2; nearT = e2.t || (e2.boss ? 'boss' : 'mob'); }
+            }
+            if (nearT) {
+                hitTypeRun[nearT] = (hitTypeRun[nearT] || 0) + loss;
+                const bt = dmgAudit.byType || (dmgAudit.byType = {});
+                const b2 = bt[nearT] || (bt[nearT] = { n: 0, hp: 0 });
+                b2.n++; b2.hp += loss;
             }
             dmgAudit.ev.push({
                 gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
@@ -1296,7 +1313,7 @@
                 let tgtPo = null, tgtScore = Infinity;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
-                    const sc = po.maxHp + 0.5 * Math.hypot(po.x - p.x, po.y - p.y);
+                    const sc = po.maxHp + M.killOrderDist * Math.hypot(po.x - p.x, po.y - p.y);
                     if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
@@ -1336,8 +1353,10 @@
                     // 'early' bucket. Characters without a dayRing keep the
                     // original minguk-calibrated 118/112/105.
                     const dr = charOf().dayRing;
+                    // v6.85.22: the pat curve now reads CONFIG.patRing so the
+                    // CEM can search it. CHARS keeps the calibrated defaults.
                     const dayRing = dr
-                        ? (gtRing < 180 ? dr.early : (gtRing < 600 ? dr.mid : dr.late))
+                        ? (gtRing < 180 ? CONFIG.patRing.early : (gtRing < 600 ? CONFIG.patRing.mid : CONFIG.patRing.late))
                         // DAY (minguk-calibrated): hold ~124px — weapons reach,
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
@@ -1419,7 +1438,7 @@
                 // still drops the target entirely before it moves.
                 const eNowS = Math.abs(Math.hypot(p.x - stopBoss.x, p.y - stopBoss.y) - stopStation);
                 const eNewS = Math.abs(Math.hypot(nx - stopBoss.x, ny - stopBoss.y) - stopStation);
-                gain += 44 * (eNowS - eNewS) * 0.2;
+                gain += M.stopBossPull * (eNowS - eNewS) * 0.2;
             }
 
             // ult centering: with 2+ passouts, drift onto their centroid so
@@ -1438,8 +1457,8 @@
             }
 
             // kiting sweep + gap escape
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? 1.25 : 1.8) : 1);
-            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? 1.25 : 1.8) : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
             // and a mob rush must bend the path INWARD, never into a corner
