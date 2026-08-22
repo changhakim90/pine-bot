@@ -32,6 +32,42 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.15+crown+pat | — | | | | | | | TIME STOP freezes via `player.timeStopUntil`, which never sets `e.frozenUntil` — the stacking window had never opened on the item. Now it does. |
 | 6.85.16+crown+pat | — | | | | | | | Flame anchor; filler coins halved while a passout is up; loot yields during the burn; day boss tips are vital-grade. |
 | 6.85.17+crown+pat | — | | | | | | | Kill order charges for transit: target = min(hp + 0.5×dist). Sim: 8 → 13 passouts cleared (+62%). |
+| 6.85.18+crown+pat | — | | | | | | | Off-canvas day bosses gathered to 480px (ring pull only) — the bot hugs the nearest edge instead of forgetting them. |
+
+## 6.85.18 — off-canvas bosses exist again
+
+User: *"the bot is not recognizing that if a boss goes beyond the boundaries of
+the canvas, then it can still attack by going as close to the corners and
+edges."*
+
+Correct: the 200px `enemyRange` gather cut made an off-canvas boss **invisible**
+— no engagement pull at all, so the bot wandered instead of hugging the nearest
+edge point where its weapons still reach the body. Day-only fix: non-wall
+bosses are gathered out to 480px and tagged `distant`. A distant boss joins
+ONLY the firing-ring pull — the ring-error minimisation over edge-clamped
+candidate positions parks the bot at the closest reachable point automatically,
+whether the true ring point is on-field or not. Distant bosses do not set
+`th.boss` (no ult waste at range), do not join the danger field or crowd
+counts, and hell is excluded entirely — deep-hell giants overlapping the field
+from off-canvas keep their old invisibility, because engaging them would send
+the bot corner-chasing into the known death trap.
+
+*Tested — `edge-boss`, 2 of 3 assertions fail against the unfixed source.*
+
+### ⚠ MEASUREMENT NOTE, same dump: the 6.85.15/16 cluster REGRESSED
+
+6.85.16 at n=47: median 843 / hell 0.26 / supers **0.0** — z ≈ **−5.3** against
+6.85.12 (1254 / 0.54 / 1.2, n=156). As significant as the original gain, in the
+wrong direction. Projectile deaths became the top cause (15/47), which fits one
+mechanism: **6.85.14's frailest-first kill order marched the bot across the map
+through shot lanes** to reach frail targets. The sim caught the throughput
+problem but not the deaths — it does not model projectiles.
+
+6.85.17 (transit-charged kill order) reads recovered at n=6: median 1182, hell
+0.5, p60 0.17. **Hold on 6.85.18 for 30+ runs.** If the median does not return
+above ~1100, the next suspects are 6.85.16's safety bypasses (flame anchor
+ignoring incoming fire; vital tips walking into boss zones), and they should be
+reverted one at a time, not patched further.
 
 ## 6.85.17 — the kill order charges for transit
 

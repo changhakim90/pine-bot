@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.17
+// @version      6.85.18
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.17';
+    const SCRIPT_VERSION = '6.85.18';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -3554,7 +3554,24 @@
                     }
                 }
                 const d = dRaw;
-                if (d > R) continue;
+                // v6.85.18 (user: "if a boss goes beyond the boundaries of
+                // the canvas, the bot can still attack by going as close to
+                // the corners and edges"). The 200px gather cut made an
+                // off-canvas boss INVISIBLE: no engagement pull, so the bot
+                // wandered instead of hugging the nearest edge point where
+                // its weapons still reach the body. DAY-ONLY extension:
+                // non-wall bosses are gathered out to 480px, tagged
+                // `distant`, and participate ONLY in the firing-ring pull —
+                // the ring-error minimisation over edge-clamped candidates
+                // naturally parks the bot at the closest reachable point.
+                // Distant bosses are excluded from the danger field, the
+                // crowd counts and contactImminent, so nothing else changes;
+                // hell is excluded entirely (deep-hell giants overlapping
+                // the field from off-canvas must keep their old invisibility
+                // — engaging them would send the bot corner-chasing).
+                const distantBoss = d > R && t0 === 'boss' && !hellDetected && d < 480 &&
+                    !(e.wall === true || /nobook/i.test(bc0 + ' ' + t0));
+                if (d > R && !distantBoss) continue;
                 const prof = enemyProfile(e);
                 const t = t0;
                 // NO BOOKING boss = a WALL: impassable, but it does not chase.
@@ -3633,7 +3650,7 @@
                     reach: (prof.radius + (chaserFast && t === 'boss' ? 50 : 0)) * (slowPadRef.v || 1),   // fast bosses: fear from further out, scaled by how slowed we are
                     w: prof.weight * armorEase,
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
-                    frozen, frozenLeft
+                    frozen, frozenLeft, distant: distantBoss
                 });
                 // A wall next to you is not a swarm closing in — it never
                 // counts toward "surrounded" panic.
@@ -3646,7 +3663,7 @@
                     if (typeof gtSeen === 'number') seenTypesThisRun[tkey] = Math.round(gtSeen);
                 }
                 if (d < CONFIG.movement.nearbyRadius && !isWall) out.near++;
-                if (t === 'boss') { out.boss = true; out.mix.boss++; }
+                if (t === 'boss' && !distantBoss) { out.boss = true; out.mix.boss++; }
                 else if (t === 'thrower' || t === 'genz') out.mix.ranged++;   // genz have shootCd — they're shooters (source-verified)
                 else if (t === 'bomber') out.mix.bomber++;
                 else out.mix.swarm++;

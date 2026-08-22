@@ -628,6 +628,30 @@ if (which === 'kill-order') {
     done();
 }
 
+// 17. v6.85.18: an off-canvas day boss is still an engagement target — the
+//     bot hugs the nearest reachable point instead of forgetting it exists.
+if (which === 'edge-boss') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
+    pineBot.stop();
+    global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
+    // boss 100px beyond the right edge (field is 540 wide): centre distance
+    // 370 — far outside the old 200px gather window.
+    global.enemies = [{ type: 'boss', x: 640, y: 270, r: 40, reach: 90, hp: 8000, maxHp: 8000, speed: 1.0, moving: true }];
+    const th = pineBot.test.gatherThreats(global.player);
+    test('an off-canvas boss is gathered and tagged distant', () => {
+        const b = th.enemies.find(e => e.boss);
+        assert.ok(b, 'boss not gathered');
+        assert.strictEqual(b.distant, true);
+    });
+    test('a distant boss does not set the boss flag (no ult waste)', () =>
+        assert.strictEqual(th.boss, false));
+    let pl;
+    for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();
+    test('the planner closes east toward the edge nearest the boss', () =>
+        assert.ok(pl.dx > 0.4, 'dx ' + pl.dx.toFixed(2)));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -660,4 +684,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
