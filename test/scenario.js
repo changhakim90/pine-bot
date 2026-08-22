@@ -519,6 +519,44 @@ if (which === 'focus-fire') {
     done();
 }
 
+// 14. v6.85.15: a TIME STOP item freezes via player.timeStopUntil — the game
+//     never sets e.frozenUntil for it (that is WHISKY SOUR only). The frozen-
+//     boss machinery must open on the global stop.
+if (which === 'item-stop') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true, frame: 1000 } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.setOwned({ 'SOUTH SIDE': 4 });
+        pineBot.test.ageHellEntry(120000);
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        // NO frozenUntil anywhere — only the player's global timeStopUntil
+        global.enemies = [
+            { type: 'boss', x: 330, y: 270, r: 40, reach: 90, hp: 5e6, maxHp: 5e6, speed: 1.0, moving: true },
+            { type: 'mob', x: 300, y: 300, r: 14, hp: 900, maxHp: 900, speed: 1.0, moving: true }
+        ];
+        const before = pineBot.test.planMove();
+        test('without a stop, the boss is not a stacking target', () =>
+            assert.strictEqual(before.stacking, false));
+        global.player.timeStopUntil = 1180;   // 180 frames of stop left
+        const during = pineBot.test.planMove();
+        test('an item TIME STOP opens the stacking window (no frozenUntil set)', () =>
+            assert.strictEqual(during.stacking, true, JSON.stringify({ stacking: during.stacking })));
+        test('the pause is detected from the global stop', () =>
+            assert.strictEqual(during.pauseActive, true));
+        test('with stop time left, the station is burn range', () =>
+            assert.ok(during.stackStation != null && during.stackStation < 150, 'station ' + during.stackStation));
+        global.player.timeStopUntil = 1060;   // 60 frames left: under the 120 cut
+        const late = pineBot.test.planMove();
+        test('as the stop runs out, the station falls back to safe', () =>
+            assert.ok(late.stackStation >= 150, 'station ' + late.stackStation));
+        global.player.timeStopUntil = 1010;   // 10 frames: below the 45-frame drop
+        const gone = pineBot.test.planMove();
+        test('under 45 frames the target is dropped before it wakes', () =>
+            assert.strictEqual(gone.stacking, false));
+        done();
+    }, 2000);
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -551,4 +589,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

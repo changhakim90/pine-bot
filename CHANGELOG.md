@@ -29,6 +29,40 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.12+crown+pat | **145** | **1247** | 1756 | 14115 | 0.12 | 0.01 | 0.53 | **z=5.26 vs the 6.85.1 baseline — the first significant result in the project.** Freeze aura fix; `bossHitRange()` instrument. All five top runs have 4 supers. |
 | 6.85.13+crown+pat | — | | | | | | | Instrument only: `pineBot.damageAudit()`. No behaviour change — the classifier is byte-identical so verdicts stay comparable with the 145-run row. |
 | 6.85.14+crown+pat | — | | | | | | | Focus fire: the passout kill order was computed but never used — one station target now, others are avoidance only. |
+| 6.85.15+crown+pat | — | | | | | | | TIME STOP freezes via `player.timeStopUntil`, which never sets `e.frozenUntil` — the stacking window had never opened on the item. Now it does. |
+
+## 6.85.15 — TIME STOP never set the flag the bot was watching
+
+User: *"the bot is still not registering the two blue rings surrounding the
+bosses at hell mode when they become large. The inner blue ring is the one that
+should be damaged by southside attacks when they are frozen from time stop."*
+
+Read out of the game source in the live tab:
+
+- **A TIME STOP item does not freeze enemies individually.** The game's enemy
+  update loop just does `if (frame < player.timeStopUntil) continue;` —
+  `e.frozenUntil` is never set. Only WHISKY SOUR's freeze sets it per enemy.
+- The bot's entire frozen-boss machinery — `stopBoss`, `pauseActive`, the
+  6.85.11 two-phase burn station, the "dash is wasted during a pause" rule —
+  keyed on `e.frozenUntil`. **So the stacking window has only ever opened on
+  WHISKY SOUR freezes and never once on the item**, which is the exact window
+  the user has been describing since 6.85.6.
+- The two blue rings decode as: the **outer** ring is boss_ladies' 300px slow
+  aura (`R = 300`, drawn light blue, gameplay predicate `dist < 300` → slow);
+  the **inner** ring is the body/hitbox circle. The zone damage predicate is
+  `dist(zone, boss) < z.r + e.r` — a burn zone registers when it touches the
+  body circle, which is why damage only lands at the inner ring. The 6.85.11
+  burn station (`r + 40`, just outside the body) is correct for that predicate;
+  it simply never ran on item stops.
+
+Fix: the global stop now counts as frozen for every enemy, with its remaining
+frames feeding `frozenLeft`, so the burn/safe two-phase station and the
+45-frame wake-up drop work identically for both freeze sources.
+
+*Tested — `item-stop`: with `player.timeStopUntil` set and NO `frozenUntil`
+anywhere, the stacking window opens, holds burn range, falls back to safe as
+the clock runs down, and drops the target before it wakes. 4 of 6 assertions
+fail against the unfixed source.*
 
 ## 6.85.14 — focus fire: the kill order was computed and never used
 

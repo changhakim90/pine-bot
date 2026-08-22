@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.14
+// @version      6.85.15
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.14';
+    const SCRIPT_VERSION = '6.85.15';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -3566,8 +3566,23 @@
                 let vx = e.vx || e.dx || 0, vy = e.vy || e.dy || 0;
                 let spd = typeof e.speed === 'number' ? e.speed : 0;
                 const fr = safe(() => frame, null);
-                const frozen = typeof e.frozenUntil === 'number' && fr != null && e.frozenUntil > fr;
-                const frozenLeft = frozen ? (e.frozenUntil - fr) : 0;
+                // v6.85.15 (user: "the bot is still not registering the two
+                // blue rings ... when they are frozen from time stop").
+                // SOURCE-VERIFIED: a TIME STOP item does NOT set e.frozenUntil
+                // on anyone — the game's enemy loop just does
+                // `if (frame < player.timeStopUntil) continue;`. Only WHISKY
+                // SOUR sets per-enemy frozenUntil. So every frozen-boss
+                // mechanism in this bot (stopBoss, pauseActive, the 6.85.11
+                // burn station) keyed on a flag the item never sets, and the
+                // stacking window has only ever opened on WS freezes. The
+                // global stop now counts as frozen for every enemy, with its
+                // remaining frames feeding frozenLeft so the burn/safe
+                // two-phase station and the <45-frame drop-out work unchanged.
+                const tsLeftE = (fr != null && typeof p.timeStopUntil === 'number' && p.timeStopUntil > fr)
+                    ? (p.timeStopUntil - fr) : 0;
+                const wsFroz = typeof e.frozenUntil === 'number' && fr != null && e.frozenUntil > fr;
+                const frozen = wsFroz || tsLeftE > 0;
+                const frozenLeft = Math.max(wsFroz ? (e.frozenUntil - fr) : 0, tsLeftE);
                 if (frozen) spd = 0;   // frozen: no chase
                 if (!vx && !vy && spd > 0 && e.moving !== false && !isWall && d > 1) {
                     vx = (p.x - e.x) / d * spd;

@@ -96,8 +96,23 @@
                 let vx = e.vx || e.dx || 0, vy = e.vy || e.dy || 0;
                 let spd = typeof e.speed === 'number' ? e.speed : 0;
                 const fr = safe(() => frame, null);
-                const frozen = typeof e.frozenUntil === 'number' && fr != null && e.frozenUntil > fr;
-                const frozenLeft = frozen ? (e.frozenUntil - fr) : 0;
+                // v6.85.15 (user: "the bot is still not registering the two
+                // blue rings ... when they are frozen from time stop").
+                // SOURCE-VERIFIED: a TIME STOP item does NOT set e.frozenUntil
+                // on anyone — the game's enemy loop just does
+                // `if (frame < player.timeStopUntil) continue;`. Only WHISKY
+                // SOUR sets per-enemy frozenUntil. So every frozen-boss
+                // mechanism in this bot (stopBoss, pauseActive, the 6.85.11
+                // burn station) keyed on a flag the item never sets, and the
+                // stacking window has only ever opened on WS freezes. The
+                // global stop now counts as frozen for every enemy, with its
+                // remaining frames feeding frozenLeft so the burn/safe
+                // two-phase station and the <45-frame drop-out work unchanged.
+                const tsLeftE = (fr != null && typeof p.timeStopUntil === 'number' && p.timeStopUntil > fr)
+                    ? (p.timeStopUntil - fr) : 0;
+                const wsFroz = typeof e.frozenUntil === 'number' && fr != null && e.frozenUntil > fr;
+                const frozen = wsFroz || tsLeftE > 0;
+                const frozenLeft = Math.max(wsFroz ? (e.frozenUntil - fr) : 0, tsLeftE);
                 if (frozen) spd = 0;   // frozen: no chase
                 if (!vx && !vy && spd > 0 && e.moving !== false && !isWall && d > 1) {
                     vx = (p.x - e.x) / d * spd;
