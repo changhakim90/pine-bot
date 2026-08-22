@@ -711,6 +711,35 @@
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
+    // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
+    // `dangerAccum`'s own classifier is left byte-identical so death verdicts
+    // stay comparable with the 145-run 6.85.12 sample. This records the
+    // EVIDENCE at each damage event instead of a single verdict, because the
+    // classifier has two blind spots that its output cannot reveal:
+    //   * it is an if/else chain DEFAULTING to 'contact', so every hit with no
+    //     recognised hazard in range has been silently counted as contact;
+    //   * 'mark' sits last, after 'proj', so a hit with both in range scores
+    //     proj and the mark is never seen.
+    // `sole` counts only events where exactly ONE hazard class was in range —
+    // that is the ground truth. `none` counts hits with NO candidate at all; a
+    // large `none` share means the hazard model is missing a damage source
+    // outright, which is what the hell bossD analysis (hit distance median 264)
+    // already hinted at. Survives across runs within a page session; a compact
+    // summary is persisted so a reload does not lose it.
+    // Field-wide nearest-boss distance, tracked BEFORE the enemyRange cut.
+    // The audit needs it: the hell hypothesis is that damage arrives from
+    // bosses at ~264px median, which the 200px threat gather cannot see, so
+    // reading bossD off `th.enemies` would be blind exactly where it counts.
+    const nearestBossRef = { v: Infinity };
+    const DMG_AUDIT_KEY = 'pineBotDmgAudit';
+    let dmgAudit = (() => {
+        const blank = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(DMG_AUDIT_KEY) || 'null');
+            if (raw && typeof raw.n === 'number') return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context

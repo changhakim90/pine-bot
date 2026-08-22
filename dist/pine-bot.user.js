@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.12
+// @version      6.85.13
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.12';
+    const SCRIPT_VERSION = '6.85.13';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -713,6 +713,35 @@
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
+    // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
+    // `dangerAccum`'s own classifier is left byte-identical so death verdicts
+    // stay comparable with the 145-run 6.85.12 sample. This records the
+    // EVIDENCE at each damage event instead of a single verdict, because the
+    // classifier has two blind spots that its output cannot reveal:
+    //   * it is an if/else chain DEFAULTING to 'contact', so every hit with no
+    //     recognised hazard in range has been silently counted as contact;
+    //   * 'mark' sits last, after 'proj', so a hit with both in range scores
+    //     proj and the mark is never seen.
+    // `sole` counts only events where exactly ONE hazard class was in range —
+    // that is the ground truth. `none` counts hits with NO candidate at all; a
+    // large `none` share means the hazard model is missing a damage source
+    // outright, which is what the hell bossD analysis (hit distance median 264)
+    // already hinted at. Survives across runs within a page session; a compact
+    // summary is persisted so a reload does not lose it.
+    // Field-wide nearest-boss distance, tracked BEFORE the enemyRange cut.
+    // The audit needs it: the hell hypothesis is that damage arrives from
+    // bosses at ~264px median, which the 200px threat gather cannot see, so
+    // reading bossD off `th.enemies` would be blind exactly where it counts.
+    const nearestBossRef = { v: Infinity };
+    const DMG_AUDIT_KEY = 'pineBotDmgAudit';
+    let dmgAudit = (() => {
+        const blank = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(DMG_AUDIT_KEY) || 'null');
+            if (raw && typeof raw.n === 'number') return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
@@ -2902,6 +2931,16 @@
         for (const k of Object.keys(dangerAccum)) {
             if (dangerAccum[k] > dmax) { dmax = dangerAccum[k]; lastDeathCause = k; }
         }
+        // v6.85.13: persist the damage audit so a page reload does not lose it.
+        // Written once per run, not per damage event — this is on the run-end
+        // path, never in the frame loop. The event ring is trimmed hard because
+        // the summary counters are what the analysis actually needs.
+        try {
+            dmgAudit.runs = (dmgAudit.runs || 0) + 1;
+            dmgAudit.lastDeath = lastDeathCause;
+            const slim = Object.assign({}, dmgAudit, { ev: dmgAudit.ev.slice(-120) });
+            localStorage.setItem(DMG_AUDIT_KEY, JSON.stringify(slim));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {
@@ -3447,6 +3486,7 @@
         const R = CONFIG.threat.enemyRange;
 
         const es = G.enemies;
+        nearestBossRef.v = Infinity;
         if (Array.isArray(es)) {
             for (const e of es) {
                 if (!e || typeof e.x !== 'number' || typeof e.y !== 'number') continue;
@@ -3504,6 +3544,7 @@
                 // WeakMap keyed on the entity object — enemies persist frame to
                 // frame, and it cannot leak once the game drops them.
                 if (t0 === 'boss' && typeof e.hp === 'number' && !/nobook/i.test(bc0 + ' ' + t0)) {
+                    if (dRaw < nearestBossRef.v) nearestBossRef.v = dRaw;
                     const prevHp = bossHpMem.get(e);
                     bossHpMem.set(e, e.hp);
                     if (prevHp != null && e.hp < prevHp - 0.5) {
@@ -4004,6 +4045,43 @@
             else if (th.projectiles.some(q => Math.hypot(q.x - p.x, q.y - p.y) < q.r + 22)) cls = 'proj';
             else if (th.marks.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 10)) cls = 'mark';
             dangerAccum[cls] = (dangerAccum[cls] || 0) + loss * 0.35;
+
+            // v6.85.13 AUDIT — record the EVIDENCE, never a verdict. Same
+            // predicates and thresholds as the chain above, but evaluated
+            // independently instead of first-match-wins, so we can see how
+            // often a class was the SOLE candidate (ground truth), how often
+            // it merely co-occurred, and how often NOTHING was in range —
+            // which the chain silently books as 'contact'.
+            const nearestGap = (arr, f) => { let b = Infinity; for (const it of arr) { const v = f(it); if (v < b) b = v; } return b; };
+            const gContact = nearestGap(th.enemies, e2 => Math.hypot(e2.x - p.x, e2.y - p.y) - e2.r);
+            const gProj = nearestGap(th.projectiles, q => Math.hypot(q.x - p.x, q.y - p.y) - q.r);
+            const gMark = nearestGap(th.marks, m => Math.hypot(m.x - p.x, m.y - p.y) - m.r);
+            const gBoss = nearestBossRef.v;   // field-wide, not capped at enemyRange
+            const cands = [];
+            if (th.rival && th.rival.d < 150) cands.push('rival');
+            if (th.lines.some(l => l.armed === true && lineCost(l, p.x, p.y) > 0.15)) cands.push('line');
+            if (gProj < 22) cands.push('proj');
+            if (gMark < 10) cands.push('mark');
+            if (gContact < 6) cands.push('contact');
+            dmgAudit.n++; dmgAudit.hp += loss;
+            const bump = (tbl, k) => { const b = tbl[k] || (tbl[k] = { n: 0, hp: 0 }); b.n++; b.hp += loss; };
+            if (!cands.length) {
+                dmgAudit.none.n++; dmgAudit.none.hp += loss;
+                if (isFinite(gBoss)) dmgAudit.none.bossD.push(Math.round(gBoss));
+                dmgAudit.none.near.push(th.near);
+                if (dmgAudit.none.bossD.length > 800) dmgAudit.none.bossD.shift();
+                if (dmgAudit.none.near.length > 800) dmgAudit.none.near.shift();
+            } else {
+                for (const c of cands) bump(dmgAudit.cls, c);
+                if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
+            }
+            dmgAudit.ev.push({
+                gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
+                hell: hellDetected ? 1 : 0, loss: Math.round(loss * 10) / 10,
+                c: cands.join('+') || 'none', verdict: cls,
+                bossD: isFinite(gBoss) ? Math.round(gBoss) : null, near: th.near
+            });
+            if (dmgAudit.ev.length > 300) dmgAudit.ev.shift();
         }
         lastHpSample = hp;
 
@@ -5287,6 +5365,42 @@
                 if (!a.length) return { n: 0, note: 'no boss damage observed yet — run until a boss is engaged' };
                 const q = f => a[Math.min(a.length - 1, Math.floor(a.length * f))];
                 return { n: a.length, min: a[0], p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), max: a[a.length - 1] };
+            };
+            // v6.85.13: pineBot.damageAudit() — what is ACTUALLY damaging us.
+            // `byClass` counts every event where that hazard was in range;
+            // `sole` counts only events where it was the ONLY candidate, which
+            // is the ground truth. `unattributed` counts hits with NO hazard in
+            // range at all — the existing classifier books those as 'contact',
+            // so a large share here means the recorded death causes are wrong
+            // and the hazard model is missing a damage source outright.
+            window.pineBot.damageAudit = () => {
+                const pct = (x, t) => t ? Math.round(100 * x / t) : 0;
+                const q = (a, f) => { if (!a.length) return null; const s2 = a.slice().sort((x, y) => x - y); return s2[Math.min(s2.length - 1, Math.floor(s2.length * f))]; };
+                const bd = dmgAudit.none.bossD, nr = dmgAudit.none.near;
+                const shape = tbl => {
+                    const o = {};
+                    for (const k of Object.keys(tbl)) o[k] = { n: tbl[k].n, hp: Math.round(tbl[k].hp), hpShare: pct(tbl[k].hp, dmgAudit.hp) + '%' };
+                    return o;
+                };
+                return {
+                    runs: dmgAudit.runs || 0, events: dmgAudit.n, hpLost: Math.round(dmgAudit.hp),
+                    byClass: shape(dmgAudit.cls),
+                    sole: shape(dmgAudit.sole),
+                    unattributed: {
+                        n: dmgAudit.none.n, hp: Math.round(dmgAudit.none.hp),
+                        eventShare: pct(dmgAudit.none.n, dmgAudit.n) + '%',
+                        hpShare: pct(dmgAudit.none.hp, dmgAudit.hp) + '%',
+                        bossD: bd.length ? { p25: q(bd, 0.25), median: q(bd, 0.5), p75: q(bd, 0.75) } : null,
+                        near: nr.length ? { p25: q(nr, 0.25), median: q(nr, 0.5), p75: q(nr, 0.75) } : null
+                    },
+                    note: '`sole` is ground truth. A large `unattributed` share means the classifier is booking unknown damage as contact.'
+                };
+            };
+            window.pineBot.damageEvents = () => dmgAudit.ev.slice();
+            window.pineBot.resetDamageAudit = () => {
+                dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
+                try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }
+                return 'damage audit cleared';
             };
             window.pineBotDiagnose = diagnose;
             window.pineBotStats = buildStatsReport;

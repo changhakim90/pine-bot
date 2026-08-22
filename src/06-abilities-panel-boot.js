@@ -542,6 +542,42 @@
                 const q = f => a[Math.min(a.length - 1, Math.floor(a.length * f))];
                 return { n: a.length, min: a[0], p25: q(0.25), median: q(0.5), p75: q(0.75), p95: q(0.95), max: a[a.length - 1] };
             };
+            // v6.85.13: pineBot.damageAudit() — what is ACTUALLY damaging us.
+            // `byClass` counts every event where that hazard was in range;
+            // `sole` counts only events where it was the ONLY candidate, which
+            // is the ground truth. `unattributed` counts hits with NO hazard in
+            // range at all — the existing classifier books those as 'contact',
+            // so a large share here means the recorded death causes are wrong
+            // and the hazard model is missing a damage source outright.
+            window.pineBot.damageAudit = () => {
+                const pct = (x, t) => t ? Math.round(100 * x / t) : 0;
+                const q = (a, f) => { if (!a.length) return null; const s2 = a.slice().sort((x, y) => x - y); return s2[Math.min(s2.length - 1, Math.floor(s2.length * f))]; };
+                const bd = dmgAudit.none.bossD, nr = dmgAudit.none.near;
+                const shape = tbl => {
+                    const o = {};
+                    for (const k of Object.keys(tbl)) o[k] = { n: tbl[k].n, hp: Math.round(tbl[k].hp), hpShare: pct(tbl[k].hp, dmgAudit.hp) + '%' };
+                    return o;
+                };
+                return {
+                    runs: dmgAudit.runs || 0, events: dmgAudit.n, hpLost: Math.round(dmgAudit.hp),
+                    byClass: shape(dmgAudit.cls),
+                    sole: shape(dmgAudit.sole),
+                    unattributed: {
+                        n: dmgAudit.none.n, hp: Math.round(dmgAudit.none.hp),
+                        eventShare: pct(dmgAudit.none.n, dmgAudit.n) + '%',
+                        hpShare: pct(dmgAudit.none.hp, dmgAudit.hp) + '%',
+                        bossD: bd.length ? { p25: q(bd, 0.25), median: q(bd, 0.5), p75: q(bd, 0.75) } : null,
+                        near: nr.length ? { p25: q(nr, 0.25), median: q(nr, 0.5), p75: q(nr, 0.75) } : null
+                    },
+                    note: '`sole` is ground truth. A large `unattributed` share means the classifier is booking unknown damage as contact.'
+                };
+            };
+            window.pineBot.damageEvents = () => dmgAudit.ev.slice();
+            window.pineBot.resetDamageAudit = () => {
+                dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
+                try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }
+                return 'damage audit cleared';
+            };
             window.pineBotDiagnose = diagnose;
             window.pineBotStats = buildStatsReport;
         } catch (e) { }

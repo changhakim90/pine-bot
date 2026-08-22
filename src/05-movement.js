@@ -16,6 +16,7 @@
         const R = CONFIG.threat.enemyRange;
 
         const es = G.enemies;
+        nearestBossRef.v = Infinity;
         if (Array.isArray(es)) {
             for (const e of es) {
                 if (!e || typeof e.x !== 'number' || typeof e.y !== 'number') continue;
@@ -73,6 +74,7 @@
                 // WeakMap keyed on the entity object — enemies persist frame to
                 // frame, and it cannot leak once the game drops them.
                 if (t0 === 'boss' && typeof e.hp === 'number' && !/nobook/i.test(bc0 + ' ' + t0)) {
+                    if (dRaw < nearestBossRef.v) nearestBossRef.v = dRaw;
                     const prevHp = bossHpMem.get(e);
                     bossHpMem.set(e, e.hp);
                     if (prevHp != null && e.hp < prevHp - 0.5) {
@@ -573,6 +575,43 @@
             else if (th.projectiles.some(q => Math.hypot(q.x - p.x, q.y - p.y) < q.r + 22)) cls = 'proj';
             else if (th.marks.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 10)) cls = 'mark';
             dangerAccum[cls] = (dangerAccum[cls] || 0) + loss * 0.35;
+
+            // v6.85.13 AUDIT — record the EVIDENCE, never a verdict. Same
+            // predicates and thresholds as the chain above, but evaluated
+            // independently instead of first-match-wins, so we can see how
+            // often a class was the SOLE candidate (ground truth), how often
+            // it merely co-occurred, and how often NOTHING was in range —
+            // which the chain silently books as 'contact'.
+            const nearestGap = (arr, f) => { let b = Infinity; for (const it of arr) { const v = f(it); if (v < b) b = v; } return b; };
+            const gContact = nearestGap(th.enemies, e2 => Math.hypot(e2.x - p.x, e2.y - p.y) - e2.r);
+            const gProj = nearestGap(th.projectiles, q => Math.hypot(q.x - p.x, q.y - p.y) - q.r);
+            const gMark = nearestGap(th.marks, m => Math.hypot(m.x - p.x, m.y - p.y) - m.r);
+            const gBoss = nearestBossRef.v;   // field-wide, not capped at enemyRange
+            const cands = [];
+            if (th.rival && th.rival.d < 150) cands.push('rival');
+            if (th.lines.some(l => l.armed === true && lineCost(l, p.x, p.y) > 0.15)) cands.push('line');
+            if (gProj < 22) cands.push('proj');
+            if (gMark < 10) cands.push('mark');
+            if (gContact < 6) cands.push('contact');
+            dmgAudit.n++; dmgAudit.hp += loss;
+            const bump = (tbl, k) => { const b = tbl[k] || (tbl[k] = { n: 0, hp: 0 }); b.n++; b.hp += loss; };
+            if (!cands.length) {
+                dmgAudit.none.n++; dmgAudit.none.hp += loss;
+                if (isFinite(gBoss)) dmgAudit.none.bossD.push(Math.round(gBoss));
+                dmgAudit.none.near.push(th.near);
+                if (dmgAudit.none.bossD.length > 800) dmgAudit.none.bossD.shift();
+                if (dmgAudit.none.near.length > 800) dmgAudit.none.near.shift();
+            } else {
+                for (const c of cands) bump(dmgAudit.cls, c);
+                if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
+            }
+            dmgAudit.ev.push({
+                gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
+                hell: hellDetected ? 1 : 0, loss: Math.round(loss * 10) / 10,
+                c: cands.join('+') || 'none', verdict: cls,
+                bossD: isFinite(gBoss) ? Math.round(gBoss) : null, near: th.near
+            });
+            if (dmgAudit.ev.length > 300) dmgAudit.ev.shift();
         }
         lastHpSample = hp;
 

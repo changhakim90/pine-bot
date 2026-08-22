@@ -161,6 +161,16 @@
         for (const k of Object.keys(dangerAccum)) {
             if (dangerAccum[k] > dmax) { dmax = dangerAccum[k]; lastDeathCause = k; }
         }
+        // v6.85.13: persist the damage audit so a page reload does not lose it.
+        // Written once per run, not per damage event — this is on the run-end
+        // path, never in the frame loop. The event ring is trimmed hard because
+        // the summary counters are what the analysis actually needs.
+        try {
+            dmgAudit.runs = (dmgAudit.runs || 0) + 1;
+            dmgAudit.lastDeath = lastDeathCause;
+            const slim = Object.assign({}, dmgAudit, { ev: dmgAudit.ev.slice(-120) });
+            localStorage.setItem(DMG_AUDIT_KEY, JSON.stringify(slim));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {

@@ -26,7 +26,60 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.9+crown+pat | — | | | | | | | Flame cross: passout station collapses to contact range while it burns; pickup value roughly doubled with passouts up. |
 | 6.85.10+crown+pat | — | | | | | | | Passout backlog: field-wide gather (was a 312px window), FIFO trek target, density-scaled `contested`. |
 | 6.85.11+crown+pat | — | | | | | | | Frozen-boss stacking: `!projHere` gate removed (it suppressed the branch in hell), two-phase station at SOUTH SIDE burn range. |
-| 6.85.12+crown+pat | — | | | | | | | Freeze aura no longer read as a body-centred damage radius. New `pineBot.bossHitRange()` instrument. |
+| 6.85.12+crown+pat | **145** | **1247** | 1756 | 14115 | 0.12 | 0.01 | 0.53 | **z=5.26 vs the 6.85.1 baseline — the first significant result in the project.** Freeze aura fix; `bossHitRange()` instrument. All five top runs have 4 supers. |
+| 6.85.13+crown+pat | — | | | | | | | Instrument only: `pineBot.damageAudit()`. No behaviour change — the classifier is byte-identical so verdicts stay comparable with the 145-run row. |
+
+## 6.85.13 — instrument dangerAccum
+
+6.85.12 measured out at **z = 5.26** against the 6.85.1 baseline (n=145 vs 243,
+median 819 → 1247, mean 924 → 1756). But the thing 6.85.2 was *built* to fix did
+not move: mark deaths were 32% of the baseline and are 31% now. Either marks
+really are killing us, or the attribution is wrong — and the recorded verdicts
+cannot tell us which, because of how they are produced.
+
+`dangerAccum`'s classifier is an if/else chain with two blind spots its own
+output can never reveal:
+
+- **It defaults to `contact`.** Every HP drop with no recognised hazard in range
+  has been silently booked as a contact death. Contact is 46% of 6.85.12's
+  deaths — some unknown share of that is "we have no idea".
+- **`mark` is evaluated last, after `proj`.** Any hit with both in range scores
+  `proj`, and the mark is never seen.
+
+**This version changes no behaviour.** The classifier is left byte-identical so
+death verdicts stay comparable with the 145-run 6.85.12 sample; the audit runs
+alongside it and records evidence instead of a verdict.
+
+### `pineBot.damageAudit()`
+
+Every HP drop is evaluated against all hazard predicates independently, not
+first-match-wins:
+
+- **`sole`** — events where exactly ONE class was in range. This is ground
+  truth; everything else is inference.
+- **`byClass`** — every class that was in range, so co-occurrence is visible.
+- **`unattributed`** — hits with NO candidate at all, with `bossD` and `near`
+  percentiles to characterise them. **A large share here means the hazard model
+  is missing a damage source outright**, which the hell analysis already hinted
+  at (hit-`bossD` median 264 across two demos, far outside any modelled range).
+
+`nearestBossRef` tracks the nearest boss **field-wide, before the 200px
+`enemyRange` cut** — reading `bossD` off the gathered list would be blind at
+exactly the distances the hell hypothesis is about.
+
+Also: `pineBot.damageEvents()` returns the last ~300 events with
+`{gt, hell, loss, candidates, verdict, bossD, near}`, so the old verdict can be
+compared against the evidence event by event. The audit survives page reloads
+(persisted once per run on the run-end path, never in the frame loop) and
+aggregates across runs; `pineBot.resetDamageAudit()` clears it.
+
+**How to read it.** If `sole.mark` is a small fraction of `byClass.mark`, the
+31% mark share is an artifact of co-occurrence and the mark work was aimed at a
+phantom. If `unattributed` is a large share of HP lost, the contact figure is
+inflated by unknown damage and the next job is identifying that source, not
+tuning avoidance.
+
+*Tested — `damage-audit`, all assertions verified against unfixed source.*
 
 ## 6.85.12 — the freeze aura was being read as a damage radius
 

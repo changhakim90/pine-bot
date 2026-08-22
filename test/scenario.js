@@ -438,6 +438,64 @@ if (which === 'freeze-aura') {
     done();
 }
 
+// 12. v6.85.13: the damage audit records EVIDENCE, and in particular separates
+//     sole-candidate events from ambiguous ones and from unattributed hits
+//     that the existing classifier silently books as 'contact'.
+if (which === 'damage-audit') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+    pineBot.stop();
+    global.window.pineBot.resetDamageAudit();
+    const hit = (enemies, dmg) => {
+        global.enemies = enemies;
+        global.player.hp = 180;
+        pineBot.test.planMove();          // seeds lastHpSample at 180
+        global.player.hp = 180 - dmg;
+        pineBot.test.planMove();          // observes the drop
+    };
+    global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+
+    // 1. a mark overlapping the bot and NOTHING else: sole candidate = mark
+    hit([{ type: 'passout', x: 272, y: 270, r: 20, fallT: 8, hp: 40, maxHp: 40 }], 20);
+    let a = global.window.pineBot.damageAudit();
+    test('a lone overlapping mark is recorded as the SOLE candidate', () =>
+        assert.ok(a.sole.mark && a.sole.mark.n === 1, JSON.stringify(a.sole)));
+
+    // 2. damage with no hazard anywhere near: must be UNATTRIBUTED, not contact
+    hit([{ type: 'boss', x: 520, y: 520, r: 40, hp: 5e5, maxHp: 5e5, speed: 1, moving: true }], 25);
+    a = global.window.pineBot.damageAudit();
+    test('damage with no hazard in range is unattributed, not contact', () => {
+        assert.strictEqual(a.unattributed.n, 1, JSON.stringify(a.unattributed));
+        assert.ok(!a.sole.contact, 'contact was credited: ' + JSON.stringify(a.sole));
+    });
+    test('the unattributed bucket keeps the boss distance for characterisation', () =>
+        assert.ok(a.unattributed.bossD && a.unattributed.bossD.median > 300, JSON.stringify(a.unattributed.bossD)));
+
+    // 3. a projectile AND a mark both in range: counted for both, sole for neither
+    hit([
+        { type: 'passout', x: 272, y: 270, r: 20, fallT: 8, hp: 40, maxHp: 40 },
+        { type: 'boss', x: 520, y: 520, r: 40, hp: 5e5, maxHp: 5e5, speed: 1, moving: true }
+    ], 30);
+    global.eprojectiles = [{ x: 274, y: 270, r: 6, vx: 0, vy: 0 }];
+    hit([{ type: 'passout', x: 272, y: 270, r: 20, fallT: 8, hp: 40, maxHp: 40 }], 30);
+    global.eprojectiles = [];
+    a = global.window.pineBot.damageAudit();
+    test('an ambiguous hit credits every candidate but is sole for none', () => {
+        assert.ok(a.byClass.proj && a.byClass.mark, JSON.stringify(a.byClass));
+        assert.ok(!a.sole.proj, 'proj wrongly counted as sole: ' + JSON.stringify(a.sole));
+    });
+    test('totals and shares are reported', () => {
+        assert.ok(a.events >= 4, 'events ' + a.events);
+        assert.ok(/%$/.test(a.unattributed.hpShare));
+    });
+    test('the event ring keeps the verdict alongside the candidates', () => {
+        const ev = global.window.pineBot.damageEvents();
+        assert.ok(ev.length >= 4);
+        assert.ok(ev.some(e => e.c === 'none' && e.verdict === 'contact'),
+            'expected an unattributed hit that the old classifier called contact: ' + JSON.stringify(ev));
+    });
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -470,4 +528,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
