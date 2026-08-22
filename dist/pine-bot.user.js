@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.19
+// @version      6.85.20
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.19';
+    const SCRIPT_VERSION = '6.85.20';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -4353,6 +4353,19 @@
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
         const flight = hellDetected && !pauseActive && unkillable && th.near >= 4;
         flightRef.v = flight;
+        // v6.85.20 (user): "the deep hell poison kill should be from the mobs
+        // ... keep dashing away and ultimate until the bot can get timestop
+        // from the mob through luck ... frequent killing of mobs with ultimate
+        // and southside when boss is not present should help." Two flight
+        // postures, not one. With a BOSS hunting us, flee at full pressure
+        // (kite 1.8x). BOSSLESS flight is the GRIND: the pack chases through
+        // our own SOUTH SIDE wake, the ult fires on cooldown, and mob kills
+        // are the only source of the timestop that ends the chase — so the
+        // kite pressure eases (1.25x) to keep the pack inside the burn wake
+        // instead of outrunning our own kill loop. Audit context: ~18% of all
+        // HP loss is an unmodelled DoT the user attributes to these mobs, so
+        // pure distance was never buying what the planner thought it was.
+        const grind = flight && zoner && !th.enemies.some(e => e.boss && !e.wall);
 
         // v6.85.2: falling-passout drops excluded — see the `drop` tag above.
         const markHere = th.marks.some(m => !m.drop && Math.hypot(m.x - p.x, m.y - p.y) < m.r + 50);
@@ -4896,8 +4909,8 @@
             }
 
             // kiting sweep + gap escape
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? 1.8 : 1);
-            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? 1.8 : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? 1.25 : 1.8) : 1);
+            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? 1.25 : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
             // and a mob rush must bend the path INWARD, never into a corner
@@ -4931,7 +4944,7 @@
         return {
             dx: vx, dy: vy,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
-            pauseActive, contactImminent, flight, depth: +depth.toFixed(2),
+            pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
             surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),

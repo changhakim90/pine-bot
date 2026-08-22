@@ -694,6 +694,32 @@ if (which === 'stop-giant') {
     }, 2000);
 }
 
+// 19. v6.85.20: bossless deep-hell flight is the GRIND — kite pressure eases
+//     so the pack stays in the SOUTH SIDE wake; a boss on field restores the
+//     full flee; no zoner = no wake = full flee too.
+if (which === 'grind') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.ageHellEntry(120000);
+        global.player = { x: 270, y: 270, hp: 120, maxHp: 180, speed: 1.9 };
+        const pack = [0,1,2,3,4,5].map(i => ({ type: 'mob', x: 270 + 70*Math.cos(i), y: 270 + 70*Math.sin(i), r: 14, hp: 9e9, maxHp: 9e9, speed: 3.0, moving: true }));
+        global.enemies = pack;
+        const noZoner = pineBot.test.planMove();
+        test('flight without SOUTH SIDE stays a pure flee (no wake to feed)', () =>
+            assert.ok(noZoner.flight === true && noZoner.grind === false, JSON.stringify({f:noZoner.flight,g:noZoner.grind})));
+        pineBot.test.setOwned({ 'SOUTH SIDE': 3 });
+        const bossless = pineBot.test.planMove();
+        test('bossless flight with SOUTH SIDE is the grind posture', () =>
+            assert.strictEqual(bossless.grind, true));
+        global.enemies = pack.concat([{ type: 'boss', x: 380, y: 270, r: 40, reach: 90, hp: 5e6, maxHp: 5e6, speed: 2.5, moving: true }]);
+        const chased = pineBot.test.planMove();
+        test('a boss on the field restores the full flee', () =>
+            assert.ok(chased.flight === true && chased.grind === false, JSON.stringify({f:chased.flight,g:chased.grind})));
+        done();
+    }, 2000);
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -726,4 +752,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

@@ -33,7 +33,46 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.16+crown+pat | — | | | | | | | Flame anchor; filler coins halved while a passout is up; loot yields during the burn; day boss tips are vital-grade. |
 | 6.85.17+crown+pat | — | | | | | | | Kill order charges for transit: target = min(hp + 0.5×dist). Sim: 8 → 13 passouts cleared (+62%). |
 | 6.85.18+crown+pat | — | | | | | | | Off-canvas day bosses gathered to 480px (ring pull only) — the bot hugs the nearest edge instead of forgetting them. |
-| 6.85.19+crown+pat | — | | | | | | | Off-canvas station collapses to the hit circle (`e.r+34`, was the 240 standoff); hell smalls (r≤90) join the gather extension. |
+| 6.85.19+crown+pat | **52** | **1244** | 1370 | 5193 | 0.06 | 0 | 0.54 | **Recovery confirmed: z=+3.16 vs the 6.85.16 regression, statistically level with 6.85.12.** Supers 0.9. |
+| 6.85.20+crown+pat | — | | | | | | | Bossless deep-hell flight eases kite 1.8→1.25 (grind in the SOUTH SIDE wake for timestop drops); chased flight unchanged. |
+
+## 6.85.20 — bossless deep-hell flight is a grind, not a flee
+
+User: *"the deep hell poison kill should be from the mobs. The pat bot has to
+keep dashing away and ultimate until the bot can get timestop from the mob
+through luck ... frequent killing of mobs with ultimate and southside when
+boss is not present should help ... always dashing away while tanking the
+ticking of damage."*
+
+Fits the audit exactly: **~18% of all HP lost is an unmodelled DoT** — small
+ticks, nothing within 90px — which the user attributes to deep-hell mobs. If
+proximity itself costs HP steadily, pure distance was never buying what the
+planner thought, and the only exit is a timestop drop, which only mob kills
+produce.
+
+Flight now has **two postures**:
+
+- **Chased (boss on field, or no SOUTH SIDE): unchanged** — kite/escape at the
+  full 1.8× pressure, dash gate 300ms, ult on cooldown. Dash-away doctrine
+  intact.
+- **Bossless grind (flight + SOUTH SIDE owned + no boss gathered): kite
+  pressure eases to 1.25×.** The pack chases through the bot's own burn wake,
+  the ult keeps firing (`ultSpam` already covers flight), kills keep dropping
+  items, and one of them is the timestop that ends the chase. Outrunning the
+  pack at 1.8× starved that kill loop.
+
+The DoT itself is tanked, as directed — no panic behaviour keys on it, and
+flight already survives low HP (6.85.6).
+
+On *"pat bot needs upgrades faster meaning all kills of bosses in day mode"* —
+already in place and measured: day boss engagement ×1.5 (6.85.6), boss tips
+vital-grade (6.85.16), off-canvas bosses engageable at the hit circle
+(6.85.18/19), MOJITO deferral deleted (6.85.8). 6.85.19's n=52 sample confirms
+the day economy recovered (median 1244, hell rate 0.54). No further weight
+changes without a regression signal — that lesson is one version old.
+
+*Tested — `grind`: bossless flight with SOUTH SIDE grinds, a boss restores the
+flee, no zoner restores the flee. Teeth-checked.*
 
 ## 6.85.19 — the station targets the hit circle, not the standoff
 
