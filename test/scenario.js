@@ -512,7 +512,9 @@ if (which === 'focus-fire') {
     ];
     let pl;
     for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();   // let smoothing settle
-    test('the heading closes on the frailest/oldest passout, not the sum', () =>
+    // v6.85.17: target = min(maxHp + 0.5*dist). West id 3: 40 + 0.5*120 = 100;
+    // east id 5: 70 + ~57 = 127; northeast id 9: 70 + ~102 = 172. West wins.
+    test('the heading closes on the best loot-per-second passout, not the sum', () =>
         assert.ok(pl.dx < -0.5, 'dx ' + pl.dx.toFixed(2) + ' (expected westward toward id 3)'));
     test('all three passouts are still visible and free', () =>
         assert.strictEqual(pl.poFree, 3, JSON.stringify([pl.poField, pl.poFree])));
@@ -606,6 +608,26 @@ if (which === 'flame-anchor') {
     done();
 }
 
+// 16. v6.85.17: the kill order charges for transit.
+if (which === 'kill-order') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
+    pineBot.stop();
+    global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
+    // the FRAILEST passout (40hp) is 230px east; a 55hp one is 160px west.
+    // frailest-first goes east (score-blind); loot-per-second goes west:
+    // 55 + 0.5*160 = 135 beats 40 + 0.5*230 = 155. Both sit outside the
+    // 100px station ring, so the bot must actually travel.
+    global.enemies = [
+        { type: 'passout', x: 110, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 8 },
+        { type: 'passout', x: 500, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 2 }
+    ];
+    let pl;
+    for (let i = 0; i < 6; i++) pl = pineBot.test.planMove();
+    test('a near 60hp passout outranks a far 40hp one (transit is charged)', () =>
+        assert.ok(pl.dx < -0.4, 'dx ' + pl.dx.toFixed(2) + ' (expected westward to the near target)'));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -638,4 +660,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

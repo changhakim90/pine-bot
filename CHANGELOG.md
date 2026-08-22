@@ -31,6 +31,30 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.14+crown+pat | — | | | | | | | Focus fire: the passout kill order was computed but never used — one station target now, others are avoidance only. |
 | 6.85.15+crown+pat | — | | | | | | | TIME STOP freezes via `player.timeStopUntil`, which never sets `e.frozenUntil` — the stacking window had never opened on the item. Now it does. |
 | 6.85.16+crown+pat | — | | | | | | | Flame anchor; filler coins halved while a passout is up; loot yields during the burn; day boss tips are vital-grade. |
+| 6.85.17+crown+pat | — | | | | | | | Kill order charges for transit: target = min(hp + 0.5×dist). Sim: 8 → 13 passouts cleared (+62%). |
+
+## 6.85.17 — the kill order charges for transit
+
+User: *"diagnose and see if the bot can kill passouts faster and more of them
+starting in the 10 minute mark — and optimize the bot behaviour."*
+
+Diagnosis first (tick-level simulation of the 10-minute regime, current build):
+station-holding is fixed — 96–99% of ticks within weapon range of the target in
+the normal cases, so 6.85.14/6.85.16 did their job. Two findings:
+
+- **A NO BOOKING wall halves clear rate** (48% on-target, 2× time-to-clear).
+  Deliberate — the wall outranks by user priority — recorded, not changed.
+- **Target selection was the real lever.** Frailest-first is distance-blind:
+  it sends the bot across the map for a marginally weaker target while a near
+  one sits uncleared. In a 500-tick continuous-drizzle sim: **8 kills**.
+
+Fix: the kill order is loot per second, and loot per second includes the walk.
+Score = `maxHp + 0.5 × distance`, lowest wins, fell-first breaks ties. Same
+sim, same counters: **13 kills (+62%)**. The far-backlog trek keeps oldest-first
+(despawn risk dominates out there).
+
+*Tested — `kill-order` fails against frailest-only selection; the sim numbers
+are reproducible via /tmp scripts in the session.*
 
 ## 6.85.16 — flame anchor; filler loot no longer outbids the payoff
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.16
+// @version      6.85.17
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.16';
+    const SCRIPT_VERSION = '6.85.17';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -4693,15 +4693,19 @@
                 // compromise point between rings (probe: 3 passouts, heading
                 // chosen toward the farthest). It orbited between them,
                 // finished none, and the pile grew while their maxHp scaled.
-                // Now exactly ONE passout is the station target, in the
-                // USER KILL ORDER as originally documented: FRAILEST first
-                // (lowest maxHp = fastest loot per second), fell-first
-                // (lowest id) as the tie-break — and the others contribute
-                // only their contact-zone danger.
-                let tgtPo = null;
+                // Now exactly ONE passout is the station target.
+                // v6.85.17: the kill order is LOOT PER SECOND, and loot per
+                // second includes the walk. Frailest-first alone is distance-
+                // blind — it sent the bot across the map for a marginally
+                // weaker target while a near one sat uncleared (sim, 500-tick
+                // 10-minute drizzle: 8 kills). Scoring hp + 0.5*distance keeps
+                // the frailty logic but charges transit for it (same sim: 13
+                // kills, +62%). Fell-first (lowest id) still breaks ties.
+                let tgtPo = null, tgtScore = Infinity;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
-                    if (!tgtPo || po.maxHp < tgtPo.maxHp || (po.maxHp === tgtPo.maxHp && po.id < tgtPo.id)) tgtPo = po;
+                    const sc = po.maxHp + 0.5 * Math.hypot(po.x - p.x, po.y - p.y);
+                    if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
                 // with CR as the only cocktail, farming them is slow

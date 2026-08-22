@@ -1222,15 +1222,19 @@
                 // compromise point between rings (probe: 3 passouts, heading
                 // chosen toward the farthest). It orbited between them,
                 // finished none, and the pile grew while their maxHp scaled.
-                // Now exactly ONE passout is the station target, in the
-                // USER KILL ORDER as originally documented: FRAILEST first
-                // (lowest maxHp = fastest loot per second), fell-first
-                // (lowest id) as the tie-break — and the others contribute
-                // only their contact-zone danger.
-                let tgtPo = null;
+                // Now exactly ONE passout is the station target.
+                // v6.85.17: the kill order is LOOT PER SECOND, and loot per
+                // second includes the walk. Frailest-first alone is distance-
+                // blind — it sent the bot across the map for a marginally
+                // weaker target while a near one sat uncleared (sim, 500-tick
+                // 10-minute drizzle: 8 kills). Scoring hp + 0.5*distance keeps
+                // the frailty logic but charges transit for it (same sim: 13
+                // kills, +62%). Fell-first (lowest id) still breaks ties.
+                let tgtPo = null, tgtScore = Infinity;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
-                    if (!tgtPo || po.maxHp < tgtPo.maxHp || (po.maxHp === tgtPo.maxHp && po.id < tgtPo.id)) tgtPo = po;
+                    const sc = po.maxHp + 0.5 * Math.hypot(po.x - p.x, po.y - p.y);
+                    if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
                 // with CR as the only cocktail, farming them is slow
