@@ -824,6 +824,67 @@ if (which === 'cem-heal') {
     }, 2200);
 }
 
+// v6.86.0 — the measured lockup: every sigma at the floor + a cloned champion
+if (which === 'cem-lockup') {
+    // Freeze EVERY dimension at the sigma floor, exactly as measured — read
+    // the live TUNABLE boxes out of the built script so this test tracks the
+    // real parameter set instead of a hand-copied subset.
+    const boxes = {};
+    for (const m of require('fs').readFileSync(SCRIPT, 'utf8')
+        .matchAll(/'([a-zA-Z.]+)':\s*\{\s*min:\s*(-?[\d.]+),\s*max:\s*(-?[\d.]+)\s*\}/g))
+        boxes[m[1]] = { min: +m[2], max: +m[3] };
+    const mean = {}, sigma = {};
+    for (const k of Object.keys(boxes)) {
+        const b = boxes[k];
+        mean[k] = b.min + (b.max - b.min) * 0.5;
+        sigma[k] = (b.max - b.min) * 0.05;   // the floor
+    }
+    mean['movement.standoff'] = 120;
+    mean['strategy.deepFocusLv'] = 5.63;     // outside the tightened box
+    const champ = { ...mean, 'movement.standoff': 121 };
+    const locked = {
+        runs: 3373, bartender: 'pat', rewardEpoch: 2,
+        cem: { mean, sigma, pc: {}, ss: 0.616, gen: 425, batch: [] },
+        // hof[0] and hof[1] byte-identical, as measured
+        hof: [{ r: 9.9, p: { ...champ } }, { r: 9.9, p: { ...champ } }, { r: 8, p: { ...champ } },
+              { r: 7, p: { ...mean, 'movement.standoff': 150 } }]
+    };
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
+        storage: { pineBotUCB_v5_pat: JSON.stringify(locked) } });
+    setTimeout(() => {
+        pineBot.stop();
+        const L = pineBot.learn();
+        test('a collapsed store is detected and the search reopened', () =>
+            assert.ok(L.cem.restarts >= 1, 'restarts ' + L.cem.restarts));
+        test('sigma is no longer at the floor', () =>
+            assert.ok(pineBot.test.sigmasAtFloor() < 0.2, 'atFloor ' + pineBot.test.sigmasAtFloor()));
+        test('the restart keeps the mean', () =>
+            assert.ok(Math.abs(L.cem.mean['movement.standoff'] - 120) < 1e-6));
+        test('the restart prunes the cloned hall of fame to one entry', () =>
+            assert.strictEqual(L.hof.length, 1));
+        test('a one-dimension difference is NOT treated as the same point', () =>
+            assert.ok(pineBot.test.paramDist(mean, { ...mean, 'movement.standoff': 150 }) > 0.1));
+        test('deepFocusLv is clamped into the tightened box', () =>
+            assert.ok(L.cem.mean['strategy.deepFocusLv'] <= 4 + 1e-9, L.cem.mean['strategy.deepFocusLv']));
+        test('identical vectors are the same hof point, not two', () =>
+            assert.ok(pineBot.test.paramDist(champ, { ...champ }) === 0));
+        test('a replayed champion re-estimates instead of cloning itself', () => {
+            const before = L.hof.length, nBefore = L.hof[0].n || 1;
+            pineBot.test.hofRecord(2, { ...L.hof[0].p });     // champion replay, poor result
+            pineBot.test.hofRecord(2, { ...L.hof[0].p });
+            const h = pineBot.learn().hof;
+            assert.strictEqual(h.length, before, 'hof grew to ' + h.length);
+            assert.strictEqual(h[0].n, nBefore + 2, 'observations ' + h[0].n);
+            assert.ok(h[0].r < h[0].best, 'mean ' + h[0].r + ' best ' + h[0].best);
+        });
+        test('sampling actually explores again', () => {
+            const a = pineBot.test.sampleParams(), b = pineBot.test.sampleParams();
+            assert.ok(Math.abs(a['movement.standoff'] - b['movement.standoff']) > 1e-6);
+        });
+        done();
+    }, 2200);
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -856,4 +917,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

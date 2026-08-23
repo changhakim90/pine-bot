@@ -346,7 +346,11 @@
             lastPlan: lastPlan && lastPlan.diag,
             learning: {
                 runs: learn.runs, totalPicks: learn.totalPicks, baseline: baseline(),
-                hallOfFame: learn.hof.map(h => +h.r.toFixed(3)),
+                hallOfFame: learn.hof.map(h => ({ mean: +h.r.toFixed(3), n: h.n || 1, best: +(h.best || h.r).toFixed(3) })),
+                hofDistinct: learn.hof.length,
+                sigmaAtFloor: +sigmasAtFloor().toFixed(2),
+                restarts: (learn.cem && learn.cem.restarts) || 0,
+                stalledGens: (learn.cem && learn.cem.stall) || 0,
                 championRun,
                 improvementCurve: learn.genHistory.slice(-12),
                 lastGradient: learn.lastGradient || null,
@@ -506,6 +510,7 @@
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
+                restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
                 noteVersion,                           // pineBot.noteVersion('6.74.0', { bestTimeS: 15150, note: '...' })
                 table: () => { try { console.table(versionRows().map(r => ({ version: r.version, status: r.status, runs: r.runs, medianMin: r.medianTimeS == null ? null : +(r.medianTimeS / 60).toFixed(1), meanMin: r.meanTimeS == null ? null : +(r.meanTimeS / 60).toFixed(1), sdMin: r.sdTimeS == null ? null : +(r.sdTimeS / 60).toFixed(1), p60: r.p60, p120: r.p120, bestMin: r.bestTimeS == null ? null : +(r.bestTimeS / 60).toFixed(1), hell: r.hellRate, z: r.vsPrev ? r.vsPrev.z : null, verdict: r.vsPrev ? r.vsPrev.verdict : '', note: r.note || '' }))); } catch (e) { } return versionRows(); },
@@ -531,6 +536,7 @@
                     hitTypes: () => Object.assign({}, hitTypeRun),
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
+                    sigmasAtFloor, paramDist, hofRecord,
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };

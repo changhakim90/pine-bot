@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.85.23
+// @version      6.86.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.85.23';
+    const SCRIPT_VERSION = '6.86.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -306,6 +306,11 @@
             eliteFrac: 0.3,        // top fraction of the batch that shapes the refit
             sigmaInit: 0.25,       // initial exploration: fraction of each param's range
             sigmaFloor: 0.05,      // exploration never collapses below this
+            // v6.86.0 anti-lockup (see 02-learning: hofRecord / maybeRestart)
+            hofMergeDist: 0.02,    // hof vectors closer than this (mean |delta|/range) are the SAME point
+            autoRestart: true,
+            restartAfterStalledGens: 6,
+            restartSigma: 0.25,    // reopened sigma as a fraction of each box
             anneal: 0.98,          // per-generation exploration shrink: each iteration refines, not re-guesses
             deathNudge: 0.03,      // per-generation defensive push against the dominant killer
             // roster bandit (rosterExperiment): explore/exploit over WHOLE
@@ -322,7 +327,7 @@
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
         // strategy itself — not just the dodge physics — improves across runs.
         strategy: {
-            deepFocusLv: 5,        // no new cocktail while an owned one is below this level
+            deepFocusLv: 4,        // v6.86.0 (was 5): above 4 the roster never completes a super recipe
             roadmapBonus: 16,      // pull toward the USER'S prescribed rainbow roster
             earlyDps: 12,          // extra weight on leveling owned weapons early
             expandPenalty: 20,     // deep-focus penalty on new cocktails
@@ -663,7 +668,13 @@
         'threat.markWeight': { min: 5.0, max: 20.0 },   // measured mark damage ~93: two landings can end a run
         'threat.lineWeight': { min: 2.0, max: 9.0 },
         // strategy weights — the win strategy itself evolves across runs
-        'strategy.deepFocusLv': { min: 2, max: 6 },
+        // v6.86.0: ceiling 6 -> 4. The mean sat at 5.63 (0.89 of the old box):
+        // "no new cocktail while an owned one is below level 6" poured every
+        // pick into the first cocktail offered and starved the super recipes
+        // — 90% of the measured runs finished with ZERO supers and 14
+        // distinct primaries in 30 runs. The box can no longer hold a
+        // build-starving value.
+        'strategy.deepFocusLv': { min: 2, max: 4 },
         'strategy.roadmapBonus': { min: 10, max: 24 },   // floored: the prescribed roster stays dominant
         'strategy.earlyDps': { min: 4, max: 24 },
         'strategy.expandPenalty': { min: 8, max: 30 },
@@ -1323,6 +1334,16 @@
                 for (const k of Object.keys(tbl)) if (bad(tbl[k])) delete tbl[k];
             }
             if (bad(c.ss)) c.ss = 1;
+            // v6.86.0: means drift outside their box when a TUNABLE bound is
+            // tightened (deepFocusLv 6 -> 4 this version). Clamp, don't drop.
+            for (const k of Object.keys(TUNABLE)) {
+                const spec = TUNABLE[k];
+                if (isFinite(c.mean[k])) c.mean[k] = Math.min(spec.max, Math.max(spec.min, c.mean[k]));
+            }
+            // legacy hof entries predate mean-tracking: give them one observation
+            if (Array.isArray(learn.hof)) for (const h of learn.hof) {
+                if (!isFinite(h.n)) { h.n = 1; h.sum = h.r; h.best = h.r; }
+            }
             const clean = arr => Array.isArray(arr) ? arr.map(e => {
                 if (e && e.p) for (const k of Object.keys(e.p)) if (bad(e.p[k])) delete e.p[k];
                 return e;
@@ -1334,6 +1355,58 @@
             // future version applies them again. Cleared once here.
             if (learn.enemyTypeMul) delete learn.enemyTypeMul;
         } catch (e) { }
+    }
+
+    // v6.86.0 RESTART. Even with a deduped hof a CEM can converge into a bad
+    // basin: sigma anneals to the floor, the mean welds in place, and every
+    // later run is a +/-5% jitter around a policy that is merely locally best.
+    // The measured store had all 24 sigmas at the floor with a flat median
+    // across its last 600 runs. When exploration is dead AND the batch mean
+    // has stopped improving, re-open the search (standard CMA restart): wide
+    // sigma again, step size reset, path cleared, hof pruned to its best
+    // entry so the next generation cannot be re-anchored by the same point.
+    // The mean is KEPT — this re-explores around the current best guess, it
+    // does not throw the tuning away.
+    function sigmasAtFloor() {
+        const c = learn.cem, keys = Object.keys(TUNABLE);
+        let atFloor = 0, n = 0;
+        for (const k of keys) {
+            const spec = TUNABLE[k], range = spec.max - spec.min;
+            if (!isFinite(c.sigma[k]) || range <= 0) continue;
+            n++;
+            if (c.sigma[k] <= range * CONFIG.learning.sigmaFloor * 1.02) atFloor++;
+        }
+        return n ? atFloor / n : 0;
+    }
+    function restartSearch(why) {
+        const c = learn.cem;
+        for (const k of Object.keys(TUNABLE)) {
+            const spec = TUNABLE[k];
+            c.sigma[k] = (spec.max - spec.min) * CONFIG.learning.restartSigma;
+        }
+        c.ss = 1; c.pc = {}; c.batch = [];
+        delete c.prevBatchMean;
+        c.stall = 0;
+        c.restarts = (c.restarts || 0) + 1;
+        c.lastRestartRun = learn.runs;
+        // keep only the single best entry: three near-identical elites are how
+        // the search died in the first place
+        learn.hof = learn.hof.slice(0, 1);
+        log('CEM RESTART (' + why + ') — sigma reopened to ' + Math.round(CONFIG.learning.restartSigma * 100) +
+            '% of range, hof pruned to best, restart #' + c.restarts);
+        saveLearn();
+        return { restarts: c.restarts, why: why, gen: c.gen, runs: learn.runs };
+    }
+    function maybeRestart(batchMean) {
+        const c = learn.cem, L = CONFIG.learning;
+        if (!L.autoRestart) return;
+        const dead = sigmasAtFloor() >= 0.8;
+        const improved = !isFinite(c.bestBatchMean) || batchMean > c.bestBatchMean + 1e-6;
+        if (improved) c.bestBatchMean = batchMean;
+        // a generation only counts as stalled when exploration is dead AND it
+        // failed to beat the best batch this search has produced
+        c.stall = (dead && !improved) ? (c.stall || 0) + 1 : 0;
+        if (c.stall >= L.restartAfterStalledGens) restartSearch('stalled ' + c.stall + ' generations at the sigma floor');
     }
 
     function gauss() {
@@ -1365,6 +1438,7 @@
         // before this run counts itself in.
         learn = loadLearn();
         sanitizeCem();   // v6.85.23: purge NaN-poisoned CEM state + stale enemyTypeMul every trial
+        repairCollapsedStore();   // v6.86.0: reopen a store that arrived already locked at the sigma floor
         learn.runs++;
         if (learn.runs <= CONFIG.learning.tuningWarmupRuns) {
             championRun = false;
@@ -1381,15 +1455,98 @@
         applyParams(trialParams);
         saveLearn();
     }
+    // v6.86.0 ONE-TIME REPAIR: a store that arrives already collapsed (every
+    // sigma at the floor, duplicate hof entries) would otherwise need ~40
+    // stalled generations before the auto-restart notices. Detect it once per
+    // store on first load and reopen the search immediately.
+    function repairCollapsedStore() {
+        try {
+            const c = learn && learn.cem;
+            if (!c || !c.mean || c.repaired6860) return;
+            c.repaired6860 = true;
+            const dupes = (() => {
+                let d = 0;
+                for (let i = 0; i < learn.hof.length; i++)
+                    for (let j = i + 1; j < learn.hof.length; j++)
+                        if (paramDist(learn.hof[i].p, learn.hof[j].p) < CONFIG.learning.hofMergeDist) d++;
+                return d;
+            })();
+            // always collapse duplicate hof entries into one (merging their
+            // observations); the clones are what welded the refit in place
+            if (dupes) {
+                const kept = [];
+                for (const h of learn.hof) {
+                    const twin = kept.find(x => paramDist(x.p, h.p) < CONFIG.learning.hofMergeDist);
+                    if (twin) {
+                        twin.n = (twin.n || 1) + (h.n || 1);
+                        twin.sum = (isFinite(twin.sum) ? twin.sum : twin.r) + (isFinite(h.sum) ? h.sum : h.r);
+                        twin.r = +(twin.sum / twin.n).toFixed(4);
+                        twin.best = Math.max(twin.best || twin.r, h.best || h.r);
+                    } else kept.push(h);
+                }
+                learn.hof = kept;
+                log('hof deduped: ' + dupes + ' duplicate pair(s) merged -> ' + kept.length + ' distinct vectors');
+            }
+            if (sigmasAtFloor() >= 0.8) restartSearch('collapsed store on load (' + dupes + ' duplicate hof entries)');
+            else saveLearn();
+        } catch (e) { }
+    }
+    // v6.86.0 HALL-OF-FAME REPAIR. Measured failure (6.85.23, n=3373): the
+    // hof held FOUR distinct vectors in five slots because every 4th run
+    // replays hof[0] and, scoring above the 5th slot, re-inserted its own
+    // clone. refitCem takes hof.slice(0,3) as three of its five elites, so a
+    // duplicated champion owned 60% of the refit; elite sd went to ~0 and all
+    // 24 sigmas pinned to the floor. The search stopped searching at gen 425.
+    // Two changes fix it structurally:
+    //   1. entries are UNIQUE vectors (a near-duplicate merges instead of
+    //      pushing), so three hof elites are always three real points;
+    //   2. an entry scores on the MEAN of every run that played it, not on
+    //      the single lucky draw that created it. A champion replay now
+    //      RE-ESTIMATES the champion; a fluke demotes itself over a few
+    //      replays instead of anchoring the refit forever.
+    function paramDist(a, b) {
+        // LARGEST normalised gap on any single dimension (Chebyshev), not the
+        // mean: averaging over 24 dimensions would call two vectors identical
+        // when one parameter differs by a seventh of its box, which is a
+        // genuinely different policy. Two points are the same only when EVERY
+        // dimension agrees.
+        let worst = 0, n = 0;
+        for (const k of Object.keys(TUNABLE)) {
+            const spec = TUNABLE[k], range = spec.max - spec.min;
+            const x = a && a[k], y = b && b[k];
+            if (!isFinite(x) || !isFinite(y) || range <= 0) continue;
+            worst = Math.max(worst, Math.abs(x - y) / range); n++;
+        }
+        return n ? worst : 1;
+    }
+    function hofRecord(reward, params) {
+        const r = +reward.toFixed(4);
+        // merge into the nearest entry if this vector is effectively the same
+        let near = null, nearD = Infinity;
+        for (const h of learn.hof) {
+            const d = paramDist(h.p, params);
+            if (d < nearD) { nearD = d; near = h; }
+        }
+        if (near && nearD < CONFIG.learning.hofMergeDist) {
+            near.n = (near.n || 1) + 1;
+            near.sum = (isFinite(near.sum) ? near.sum : near.r) + r;
+            near.r = +(near.sum / near.n).toFixed(4);
+            near.best = Math.max(isFinite(near.best) ? near.best : near.r, r);
+        } else {
+            learn.hof.push({ r, p: params, n: 1, sum: r, best: r });
+        }
+        // rank on the MEAN estimate, not on a single outlier run
+        learn.hof.sort((a, b) => b.r - a.r);
+        learn.hof = learn.hof.slice(0, 5);
+    }
     function endTrial(reward) {
         if (!trialParams) return;
         const c = learn.cem;
-        c.batch.push({ r: +reward.toFixed(4), p: trialParams, d: lastDeathCause });
-        // Hall of fame: keep the top-5 runs EVER. Every refit anchors toward
-        // them, so no generation can drift away from proven winners.
-        learn.hof.push({ r: +reward.toFixed(4), p: trialParams });
-        learn.hof.sort((a, b) => b.r - a.r);
-        learn.hof = learn.hof.slice(0, 5);
+        c.batch.push({ r: +reward.toFixed(4), p: trialParams, d: lastDeathCause, champ: championRun });
+        // A champion replay carries no NEW vector — it is a fresh measurement
+        // of one the hof already holds, so it updates that entry's mean and
+        // can never clone it.
+        hofRecord(reward, trialParams);
         trialParams = null;
         if (c.batch.length >= CONFIG.learning.batchSize) refitCem();
         applyParams(c.mean);
@@ -1442,6 +1599,7 @@
                 : Math.max(0.55, c.ss * 0.94);
         }
         c.prevBatchMean = batchMean;
+        maybeRestart(batchMean);
         // Which hazard dominated this batch's deaths? Needed before the
         // gradient runs so its defence parameters can be shielded.
         const causeCount = {};
@@ -1455,7 +1613,15 @@
         // says which way reward rises. A bounded correlation step per
         // parameter lets every run inform the move, not just the top 30%.
         const all = c.batch.concat(learn.hof.slice(0, 3));
-        const rMean = all.reduce((a, e) => a + e.r, 0) / all.length;
+        // v6.86.0: correlate against RANK, not raw reward. Survival time is
+        // outlier-dominated (one 14000s run outweighs forty 900s runs), so a
+        // Pearson step on raw reward fits whichever run got lucky with its
+        // cocktail pool. Ranks make the gradient care about ordering only.
+        const byR = [...all].sort((a, b) => a.r - b.r);
+        const rankOf = new Map();
+        byR.forEach((e, i) => rankOf.set(e, all.length > 1 ? i / (all.length - 1) - 0.5 : 0));
+        for (const e of all) e._q = rankOf.get(e);
+        const rMean = 0;
         const gradMoves = [];
         for (const k of Object.keys(TUNABLE)) {
             const spec = TUNABLE[k], range = spec.max - spec.min;
@@ -1463,7 +1629,7 @@
             for (const e of all) {
                 const pv = e.p && isFinite(e.p[k]) ? e.p[k] : null;
                 if (pv == null) continue;
-                const dp = pv - c.mean[k], dr = e.r - rMean;
+                const dp = pv - c.mean[k], dr = e._q - rMean;
                 cov += dp * dr; varP += dp * dp; varR += dr * dr;
             }
             if (varP > 1e-9 && varR > 1e-9) {
@@ -5416,7 +5582,11 @@
             lastPlan: lastPlan && lastPlan.diag,
             learning: {
                 runs: learn.runs, totalPicks: learn.totalPicks, baseline: baseline(),
-                hallOfFame: learn.hof.map(h => +h.r.toFixed(3)),
+                hallOfFame: learn.hof.map(h => ({ mean: +h.r.toFixed(3), n: h.n || 1, best: +(h.best || h.r).toFixed(3) })),
+                hofDistinct: learn.hof.length,
+                sigmaAtFloor: +sigmasAtFloor().toFixed(2),
+                restarts: (learn.cem && learn.cem.restarts) || 0,
+                stalledGens: (learn.cem && learn.cem.stall) || 0,
                 championRun,
                 improvementCurve: learn.genHistory.slice(-12),
                 lastGradient: learn.lastGradient || null,
@@ -5576,6 +5746,7 @@
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
+                restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
                 noteVersion,                           // pineBot.noteVersion('6.74.0', { bestTimeS: 15150, note: '...' })
                 table: () => { try { console.table(versionRows().map(r => ({ version: r.version, status: r.status, runs: r.runs, medianMin: r.medianTimeS == null ? null : +(r.medianTimeS / 60).toFixed(1), meanMin: r.meanTimeS == null ? null : +(r.meanTimeS / 60).toFixed(1), sdMin: r.sdTimeS == null ? null : +(r.sdTimeS / 60).toFixed(1), p60: r.p60, p120: r.p120, bestMin: r.bestTimeS == null ? null : +(r.bestTimeS / 60).toFixed(1), hell: r.hellRate, z: r.vsPrev ? r.vsPrev.z : null, verdict: r.vsPrev ? r.vsPrev.verdict : '', note: r.note || '' }))); } catch (e) { } return versionRows(); },
@@ -5601,6 +5772,7 @@
                     hitTypes: () => Object.assign({}, hitTypeRun),
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
+                    sigmasAtFloor, paramDist, hofRecord,
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };

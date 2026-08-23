@@ -304,6 +304,11 @@
             eliteFrac: 0.3,        // top fraction of the batch that shapes the refit
             sigmaInit: 0.25,       // initial exploration: fraction of each param's range
             sigmaFloor: 0.05,      // exploration never collapses below this
+            // v6.86.0 anti-lockup (see 02-learning: hofRecord / maybeRestart)
+            hofMergeDist: 0.02,    // hof vectors closer than this (mean |delta|/range) are the SAME point
+            autoRestart: true,
+            restartAfterStalledGens: 6,
+            restartSigma: 0.25,    // reopened sigma as a fraction of each box
             anneal: 0.98,          // per-generation exploration shrink: each iteration refines, not re-guesses
             deathNudge: 0.03,      // per-generation defensive push against the dominant killer
             // roster bandit (rosterExperiment): explore/exploit over WHOLE
@@ -320,7 +325,7 @@
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
         // strategy itself — not just the dodge physics — improves across runs.
         strategy: {
-            deepFocusLv: 5,        // no new cocktail while an owned one is below this level
+            deepFocusLv: 4,        // v6.86.0 (was 5): above 4 the roster never completes a super recipe
             roadmapBonus: 16,      // pull toward the USER'S prescribed rainbow roster
             earlyDps: 12,          // extra weight on leveling owned weapons early
             expandPenalty: 20,     // deep-focus penalty on new cocktails
@@ -661,7 +666,13 @@
         'threat.markWeight': { min: 5.0, max: 20.0 },   // measured mark damage ~93: two landings can end a run
         'threat.lineWeight': { min: 2.0, max: 9.0 },
         // strategy weights — the win strategy itself evolves across runs
-        'strategy.deepFocusLv': { min: 2, max: 6 },
+        // v6.86.0: ceiling 6 -> 4. The mean sat at 5.63 (0.89 of the old box):
+        // "no new cocktail while an owned one is below level 6" poured every
+        // pick into the first cocktail offered and starved the super recipes
+        // — 90% of the measured runs finished with ZERO supers and 14
+        // distinct primaries in 30 runs. The box can no longer hold a
+        // build-starving value.
+        'strategy.deepFocusLv': { min: 2, max: 4 },
         'strategy.roadmapBonus': { min: 10, max: 24 },   // floored: the prescribed roster stays dominant
         'strategy.earlyDps': { min: 4, max: 24 },
         'strategy.expandPenalty': { min: 8, max: 30 },
