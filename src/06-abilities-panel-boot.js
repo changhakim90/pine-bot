@@ -678,6 +678,11 @@
                     sigmasAtFloor, paramDist, hofRecord,
                     charProfile: charOf,
                     setChar: b => { if (CHARS[b]) activeChar = b; },
+                    // v6.86.11: the pat/minguk rotation is testable — the pin
+                    // was lifted, and a rotation that silently stops rotating
+                    // is exactly the 6.85.0 bug that cost a hundred runs.
+                    activeChar: () => activeChar,
+                    nextRotationChar, chooseBartender,
                     resetUltGate: () => { lastUlt = 0; }, resetPoTracking,
                     reloadLearn: () => { learn = loadLearn(); }
                 }

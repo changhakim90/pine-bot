@@ -154,7 +154,24 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // v6.85.3 (user directive): PIN PAT. No rotation.
+        // v6.86.11 (user directive): ROTATE PAT / MINGUK again. The pin below
+        // is lifted — `preferredBartender: null` hands selection to
+        // `bartenderRotation`, which alternates run by run and is persisted in
+        // localStorage `pineBotRotIdx`, so it survives reloads mid-sequence.
+        // Each bartender keeps its OWN CEM store (`pineBotUCB_v5_pat` /
+        // `_minguk`) and its own `compare()` rows, so this costs no history and
+        // gives a CONCURRENT control instead of the historical one: everything
+        // shipped since 6.86.2 was measured against minguk runs from a
+        // different fortnight of the meta.
+        // Halves the sample rate per character — expect ~2x the runs before a
+        // z-score on either row means anything.
+        // The 6.86.x doctrine is already per-character and needs no rework:
+        // the tank bonuses all gate on `charOf().style === 'tank'` (minguk is
+        // a runner, so first-super / ult-spine / armour-early / TOMATO JUICE /
+        // mitigation are inert for him), and the ult doctrine reads `ultKind`
+        // — minguk's `nuke` clears passouts at ANY range and never consults
+        // `ultAdjacent`, which is pat's melee-spray gate.
+        // v6.85.3 (superseded): PIN PAT. No rotation.
         // 6.85.2 had pat/minguk alternating so minguk acted as a live control.
         // That is now dropped in favour of sample rate: every run lands on the
         // freshly recalibrated tank, so his median/day-clear/mark-share move
@@ -164,9 +181,9 @@
         // pinned every run is on the weaker profile and crown odds are lower.
         // minguk still has ~600 runs of history to compare against, so the
         // control is historical rather than concurrent.
-        // To restore the A/B: set preferredBartender back to null. The
-        // rotation list below is inert while a bartender is pinned.
-        preferredBartender: 'pat',
+        // To re-pin: set preferredBartender back to 'pat' (or 'minguk'), which
+        // makes the rotation list inert.
+        preferredBartender: null,
         bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set

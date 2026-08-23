@@ -86,7 +86,9 @@ if (which === 'pat-profile') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
     const prof = () => global.window.pineBotStats().charProfile;
-    test('pat is pinned as the active bartender', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
+    // v6.86.11: pat is no longer pinned — he leads the pat/minguk rotation,
+    // so a fresh boot still starts on him and this profile still applies.
+    test('pat leads the rotation, so boot starts on him', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
     test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
     test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
     test('pat day ring tightens 165 -> 90 -> 80', () => {
@@ -1243,4 +1245,97 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.86.11 — the pat/minguk rotation (user: "rotate between minguk and pat
+// now"). 6.85.0 shipped a rotation that never rotated, so the mechanism gets
+// asserted directly rather than inferred from a config value.
+if (which === 'rotation') {
+    const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    test('the pin is lifted — rotation drives selection', () =>
+        assert.strictEqual(pineBot.config.preferredBartender, null));
+    test('the rotation is pat and minguk (joe stays retired)', () =>
+        assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'minguk']));
+    test('boot lands on the head of the rotation', () =>
+        assert.strictEqual(T.activeChar(), 'pat'));
+    // The sequence as the RUN LOOP sees it. Asserting nextRotationChar()
+    // alone would be toothless — it alternates even while a pin is in force,
+    // which is exactly how 6.85.0's dead rotation passed review. chooseBartender()
+    // is the function that consults the pin.
+    const seq = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
+    test('successive runs alternate instead of repeating', () =>
+        assert.deepStrictEqual(seq, ['pat', 'minguk', 'pat', 'minguk'], seq.join(',')));
+    test('the position is persisted, so a reload resumes mid-sequence', () =>
+        assert.strictEqual(String(store.pineBotRotIdx), '0', 'idx ' + store.pineBotRotIdx));
+    done();
+}
+
+// v6.86.11 — a resumed rotation, and what switching character switches with it
+if (which === 'rotation-resume') {
+    const { pineBot } = makeEnv({
+        script: SCRIPT, game: { state: 'playing', gameTime: 900 },
+        storage: { pineBotRotIdx: '1' }
+    });
+    pineBot.stop();
+    const T = pineBot.test;
+    test('a stored index resumes where the last session stopped', () =>
+        assert.strictEqual(T.nextRotationChar(), 'minguk'));
+    // switching bartender must switch the learned store with it, or the two
+    // characters' CEM samples pollute each other
+    T.setChar('minguk'); T.reloadLearn();
+    const mingukStore = pineBot.learn().bartender;
+    T.setChar('pat'); T.reloadLearn();
+    const patStore = pineBot.learn().bartender;
+    test('each bartender loads its own learned store', () =>
+        assert.ok(mingukStore === 'minguk' && patStore === 'pat', mingukStore + ' / ' + patStore));
+    // `pineBot.tag` is stamped once at boot; the per-run tag comes from
+    // pineBotStats(), which reads the live bartender.
+    test('the version tag separates the two rows in compare()', () => {
+        T.setChar('minguk');
+        const mTag = global.window.pineBotStats().version;
+        T.setChar('pat');
+        const pTag = global.window.pineBotStats().version;
+        assert.notStrictEqual(mTag, pTag, 'both tagged ' + mTag);
+        assert.ok(/minguk/.test(mTag) && /pat/.test(pTag), mTag + ' / ' + pTag);
+    });
+    done();
+}
+
+// v6.86.11 — the 6.86.x tank doctrine must not follow minguk around. Every
+// bonus written for pat gates on style === 'tank'; minguk is a runner.
+if (which === 'rotation-doctrine') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const tomato = () => T.scoreCard({ n: 'TOMATO JUICE', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+    const firstSuper = () => T.scoreCard({ n: 'SUPER VODKA MARTINI', type: 'super', lv: 0, maxlv: 6 }, 0, []);
+    T.setChar('pat');
+    const patTomato = tomato(), patSuper = firstSuper();
+    T.setChar('minguk');
+    const mgTomato = tomato(), mgSuper = firstSuper();
+    test('pat pays the ult-cadence premium on TOMATO JUICE', () =>
+        assert.ok(/tank-ult-cadence/.test(patTomato.why), patTomato.why));
+    test('minguk does not — the tank tilt is inert for a runner', () =>
+        assert.ok(!/tank-/.test(mgTomato.why), mgTomato.why));
+    test('nor does he pay the tank first-super premium', () =>
+        assert.ok(!/tank-first-super/.test(mgSuper.why), mgSuper.why));
+    test('pat still does', () =>
+        assert.ok(/tank-first-super/.test(patSuper.why), patSuper.why));
+    // and the ult doctrine is per-character: the 6.86.10 ultAdjacent widening
+    // is pat's melee gate, and must not narrow minguk's nuke
+    T.setChar('minguk');
+    const mg = T.charProfile();
+    T.setChar('pat');
+    const pat = T.charProfile();
+    test("minguk's nuke has unlimited reach", () =>
+        assert.strictEqual(mg.ultReach, Infinity));
+    test('and clears passouts, which pat\'s spray does not', () =>
+        assert.ok(mg.ultClearsPassouts === true && pat.ultClearsPassouts === false));
+    test('the 6.86.10 widening applies to the melee gate only', () =>
+        assert.strictEqual(pineBot.config.abilities.ultAdjacent, 155));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
