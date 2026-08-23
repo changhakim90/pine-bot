@@ -47,6 +47,8 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.86.6+crown | — | | | | | | | Demo digest split by phase (day / hell / deep) + 40 ult uses + mid-run start marker. No behaviour change — the 90-minute demo validated the existing time-stop doctrine. |
 | 6.86.7+crown | — | | | | | | | **Flame cross was dead code**: `fireCrossUntil` is a gameTime deadline, compared against `frame` since 6.85.9 — always false. Fixed, and the burn re-modelled as the directional flamethrower it is (aim the stream, don't hug). |
 | 6.86.8+crown | — | | | | | | | CORPSE REVIVER No.2 + ABSINTHE demoted to the bottom of the junk tier (user: they can't damage holdouts). |
+| 6.86.9+crown | — | | | | | | | Rainbow Gun **banned outright** (above the learned policy and the timing window); its +0.5 reward milestone zeroed; `strategy.rainbowReadyS` removed from the CEM search as a dead dimension. |
+| 6.86.10+crown | — | | | | | | | Manual demo #4 (62:51) settles the ult-range question: cast effectiveness is a **range** limit, not a damage limit. 9 casts with a body within 160px removed HP every time (1.24M @62px, 1.89M @50px, both at ult **lv3**); 3 casts beyond 160px removed nothing (7.3M @222px, 44.7M @223px, both lv6). `ultAdjacent` widened 130 → 155. Also the first non-zero `flameShare` ever recorded (0.227), confirming the 6.86.7 gameTime units fix. |
 
 ## 6.85.23 — EMERGENCY: 6.85.22 postmortem and repair
 

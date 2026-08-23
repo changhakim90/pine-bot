@@ -139,6 +139,15 @@
                 // after. Before the window the card scores below the re-roll
                 // threshold, so weak pools get re-rolled instead of pulling
                 // the trigger early.
+                // v6.86.9 (user): "rainbow gun should be explicitly banned
+                // from being built — there's enough choices on the weapon and
+                // ingredients roster to avoid that". The gun REPLACES the base
+                // attack (`if(player.rainbow){ fireRainbow(); return; }`) and
+                // a fresh one is weaker than the build it replaces, so runs
+                // were ending shortly after it appeared. This is no longer a
+                // learned policy or a timing window — it is a ban. Only a pool
+                // with literally nothing else can force it.
+                if (CONFIG.banRainbowGun) { add(-1000, 'gun-BANNED'); break; }
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
                 if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 // v6.85.21 (user: "rainbowgun is still appearing"). Skip

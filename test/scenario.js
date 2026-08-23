@@ -770,6 +770,22 @@ if (which === 'gun-veto') {
     const filler = { n: 'GINGER BEER', type: 'passive', lv: 0, maxlv: 6 };   // day-banned, scores negative
     const g = pineBot.test.scoreCard(gun, 0, [gun, filler]);
     const f = pineBot.test.scoreCard(filler, 1, [gun, filler]);
+    test('the gun is banned outright, not merely policy-vetoed', () => {
+        const g = pineBot.test.scoreCard({ n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 6 }, 0, []);
+        assert.ok(/gun-BANNED/.test(g.why), g.why);
+        assert.ok(g.score < -500, 'score ' + g.score);
+    });
+    test('the ban outranks the learned policy and the timing window', () => {
+        // even inside the old 25-30 min "take" window, with the policy set to
+        // take, the ban still wins — it is not a tuning knob any more
+        global.gameTime = 1700;
+        pineBot.config.rainbowPolicyOverride = 'take';
+        const g = pineBot.test.scoreCard({ n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 6 }, 0, []);
+        pineBot.config.rainbowPolicyOverride = 'skip';
+        assert.ok(/gun-BANNED/.test(g.why), g.why);
+    });
+    test('taking the gun no longer pays the optimiser', () =>
+        assert.strictEqual(pineBot.config.milestones.rainbow, 0));
     test('with skip policy the gun scores a hard veto (< -100)', () =>
         assert.ok(g.score < -100, 'gun ' + g.score + ' (' + g.why + ')'));
     test('even a day-banned filler outbids the vetoed gun', () =>

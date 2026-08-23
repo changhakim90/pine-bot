@@ -204,6 +204,8 @@
         // build rides maxed supers + time stops instead. (Set to null to
         // hand the choice back to the learned take/skip bandit.)
         rainbowPolicyOverride: 'skip',
+        // v6.86.9: a hard ban, above the learned policy and the timing window.
+        banRainbowGun: true,
 
         // HELL UNBAN (v6.83.0): ingredients that leave the avoid list and
         // join the plan the moment a run is in hell. GINGER BEER = MOSCOW
@@ -345,8 +347,17 @@
             ultCrowd: 9,           // enemies inside nearbyRadius
             ultHpRatio: 0.4,
             // v6.86.1: how close a target must be for a NON-nuke ult to be
-            // worth spending on it (pat's spray / joe's spikes are melee)
-            ultAdjacent: 130
+            // worth spending on it (pat's spray / joe's spikes are melee).
+            // v6.86.10 widened 130 -> 155 on the fourth manual demo, which
+            // settles the question of whether the spray can kill grown
+            // passouts. It can — the limit is RANGE, not damage:
+            //   9 casts with a body within 160px removed HP EVERY time,
+            //     including 1.24M at 62px and 1.89M at 50px, both at ult lv3
+            //   3 casts with the nearest body beyond 160px removed nothing
+            //     (7.3M unchanged at 222px, 44.7M unchanged at 223px — both lv6)
+            // The two effective casts furthest out were 136px and 153px, so
+            // the useful edge sits just under 160.
+            ultAdjacent: 155
         },
 
         learning: {
@@ -408,7 +419,9 @@
         // win condition, so it must never stop producing gradient — a run at
         // the crown scores +2.0 here, a run at half the crown +1.0, and there
         // is no ceiling above it.
-        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0.5, hellDepth: 0.25, crownProgress: 2.0 },
+        // v6.86.9: `rainbow` was worth +0.5 of a ~2.0 reward — the optimiser
+        // was being PAID for the thing the scoring vetoes. Zeroed.
+        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0, hellDepth: 0.25, crownProgress: 2.0 },
 
         hellModeRegex: /\bHELL\b/i,
         stopOnHellRecord: true,
@@ -760,7 +773,10 @@
         'strategy.earlyDps': { min: 4, max: 24 },
         'strategy.expandPenalty': { min: 8, max: 30 },
         'strategy.dpsDeficitGain': { min: 10, max: 40 },
-        'strategy.rainbowReadyS': { min: 1450, max: 1800 },   // hard 25-30 min band (user) — no late drift
+        // v6.86.9: `strategy.rainbowReadyS` REMOVED from the search. With the
+        // gun banned the window it describes can never be reached, and it had
+        // been sitting pinned at its box maximum for hundreds of generations
+        // — a dead dimension the CEM was still spending samples on.
         'movement.kitePull': { min: 0.5, max: 4.0 },
         'movement.escapePull': { min: 1.5, max: 6.0 },
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
