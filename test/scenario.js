@@ -1338,4 +1338,42 @@ if (which === 'rotation-doctrine') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.86.12 — the tank posture must not follow a runner around. Every one of
+// these came from Pat demos; minguk regressed to dying in the day once he
+// started rotating back in under 6.86 movement.
+if (which === 'runner-posture') {
+    const makeField = () => ({
+        state: 'playing', gameTime: 700,
+        player: { x: 300, y: 300, hp: 100, maxHp: 120, r: 12, speed: 2.375, ultCooldown: 0 },
+        enemies: [
+            { x: 340, y: 300, r: 26, hp: 900000, maxHp: 900000, type: 'passout' },
+            { x: 300, y: 345, r: 26, hp: 900000, maxHp: 900000, type: 'passout' }
+        ]
+    });
+    const plan = char => {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: makeField() });
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        pineBot.test.setChar(char);
+        pineBot.test.setOwned({ OLIVE: 4, NEGRONI: 4 });   // armorConf well over the 0.05 gate
+        global.player.ultReadyAt = 0;                      // ult up: the harvest window is open
+        let pl; for (let i = 0; i < 8; i++) pl = pineBot.test.planMove();
+        return pl;
+    };
+    const pat = plan('pat'), mg = plan('minguk');
+    test('the tank plants on the holdout he is armoured for', () =>
+        assert.strictEqual(pat.holdoutAnchor, true, JSON.stringify(pat.holdoutAnchor)));
+    test('the runner does NOT inherit that licence', () =>
+        assert.strictEqual(mg.holdoutAnchor, false, 'minguk anchored on a holdout'));
+    test('both read the same armour level, so the gate is the character', () =>
+        assert.ok(pat.armorLv === mg.armorLv, pat.armorLv + ' vs ' + mg.armorLv));
+    // the harvest walk is for melee ults only — the nuke already reaches
+    test('pat banks passouts for his melee spray', () =>
+        assert.strictEqual(pat.ultHarvest, true));
+    test('minguk does not walk into the pile for a nuke that reaches anyway', () =>
+        assert.strictEqual(mg.ultHarvest, false, 'minguk harvested for a nuke'));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

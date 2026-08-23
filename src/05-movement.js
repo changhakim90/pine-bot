@@ -766,7 +766,11 @@
         // it drives) is suspended for the window — it would spend joe's eight
         // invulnerable seconds running away from the only thing his spikes
         // can hit.
-        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 - 0.5 * armorConf) * (1 + 0.25 * late);
+        // v6.86.12: armour buying a LATER panic is also tank evidence. On a
+        // runner it delays the one reflex that keeps him alive, so the
+        // softening now follows anchorBias with the rest of the tank posture.
+        const panicArmor = charOf().anchorBias > 0 ? (1 - 0.5 * armorConf) : 1;
+        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * panicArmor * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -985,7 +989,16 @@
         // is why they never finished. With armour bought (OLIVE/NEGRONI) the
         // tank has the licence to plant. Hugging distance, not the old
         // 220px "nearby", is what counts here.
-        const holdoutAnchor = !hpPanic && !markHere && !th.rival && !flight && armorConf > 0.05 &&
+        // v6.86.12 (user: "why has minguk regressed so much? it can't pass
+        // the day time... or dies very early"). The anchor was derived ENTIRELY
+        // from Pat demos — a 180 HP tank with anchorBias 1 and crowdPanic off —
+        // but its only gate was armorConf, which is read off OLIVE/NEGRONI
+        // levels. Minguk's own doctrine rushes exactly those, so a 120 HP
+        // runner with anchorBias 0 and crowdPanic ON inherited a tank's licence
+        // to plant next to holdouts. Evidence gathered on one character should
+        // apply to that character: the anchor now requires anchorBias.
+        const holdoutAnchor = charOf().anchorBias > 0 &&
+            !hpPanic && !markHere && !th.rival && !flight && armorConf > 0.05 &&
             th.passouts.some(po => !po.contested && !po.far &&
                 (Math.hypot(po.x - p.x, po.y - p.y) - po.r) < M.poEngageRange * 0.5);
         const anchor = flameAnchor || holdoutAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
@@ -1031,7 +1044,13 @@
         }
         if (poW) { poCx /= poW; poCy /= poW; }
         // v6.86.4: banking is only worth positioning for when the blast is near
-        const ultHarvest = poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
+        // v6.86.12: banking only makes sense for an ult that must be NEAR its
+        // targets. Minguk's nuke hits every enemy on the field at any range
+        // and explicitly includes passouts, so walking his 120 HP into the
+        // pile at 4x the normal pull weight buys nothing and spends the
+        // spacing that keeps a runner alive. Harvest is for melee ults.
+        const meleeUlt = charOf().ultKind && charOf().ultKind !== 'nuke';
+        const ultHarvest = meleeUlt && poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
             !hpPanic && !markHere && !projHere;
 
         // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
