@@ -155,13 +155,33 @@
             }
             case 'rbstat': add(220, 'rainbow-stat'); break;
             case 'evolve': add(300, 'evolve'); break;
-            case 'super': add(260, 'super'); break;
+            case 'super':
+                add(260, 'super');
+                // v6.86.4: the +120 first-super premium is RETRACTED. The
+                // manual Pat demo reached 19:42 with its FIRST super at 16:49
+                // (3 by the end) — the human's order is armour, then the
+                // ultimate, and supers arrive late on their own. Rushing one
+                // would have cost the OLIVE 6 / NEGRONI 5 / ULT lv5 spine
+                // that actually carried the run.
+                if (charOf().style === 'tank' && supersThisRun === 0) add(20, 'tank-first-super');
+                break;
             case 'ult':
                 // USER DIRECTIVE: the ULTIMATE is the highest-priority pick —
                 // it single-handedly clears passout fields, and maxed by ~20
                 // min it deletes the boss ladder. Only the gun outranks it.
                 add(320, 'ultimate');
                 if (CONFIG.userRoadmap) add(20, 'user-build');
+                // v6.86.4/5: for a TANK the ultimate is the whole passout
+                // economy — two manual demos cleared 41 and ~20 bodies with
+                // nothing else touching them. Each level doubles the spiral
+                // (dmg*9.6*2^(lv-1)), and the premium runs to the CAP: demo 2
+                // reached lv6 by 14:52 and its casts wiped million-HP fields
+                // outright (3->0, 4->0), where its own lv1-lv3 casts had only
+                // chipped a field of 3 down to 1.
+                if (charOf().style === 'tank') {
+                    const ulv = safe(() => player.ultLevel, 1) || 1;
+                    if (ulv < 6) add(40, 'tank-ult-spine');
+                }
                 break;
             case 'base':
                 // USER DIRECTIVE (top of the roadmap): SHAKING levels gate
@@ -359,6 +379,26 @@
             // Applies once a weapon exists (something must still deal damage).
             if (name === 'OLIVE' && gamePhase() === 'early' && ownedCocktailCount() >= 1 && !isMaxed('OLIVE'))
                 add(26, 'olive-first');
+            // v6.86.2 (user: "that was a bad run as I didn't get olives
+            // early"). For a TANK the armour lines are not just survival —
+            // they are the licence for everything else the character does:
+            // the caution discount, the holdout anchor, and standing in the
+            // ult window all key off OLIVE + NEGRONI levels. Armour bought at
+            // minute 2 compounds for the whole run; the same level at minute
+            // 20 buys almost nothing. So the premium is largest at t=0 and
+            // decays to nothing by the finale, and it spans the whole day
+            // rather than stopping at the 'early' bucket's 6-minute edge.
+            // v6.86.5: TOMATO JUICE cuts the ult cooldown (player.ultCdMul).
+            // The two demos differ by exactly this: demo 1 took it four times
+            // and fired every 75s; demo 2 skipped it and fired every 98s —
+            // 14 casts versus 12 over the same 20 minutes. For a bartender
+            // whose passout economy IS the ultimate, cooldown is throughput.
+            if (charOf().style === 'tank' && name === 'TOMATO JUICE' && !atCap) add(14, 'tank-ult-cadence');
+            if (charOf().style === 'tank' && (name === 'OLIVE' || name === 'NEGRONI') && !atCap) {
+                const gtA = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                const decay = Math.max(0, 1 - gtA / 1200);
+                if (decay > 0) add(Math.round(30 * decay), 'tank-armor-early');
+            }
             if (SURVIVAL_INGREDIENTS.includes(name)) {
                 let sb = 10;
                 // SOURCE-VERIFIED SCALING: enemy hp/dmg grow CONTINUOUSLY
@@ -893,6 +933,16 @@
             }
             else if (name === 'COINTREAU') add(-2, 'junk-order:filler');
         }
+        // v6.86.8 (user): "corpse reviver no. 2 and absinthe can't attack
+        // marks, so they should be in the absolute junk pile". The CR line —
+        // the cocktail and the ABSINTHE that keys it — cannot touch the
+        // stationary targets the day is spent on, which the bot already knew
+        // for its zombies ("can hit NEITHER passouts NOR no-booking walls").
+        // Both are already avoid-listed, so they were capped like any junk;
+        // this puts them at the BOTTOM of the junk tier, under COINTREAU and
+        // well under COFFEE BEANS' revive, so a pool of nothing but junk
+        // still picks something that can hit a holdout.
+        if (avoidJunk && DEAD_VS_HOLDOUTS.has(name)) add(-12, 'junk-order:dead-vs-holdouts');
         // ...and once 8+ distinct passives are owned, ANY new off-plan
         // passive is slot-guarded — the remaining slots belong to the plan.
         if (type === 'passive' && lv === 0 && !PLAN_INGREDIENTS.includes(name) &&

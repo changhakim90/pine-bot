@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.86.1
+// @version      6.86.8
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.86.1';
+    const SCRIPT_VERSION = '6.86.8';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -250,8 +250,53 @@
             // leak through, could not kill passouts at all. A free passout is
             // now HUGGED: just outside its body, where it is the nearest
             // enemy and splash/flame cover it, at zero damage cost.
+            // v6.86.2 ARMOUR CONFIDENCE (user: "pat is tanky so it can absorb
+            // most damages with levelled up olives and negroni"). Levels in
+            // the two mitigation lines buy the right to stand in the fray —
+            // which is exactly what the passout station and the ult window
+            // need. Already applied to the crowd tolerance; now it also buys
+            // down caution and the panic threshold, and a tank buys more.
+            // v6.86.4: the demo REFUTES armour-as-licence-to-brawl. With OLIVE
+            // at 6 and NEGRONI at 5 the human still held crowd p75 = 1 body
+            // within 90px, median HP 100% and p10 84% — armour was spent on
+            // not dying to the odd hit, not on standing in the fray. The
+            // discount survives only as the holdout-anchor licence.
+            armorConfPer: 0.025,   // per combined OLIVE+NEGRONI level
+            armorConfMax: 0.30,    // cap (anchor licence only — see cautionShare)
+            armorCautionShare: 0,
+            // v6.86.4 BANK-AND-DETONATE, measured off a 19.7-minute manual Pat
+            // demo (2635 samples). The human fired 14 ultimates on cooldown
+            // (mean gap 75s), 13 of which reduced the passout count, removing
+            // 41 bodies — including 15 in ONE blast from a field of 21. Every
+            // shot was taken 55-109px from the nearest body (median 78), never
+            // hugging. Base attacks are irrelevant to this: the bodies were
+            // 13k HP at 4:34, 193k at 10:08 and 1.8M at 18:54, versus Pat's
+            // ~439 dps. So passouts are not farmed one at a time — they are
+            // BANKED, and the ult is dropped into the pile when it comes up.
+            ultHarvestLeadS: 15,   // start positioning this long before the ult is ready
+            ultHarvestPull: 60,    // pull toward the cluster centroid while harvesting
+            // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
+            // every 3 frames along the aim vector, speed 9-11, rainbow-gun
+            // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
+            // during a burn the planner is paid for headings that line the
+            // best target up with the stream.
+            flameAimValue: 95,   // measured: below ~90 the aim term loses to ordinary station/loot pull
+            flameAimRange: 420,
             poHugPad: 8,
-            poFocusValue: 26,      // being the nearest thing to the station passout
+            // v6.86.2 FEASIBILITY GATE. A drunk-wave passout carries
+            // DIFF().hp * 8*(1+(estBoss-1)*0.7)*(1+gt/60*0.22) * 2 HP:
+            // ~1.4k at 5 min, 7k at 10, 27k at 15, 77k at 20, 500k at 30.
+            // Pat's whole base output is ~440 dps with every projectile
+            // landing, so past ~12 minutes a passout costs minutes of
+            // dedicated fire and the bot was orbiting bodies it could not
+            // kill. Measure the damage actually going in and walk away when
+            // the projected kill time is not worth it — they deal no contact
+            // damage, so an abandoned one is just scenery.
+            poTtkBudgetS: 30,      // day: a passout worth standing on
+            poTtkBudgetHellS: 18,  // hell: time is worth more
+            poProbeS: 6,           // in-range seconds before judging
+            poEngageRange: 150,    // "in range" for the probe clock
+            poFocusValue: 26,
             poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
@@ -543,6 +588,10 @@
     ]);
     // WATER is NOT banned (user): WATER + SUGAR craft into SIMPLE SYRUP,
     // which opens the ingredient pool toward TOMATO JUICE (ult cooldown).
+    // v6.86.8 (user-verified): these cannot damage the stationary targets —
+    // passouts and NO BOOKING walls — that the day phase is spent clearing.
+    // They are the bottom of the junk tier, below ordinary filler.
+    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER No.2', 'CORPSE REVIVER NO.2', 'ABSINTHE']);
     const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
@@ -775,6 +824,11 @@
 
     const TAB_ID = Math.random().toString(36).slice(2, 6);          // identifies this tab in a parallel farm
     let learn = loadLearn();
+    // v6.86.2 passout feasibility tracking (per run; see planMove)
+    let poTrack = { id: null, hp: 0, at: 0, inRangeS: 0, dps: 0 };
+    let poGiveUp = new Set();
+    function poReconsider() { poGiveUp = new Set(); }
+    function resetPoTracking() { poTrack = { id: null, hp: 0, at: 0, inRangeS: 0, dps: 0 }; poGiveUp = new Set(); }
     let trialParams = null;                                         // CEM sample being trialed this run
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell
@@ -2101,13 +2155,33 @@
             }
             case 'rbstat': add(220, 'rainbow-stat'); break;
             case 'evolve': add(300, 'evolve'); break;
-            case 'super': add(260, 'super'); break;
+            case 'super':
+                add(260, 'super');
+                // v6.86.4: the +120 first-super premium is RETRACTED. The
+                // manual Pat demo reached 19:42 with its FIRST super at 16:49
+                // (3 by the end) — the human's order is armour, then the
+                // ultimate, and supers arrive late on their own. Rushing one
+                // would have cost the OLIVE 6 / NEGRONI 5 / ULT lv5 spine
+                // that actually carried the run.
+                if (charOf().style === 'tank' && supersThisRun === 0) add(20, 'tank-first-super');
+                break;
             case 'ult':
                 // USER DIRECTIVE: the ULTIMATE is the highest-priority pick —
                 // it single-handedly clears passout fields, and maxed by ~20
                 // min it deletes the boss ladder. Only the gun outranks it.
                 add(320, 'ultimate');
                 if (CONFIG.userRoadmap) add(20, 'user-build');
+                // v6.86.4/5: for a TANK the ultimate is the whole passout
+                // economy — two manual demos cleared 41 and ~20 bodies with
+                // nothing else touching them. Each level doubles the spiral
+                // (dmg*9.6*2^(lv-1)), and the premium runs to the CAP: demo 2
+                // reached lv6 by 14:52 and its casts wiped million-HP fields
+                // outright (3->0, 4->0), where its own lv1-lv3 casts had only
+                // chipped a field of 3 down to 1.
+                if (charOf().style === 'tank') {
+                    const ulv = safe(() => player.ultLevel, 1) || 1;
+                    if (ulv < 6) add(40, 'tank-ult-spine');
+                }
                 break;
             case 'base':
                 // USER DIRECTIVE (top of the roadmap): SHAKING levels gate
@@ -2305,6 +2379,26 @@
             // Applies once a weapon exists (something must still deal damage).
             if (name === 'OLIVE' && gamePhase() === 'early' && ownedCocktailCount() >= 1 && !isMaxed('OLIVE'))
                 add(26, 'olive-first');
+            // v6.86.2 (user: "that was a bad run as I didn't get olives
+            // early"). For a TANK the armour lines are not just survival —
+            // they are the licence for everything else the character does:
+            // the caution discount, the holdout anchor, and standing in the
+            // ult window all key off OLIVE + NEGRONI levels. Armour bought at
+            // minute 2 compounds for the whole run; the same level at minute
+            // 20 buys almost nothing. So the premium is largest at t=0 and
+            // decays to nothing by the finale, and it spans the whole day
+            // rather than stopping at the 'early' bucket's 6-minute edge.
+            // v6.86.5: TOMATO JUICE cuts the ult cooldown (player.ultCdMul).
+            // The two demos differ by exactly this: demo 1 took it four times
+            // and fired every 75s; demo 2 skipped it and fired every 98s —
+            // 14 casts versus 12 over the same 20 minutes. For a bartender
+            // whose passout economy IS the ultimate, cooldown is throughput.
+            if (charOf().style === 'tank' && name === 'TOMATO JUICE' && !atCap) add(14, 'tank-ult-cadence');
+            if (charOf().style === 'tank' && (name === 'OLIVE' || name === 'NEGRONI') && !atCap) {
+                const gtA = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                const decay = Math.max(0, 1 - gtA / 1200);
+                if (decay > 0) add(Math.round(30 * decay), 'tank-armor-early');
+            }
             if (SURVIVAL_INGREDIENTS.includes(name)) {
                 let sb = 10;
                 // SOURCE-VERIFIED SCALING: enemy hp/dmg grow CONTINUOUSLY
@@ -2839,6 +2933,16 @@
             }
             else if (name === 'COINTREAU') add(-2, 'junk-order:filler');
         }
+        // v6.86.8 (user): "corpse reviver no. 2 and absinthe can't attack
+        // marks, so they should be in the absolute junk pile". The CR line —
+        // the cocktail and the ABSINTHE that keys it — cannot touch the
+        // stationary targets the day is spent on, which the bot already knew
+        // for its zombies ("can hit NEITHER passouts NOR no-booking walls").
+        // Both are already avoid-listed, so they were capped like any junk;
+        // this puts them at the BOTTOM of the junk tier, under COINTREAU and
+        // well under COFFEE BEANS' revive, so a pool of nothing but junk
+        // still picks something that can hit a holdout.
+        if (avoidJunk && DEAD_VS_HOLDOUTS.has(name)) add(-12, 'junk-order:dead-vs-holdouts');
         // ...and once 8+ distinct passives are owned, ANY new off-plan
         // passive is slot-guarded — the remaining slots belong to the plan.
         if (type === 'passive' && lv === 0 && !PLAN_INGREDIENTS.includes(name) &&
@@ -3097,6 +3201,7 @@
 
     function startRun() {
         runActive = true;
+        resetPoTracking();   // v6.86.2: passout kill-rate evidence is per run
         runStart = Date.now();
         runPicks = [];
         runPickCounts = {};
@@ -4271,7 +4376,7 @@
             // detour that breaks the burn costs more than any pickup is
             // worth. Everything non-vital yields while the cross burns.
             const flameNow = typeof p.fireCrossUntil === 'number' &&
-                p.fireCrossUntil > (safe(() => frame, 0) || 0);
+                p.fireCrossUntil > (safe(() => gameTime, 0) || 0);   // v6.86.7: seconds, not frames
             if (flameNow && !vital && kind !== 'timestop') v = Math.round(v * 0.45);
             // FLIGHT: a time-stop pickup is the only thing that ends an
             // unkillable chase — it outvalues everything else on the floor.
@@ -4290,16 +4395,24 @@
         if (!p) { moveSource = 'no player binding'; return null; }
         const { w: fw, h: fh } = fieldSize();
         const M = CONFIG.movement, T = CONFIG.threat;
+        let poTtkOut = null, poDpsOut = 0;   // v6.86.2 reporting (set by the station block)
 
         const maxHp = p.maxHp || p.maxHealth || p.hpMax || 100;
         const hp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
         const hpRatio = Math.max(0, Math.min(1, hp / (maxHp || 1)));
 
-        // FLAME CROSS ACTIVE (user: stand more ground): while the cross burns,
-        // everything near the bot dies — fear drops, farming intensifies, the
-        // standoff tightens so the burn zone stays ON the crowd.
+        // FLAME CROSS — v6.86.7 UNIT FIX. The bot compared this deadline
+        // against `frame`, but the game sets it in SECONDS:
+        //     player.fireCrossUntil = gameTime + (5 + fireCrossBonus)
+        //     if (player.fireCrossUntil && gameTime < player.fireCrossUntil)
+        // Live sample: fireCrossUntil 7968.9, gameTime 8054.4, frame 635073 —
+        // so `fireCrossUntil > frame` was ALWAYS false and every flame
+        // behaviour in this file has been dead code since it was written.
+        // (timeStopUntil and frozenUntil ARE frame-based — checked against the
+        // same sample — so those comparisons stay as they are.)
         const frameNow = safe(() => frame, 0) || 0;
-        const flameOn = typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > frameNow;
+        const gtFlame = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const flameOn = typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > gtFlame;
 
         if (hellDetected) applyHellUnban();   // v6.83.0: fifth-super key opens in hell
         const th = gatherThreats(p);
@@ -4404,13 +4517,26 @@
         const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
             (safe(() => player.ultSpiralUntil, 0) > gtInv);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';
-        const caution = (ultInvuln ? 0.35 : 1) *
+        // v6.86.4: how close the ultimate is — the whole passout economy keys
+        // off this (see CONFIG.movement.ultHarvestLeadS).
+        const gtUlt = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const ultAtT = safe(() => player.ultReadyAt, null);
+        const ultInS = typeof ultAtT === 'number' ? Math.max(0, ultAtT - gtUlt) : 999;
+        const ultReadyNow = typeof ultAtT === 'number' ? gtUlt >= ultAtT : false;
+        // v6.86.2: armour bought with OLIVE + NEGRONI levels is permission to
+        // hold ground. Pat (tank) converts it 1.4x, which is what lets him
+        // stand on a passout long enough for the flame cross or the ult to
+        // land instead of sliding off the body every time a mob closes.
+        const armorLv = (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
+        const armorConf = Math.min(M.armorConfMax,
+            armorLv * M.armorConfPer * (charOf().style === 'tank' ? 1.4 : 1));
+        const caution = (1 - armorConf * (M.armorCautionShare || 0)) * (ultInvuln ? 0.35 : 1) *
             (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
             (hellDetected ? M.hellCautionMul : 1) *
             (hellRecent ? 1.35 : 1) *
             (rainbowRecent ? 1.35 : 1) *
             (surgeActive ? 1.25 : 1) *
-            (flameOn ? 0.72 : 1);   // the burn IS the shield: hold the fray
+            (flameOn ? 0.85 : 1);   // v6.86.7: the burn is OFFENCE, not a shield — only a mild boldness
 
         // death-cause telemetry. LIVE-AUDIT FIX: pure exposure counting
         // misattributed deaths badly (standing NEAR a wide lane logged 'line'
@@ -4495,7 +4621,7 @@
         // it drives) is suspended for the window — it would spend joe's eight
         // invulnerable seconds running away from the only thing his spikes
         // can hit.
-        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
+        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 - 0.5 * armorConf) * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -4708,7 +4834,16 @@
         // everything except being hurt, the rival chase, and flight.
         const flameAnchor = flameOn && !hpPanic && !th.rival && !rainbowRecent && !flight &&
             th.passouts.some(po => !po.contested && !po.far && Math.hypot(po.x - p.x, po.y - p.y) < 260);
-        const anchor = flameAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
+        // v6.86.2 (user: "he needs to be anchored to keep attacking the
+        // holdouts"). A holdout — a passout or wall we are standing on — only
+        // dies to sustained fire, and sliding off it every time a mob closes
+        // is why they never finished. With armour bought (OLIVE/NEGRONI) the
+        // tank has the licence to plant. Hugging distance, not the old
+        // 220px "nearby", is what counts here.
+        const holdoutAnchor = !hpPanic && !markHere && !th.rival && !flight && armorConf > 0.05 &&
+            th.passouts.some(po => !po.contested && !po.far &&
+                (Math.hypot(po.x - p.x, po.y - p.y) - po.r) < M.poEngageRange * 0.5);
+        const anchor = flameAnchor || holdoutAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
@@ -4750,6 +4885,9 @@
             if (poNearest == null || dpo < poNearest) poNearest = dpo;
         }
         if (poW) { poCx /= poW; poCy /= poW; }
+        // v6.86.4: banking is only worth positioning for when the blast is near
+        const ultHarvest = poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
+            !hpPanic && !markHere && !projHere;
 
         // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
         // no booking mobs and passouts in day" — with a 17:59 screenshot
@@ -4812,6 +4950,24 @@
             ? ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90))
             : null;
 
+        // v6.86.7 FLAME AIM. While the cross burns, the damage goes where the
+        // bot is FACING — so choose what to point at before scoring headings.
+        // Priority follows what the burn can actually cash in: a passout it
+        // could never out-damage otherwise, then a wall, then a boss, then
+        // whatever is closest.
+        let flameTarget = null;
+        if (flameOn && !hpPanic) {   // hurt: survive first, the burn is offence
+            let bestF = -Infinity;
+            const consider = (x, y, w) => {
+                const d = Math.hypot(x - p.x, y - p.y);
+                if (d > M.flameAimRange) return;
+                const sc = w / (1 + d / 200);
+                if (sc > bestF) { bestF = sc; flameTarget = { x, y, d }; }
+            };
+            for (const po of th.passouts) if (!po.far) consider(po.x, po.y, 3);
+            for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
+        }
+
         let best = null;
         const N = M.samples;
         for (let i = 0; i <= N; i++) {
@@ -4821,6 +4977,21 @@
 
             const nx = Math.max(0, Math.min(fw, p.x + dx * step));
             const ny = Math.max(0, Math.min(fh, p.y + dy * step));
+
+            // v6.86.2: distance from THIS candidate to the nearest live body.
+            // fireBase() shoots nearestEnemy() measured from the PLAYER, so
+            // this is the number the passout station has to beat: standing
+            // closer to the passout than to any mob is the only way the base
+            // attack ever points at it. (6.86.1 compared the wrong pair — it
+            // asked whether the player was nearer the passout than the MOBS
+            // were, which is a different and usually unwinnable condition
+            // when a mob is chasing us and the passout is parked.)
+            let candNearestLive = Infinity;
+            for (const e of th.enemies) {
+                if (e.wall) continue;
+                const de = Math.hypot(nx - e.x, ny - e.y) - (e.r || 0);
+                if (de < candNearestLive) candNearestLive = de;
+            }
 
             let danger = 0;
 
@@ -5085,11 +5256,55 @@
                 // 10-minute drizzle: 8 kills). Scoring hp + 0.5*distance keeps
                 // the frailty logic but charges transit for it (same sim: 13
                 // kills, +62%). Fell-first (lowest id) still breaks ties.
-                let tgtPo = null, tgtScore = Infinity;
+                let tgtPo = null, tgtScore = Infinity; let poTtk = null;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
+                    if (poGiveUp.has(po.id)) continue;   // v6.86.2: measured unkillable this run
                     const sc = po.maxHp + M.killOrderDist * Math.hypot(po.x - p.x, po.y - p.y);
                     if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
+                }
+                // v6.86.2 FEASIBILITY. Watch the HP actually coming off the
+                // station target while we are in range of it. If the damage
+                // going in projects a kill time past the budget — or no
+                // damage lands at all — the body is scenery for the rest of
+                // the run: it deals no contact damage, and the seconds are
+                // worth more spent levelling. Only in-range time counts, so
+                // the walk over never condemns a passout.
+                if (tgtPo) {
+                    const nowPo = Date.now();
+                    if (poTrack.id !== tgtPo.id) {
+                        poTrack = { id: tgtPo.id, hp: tgtPo.hp, at: nowPo, inRangeS: 0, dps: 0 };
+                    } else {
+                        const dt = (nowPo - poTrack.at) / 1000;
+                        if (dt >= 0.4) {
+                            const inRange = (Math.hypot(tgtPo.x - p.x, tgtPo.y - p.y) - tgtPo.r) < M.poEngageRange;
+                            if (inRange) poTrack.inRangeS += dt;
+                            const drop = poTrack.hp - tgtPo.hp;
+                            if (drop > 0) {
+                                const inst = drop / dt;
+                                poTrack.dps = poTrack.dps > 0 ? poTrack.dps * 0.7 + inst * 0.3 : inst;
+                            }
+                            poTrack.hp = tgtPo.hp;
+                            poTrack.at = nowPo;
+                        }
+                    }
+                    // The probe measures BASE-ATTACK dps, and the base attack
+                    // is not the tool that clears a grown passout — the ult
+                    // and the flame cross are. While either is up (or nearly
+                    // up), a slow burn is not evidence of hopelessness.
+                    const ultAt = safe(() => player.ultReadyAt, Infinity);
+                    const ultUpSoon = flameOn || (typeof ultAt === 'number' && (gtDeepP + 12) >= ultAt);
+                    const budget = hellDetected ? M.poTtkBudgetHellS : M.poTtkBudgetS;
+                    poTtk = poTrack.dps > 0 ? tgtPo.hp / poTrack.dps : Infinity;
+                    poTtkOut = poTtk; poDpsOut = poTrack.dps;
+                    if (poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
+                        poGiveUp.add(tgtPo.id);
+                        log('passout', tgtPo.id, 'abandoned — ' +
+                            (poTrack.dps > 0 ? Math.round(poTtk) + 's to kill at ' + Math.round(poTrack.dps) + ' dps'
+                                             : 'no damage landing') +
+                            ' (budget ' + budget + 's, hp ' + Math.round(tgtPo.hp) + ')');
+                        tgtPo = null;
+                    }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
                 // with CR as the only cocktail, farming them is slow
@@ -5149,7 +5364,13 @@
                     // zone so the flame actually covers the body. The zone
                     // itself is still off-limits: contact ticks are what the
                     // 55-danger retreat gradient below exists to prevent.
-                    if (flameOn) ring = Math.min(ring, zone + 24);
+                    // v6.86.7: the station no longer collapses during a burn.
+                    // The cross is NOT a body-centred aura — the source fires
+                    // three projectiles every 3 frames along the AIM vector at
+                    // speed 9-11 ("레인보우건급", rainbow-gun class). It is a
+                    // directional flamethrower, so what matters is pointing it
+                    // at the target, not standing on it.
+
                     // v6.86.1 HUG THE STATION TARGET. Two source facts kill
                     // the standoff ring for a FREE passout:
                     //   1. fireBase() shoots `nearestEnemy()` over all
@@ -5162,29 +5383,28 @@
                     // to leak past the mob it was actually targeting.
                     // A contested passout keeps the old ring — the live
                     // bodies around it are the real reason to stand back.
-                    const hug = (po === tgtPo) && !po.contested;
-                    if (hug) ring = po.r + (typeof p.r === 'number' ? p.r : 7.2) + M.poHugPad;
+                    // v6.86.4: the hug is RETRACTED. It was built on the theory
+                    // that fireBase()'s nearestEnemy() had to point at the body
+                    // — but the body carries 13k HP by minute 4 and 1.8M by
+                    // minute 19, so base attacks never kill one either way.
+                    // The manual demo stands at 61-94px (median 82 centre,
+                    // ~45 from the edge), which is what patRing already said.
+                    const hug = false;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
-                    if (hug) {
-                        gain += M.passoutValue * (crOnly ? 0.4 : 1) *
-                            (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
-                        // BE the nearest enemy to it, or the shot goes
-                        // somewhere else: reward closing inside the distance
-                        // to the nearest live body.
-                        const nearestLive = th.enemies.reduce((m, e) =>
-                            Math.min(m, Math.hypot(e.x - po.x, e.y - po.y)), Infinity);
-                        if (d1 < nearestLive && dNow >= nearestLive) gain += M.poFocusValue;
-                        else if (d1 < nearestLive) gain += M.poFocusValue * 0.35;
-                        // the body itself is solid: standing in it just gets
-                        // us shoved back out, so keep a light penalty only
-                        if (d1 < zone) danger += M.poBlockPenalty * (1 - Math.min(1, d1 / zone));
-                    } else if (dNow < zone) {
-                        danger += M.poBlockPenalty * (1 - Math.min(1, d1 / (zone + 30)));
+                    if (dNow < zone) {
+                        // v6.86.4: the cost of being ON the body is BLOCKAGE,
+                        // not damage — the game shoves the player out and the
+                        // step is wasted, which can pin us against a wall in a
+                        // crowd. The magnitude that was tuned as a contact
+                        // gradient turns out to be right for the pathing cost,
+                        // so it stands; only the reasoning changed.
+                        danger += 55 * (1 - Math.min(1, d1 / (zone + 30)));
                     } else {
-                        // every non-station passout is a navigation obstacle:
-                        // impassable, but not dangerous
-                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += M.poBlockPenalty;
+                        if (po === tgtPo) gain += M.passoutValue * (crOnly ? 0.4 : 1) *
+                            (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
+                        // never path through an impassable body to reach the far side
+                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += 60;
                     }
                 }
             }
@@ -5245,11 +5465,26 @@
             // the user wants passout loot funding the ult. The gate is now the
             // safety half of `anchor` only: hurt, or a blast/shot overlapping
             // the stand position, still suspends it.
+            // v6.86.7: pay for pointing the flamethrower at the target. dx,dy
+            // is a unit heading, so this is the cosine of the angle between
+            // the stream and the target — the planner turns to face it while
+            // still free to keep its distance.
+            if (flameOn && flameTarget && !hpPanic) {
+                const tl = Math.max(1, flameTarget.d);
+                gain += M.flameAimValue * ((dx * (flameTarget.x - p.x) + dy * (flameTarget.y - p.y)) / tl);
+            }
+
+            // v6.86.4 HARVEST WINDOW. The demo's whole passout economy is
+            // positional: the human drifts onto the pile as the ult comes off
+            // cooldown and detonates from ~78px. So the centroid pull is weak
+            // background behaviour until the ult is within ultHarvestLeadS,
+            // then it becomes the dominant term.
             const ultAimOk = ultFall ? (poN >= 1 && !hpPanic && !markHere && !projHere) : (anchor && poN >= 2);
             if (ultAimOk) {
                 const eNow = Math.hypot(p.x - poCx, p.y - poCy);
                 const eNew = Math.hypot(nx - poCx, ny - poCy);
-                gain += (ultFall ? 22 : 14) * (eNow - eNew) * 0.15;
+                const w = ultHarvest ? M.ultHarvestPull : (ultFall ? 22 : 14);
+                gain += w * (eNow - eNew) * 0.15;
             }
 
             // kiting sweep + gap escape
@@ -5310,6 +5545,11 @@
             // nearest live (non-passout) body — how the ult gate decides
             // whether a spray/aura ult has anything to actually hit
             adjacent: th.enemies.reduce((m, e) => Math.min(m, Math.hypot(e.x - p.x, e.y - p.y) - (e.r || 0)), Infinity),
+            poTtk: (poTtkOut == null || !isFinite(poTtkOut)) ? null : Math.round(poTtkOut),
+            poDps: poDpsOut ? Math.round(poDpsOut) : 0, poGaveUp: poGiveUp.size,
+            armorLv, armorConf: +armorConf.toFixed(2), holdoutAnchor,
+            flameAim: flameTarget ? Math.round(flameTarget.d) : null,
+            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
@@ -5391,8 +5631,20 @@
         const nukeUlt = CH.ultKind === 'nuke' || CH.ultKind == null;
         const ultAdj = A.ultAdjacent || 130;
         const adjacentNow = isFinite(plan.adjacent) ? plan.adjacent <= ultAdj : (plan.near >= 3);
-        const harvest = nukeUlt && !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
-            ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
+        // v6.86.2 CORRECTION (user, confirmed by the source arithmetic):
+        // "the only way pat can clear out passouts consistently is through
+        // flame crosses and ultimates". 6.86.1 went too far by taking
+        // passouts off the spray/aura target list entirely. The right rule is
+        // RANGE, not target type: pat's spiral pays 39 volleys x 3 arms x 691
+        // (80k at lv1, 636k at lv3) but only into what it sweeps, and joe's
+        // spikes cover ~149px. A passout is 27k HP at 15 min and 77k at 20 —
+        // hopeless for base attacks, routine for an ult fired while hugging
+        // it. So: passout + adjacent = fire; passout across the floor = no.
+        const poAdjacent = plan.poNearest != null && plan.poNearest <= ultAdj;
+        const harvest = !plan.hpPanic && (nukeUlt
+            ? ((plan.passoutsNear || 0) >= 3 ||
+               ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)))
+            : poAdjacent);
         // v6.85.8 (user: "the bot should be using the ultimate more frequently
         // to kill passouts"). Adding another TRIGGER would have done nothing —
         // `lootTargets` already fires on any passout within 190px, so every
@@ -5402,8 +5654,9 @@
         // after the game's own cooldown ends. With a passout in falloff range
         // the retry drops to 900 ms so the ult goes off as soon as the game
         // allows it. callGame is a no-op while the real cooldown runs.
-        const poClose = nukeUlt && plan.ultFalloff === true && !plan.hpPanic &&
-            plan.poNearest != null && plan.poNearest < 120;
+        // the retry gate drops for ANY bartender standing on a passout — the
+        // sooner the game's own cooldown is cashed in, the more bodies clear
+        const poClose = !plan.hpPanic && plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
         // siege open), bosses in range, and passout clusters. Damage +
@@ -5415,7 +5668,7 @@
                plan.roamingBoss === true)
             // spray/aura: only what the ult can actually reach counts, and a
             // passout is never a reason to burn it
-            : ((plan.wallNear === true || plan.bossNear === true) && adjacentNow));
+            : (poAdjacent || ((plan.wallNear === true || plan.bossNear === true) && adjacentNow)));
         const linebackerBurst = !plan.hpPanic && (plan.lines || 0) > 0 && plan.boss === true;   // charging linebacker: ult damage + invincibility
         // USER: when mob HP scales past what five supers can kill, the ult
         // becomes the regular clear tool — fire on cooldown into any group.
@@ -5452,6 +5705,7 @@
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt)) {
             lastUlt = now;
             callGame('useUltimate');
+            poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
         }
     }
 
@@ -5556,7 +5810,7 @@
             '<button id="pbStats" style="cursor:pointer" title="Stats report — copy &amp; paste to Claude">📊</button> ' +
             '<button id="pbSnap" style="cursor:pointer" title="Version comparison — freeze a snapshot of this version and show every version side by side">📸</button> ' +
             '<button id="pbReset" style="cursor:pointer" title="Reset learning (version snapshots are kept)">↺</button> ' +
-            '<button id="pbRec" style="cursor:pointer" title="Record YOUR manual play as a teaching demo (stop the bot first)">🎥</button>' +
+            '<button id="pbRec" style="cursor:pointer" title="Record YOUR manual play as a teaching demo — press once to start, again to stop; the digest opens ready to copy for Claude">🎥</button>' +
             '</div>' +
             '<div>status: <span id="pbStatus" style="color:#8fd">idle</span></div>' +
             '<div id="pbInfo" style="margin-top:5px;color:#aab"></div>';
@@ -5614,6 +5868,9 @@
             version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
             bartender: activeChar || '(bandit)', charProfile: charOf(),
+            passoutFeasibility: (() => { const pl = lastPlan || {};
+                return { killTimeS: pl.poTtk == null ? null : pl.poTtk, observedDps: pl.poDps || 0,
+                         abandonedThisRun: pl.poGaveUp || 0, onField: pl.poField || 0 }; })(),
             runsTotal: learn.runs,
             runsLogged: log.length,
             byVersion: versionComparison(),
@@ -5803,22 +6060,110 @@
             while (all.length > 4) all.shift();
             localStorage.setItem('pineBotDemos', JSON.stringify(all));
             setStatus('🎥 saved demo: ' + demoRec.samples.length + ' samples, ' + demoRec.events.length + ' events');
+            demoRec = null;
+            showReport(demoDigest());   // v6.86.3: the digest is what gets pasted to Claude
+            return;
         } catch (e) { setStatus('demo save failed: ' + e.message); }
         demoRec = null;
     }
+    // v6.86.3 DEMO DIGEST. A 20-minute demo is ~9k samples — far too big to
+    // hand over. The questions a teaching demo has to answer are few, so the
+    // analysis runs HERE and emits a few KB: how close the human stands to a
+    // passout, whether an ultimate actually clears one, when the first super
+    // and the armour levels land, and what HP they accept before backing off.
+    function demoDigest(idx) {
+        let all = [];
+        try { all = JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { }
+        const d = all[idx == null ? all.length - 1 : idx];
+        if (!d || !d.samples || !d.samples.length) return { error: 'no demo recorded yet — press 🎥, play a run, press 🎥 again' };
+        const S = d.samples, E = d.events || [];
+        const pct = (a, q) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(b.length * q))]; };
+        const at = gt => { let best = null, bd = 1e9; for (const s of S) { const dd = Math.abs((s.gt || 0) - gt); if (dd < bd) { bd = dd; best = s; } } return best; };
+        const firstWhere = f => { for (const s of S) if (f(s)) return s.gt; return null; };
+        // where does the human STAND while farming a passout?
+        const near200 = S.filter(s => s.poD != null && s.poD < 200).map(s => s.poD);
+        // did an ultimate clear a passout? compare the nearest body's HP 3s later
+        const ults = E.filter(e => e.e === 'ult').map(e => {
+            const a = at(e.gt), b = at(e.gt + 3);
+            return { gt: e.gt, ultLv: a ? a.ulv : null, poD: a ? a.poD : null,
+                     poHpBefore: a ? a.poHp : null, poHpAfter: b ? b.poHp : null,
+                     poCountBefore: a ? a.poN : null, poCountAfter: b ? b.poN : null };
+        });
+        const hurt = S.filter(s => s.near >= 3).map(s => s.hp);
+        // v6.86.6: the day and the deep game are different problems — the
+        // 90-minute demo fired 13 of 14 recorded casts with ZERO passouts on
+        // the floor, stood in crowds of 18-220 at 100% HP and never dashed,
+        // while the day demos lived at 79-82px off a passout with crowd p75
+        // of 0-1. Pooling those into one set of percentiles hides both.
+        const phaseOf = s => (s.gt < 1200 ? 'day' : (s.gt < 3600 ? 'hell' : 'deep'));
+        const phases = {};
+        for (const key of ['day', 'hell', 'deep']) {
+            const P = S.filter(s => phaseOf(s) === key);
+            if (!P.length) continue;
+            const po = P.filter(s => s.poD != null && s.poD < 200).map(s => s.poD);
+            phases[key] = {
+                samples: P.length, fromGt: P[0].gt, toGt: P[P.length - 1].gt,
+                passoutStationMedian: pct(po, 0.5), passoutSamples: po.length,
+                passoutsOnFieldMax: Math.max(...P.map(s => s.poN || 0)),
+                hpP10: pct(P.map(s => s.hp), 0.1), hpMedian: pct(P.map(s => s.hp), 0.5),
+                crowdMedian: pct(P.map(s => s.near), 0.5), crowdP75: pct(P.map(s => s.near), 0.75),
+                crowdMax: Math.max(...P.map(s => s.near || 0)),
+                ults: E.filter(e => e.e === 'ult' && phaseOf({ gt: e.gt }) === key).length,
+                dashes: E.filter(e => e.e === 'dash' && phaseOf({ gt: e.gt }) === key).length
+            };
+        }
+        const lvAt = k => { const out = {}; for (const s of S) { const v = s[k] || 0; if (v && out[v] == null) out[v] = s.gt; } return out; };
+        return {
+            note: 'MANUAL DEMO DIGEST — paste this to Claude',
+            version: scriptTag(), char: safe(() => player.key, null),
+            durationS: Math.round((S[S.length - 1].gt || 0) - (S[0].gt || 0)),
+            reachedGt: S[S.length - 1].gt, samples: S.length,
+            passoutStation: {
+                note: 'distance to the NEAREST passout while one is within 200px',
+                p10: pct(near200, 0.1), p25: pct(near200, 0.25), median: pct(near200, 0.5),
+                p75: pct(near200, 0.75), samples: near200.length,
+                shareUnder60px: +(S.filter(s => s.poD != null && s.poD < 60).length / S.length).toFixed(3),
+                everOnField: Math.max(...S.map(s => s.poN || 0))
+            },
+            recordingStartedGt: S[0].gt,   // >0 means the recording began mid-run
+            byPhase: phases,               // day <20min | hell 20-60 | deep 60min+
+            ultimates: { count: ults.length, uses: ults.slice(0, 40) },
+            build: {
+                firstSuperGt: firstWhere(s => (s.sup || 0) >= 1),
+                supersAtEnd: S[S.length - 1].sup || 0,
+                ultLevelReached: Math.max(...S.map(s => s.ulv || 0)),
+                ultLevelTimeline: lvAt('ulv'),
+                oliveTimeline: lvAt('ol'), negroniTimeline: lvAt('ng'),
+                picks: E.filter(e => e.e === 'pick').map(e => ({ gt: e.gt,
+                    took: (e.a && Array.isArray(e.a[1])) ? e.a[1][e.a[0]] : null })).slice(0, 60)
+            },
+            posture: {
+                flameShare: +(S.reduce((n, s) => n + (s.fx || 0), 0) / S.length).toFixed(3),
+                hpP10: pct(S.map(s => s.hp), 0.1), hpMedian: pct(S.map(s => s.hp), 0.5),
+                hpMedianWhenCrowded: pct(hurt, 0.5), crowdedSamples: hurt.length,
+                crowdP75: pct(S.map(s => s.near), 0.75), crowdMax: Math.max(...S.map(s => s.near || 0)),
+                dashes: E.filter(e => e.e === 'dash').length
+            }
+        };
+    }
+
     function demoTick() {
         if (!demoRec) return;
         const p = G.player; if (!p || G.state !== 'playing') return;
         const en = Array.isArray(G.enemies) ? G.enemies.filter(Boolean) : [];
         const fr = safe(() => frame, 0) || 0;
-        let poD = null, bossD = null, wallD = null, near = 0;
+        let poD = null, bossD = null, wallD = null, near = 0, poHp = null, poN = 0;
         let frozenBossD = null, frozenN = 0, hpSum = 0, hpN = 0;
         for (const e of en) {
             const dd = Math.hypot(e.x - p.x, e.y - p.y);
             const ty = String(e.type), bc = String(e.bossChar || '');
             const froz = typeof e.frozenUntil === 'number' && e.frozenUntil > fr;
             if (froz) frozenN++;
-            if (ty === 'passout') { if (poD == null || dd < poD) poD = Math.round(dd); continue; }
+            if (ty === 'passout') {
+                poN++;
+                if (poD == null || dd < poD) { poD = Math.round(dd); poHp = Math.round(e.hp || 0); }
+                continue;
+            }
             if (/nobook/i.test(bc + ty)) { if (wallD == null || dd < wallD) wallD = Math.round(dd); }
             else if (ty === 'boss') {
                 if (bossD == null || dd < bossD) bossD = Math.round(dd);
@@ -5839,7 +6184,14 @@
             frz: frozenN,                                        // how many enemies are frozen (pause active?)
             slow: typeof p.slowMul === 'number' ? +p.slowMul.toFixed(2) : 1,   // freeze-aura exposure
             mobHp: hpN ? Math.round(hpSum / hpN) : 0,            // scaling proxy for ult-trigger tuning
-            fx: typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > fr ? 1 : 0
+            // v6.86.7: seconds, not frames — this is why every demo read flameShare 0
+            fx: typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > (safe(() => gameTime, 0) || 0) ? 1 : 0,
+            // v6.86.3 — the build state, so a demo answers WHY the play worked
+            poHp: poHp, poN: poN,                                // nearest passout HP + how many on the floor
+            ulv: p.ultLevel || 0,
+            ur: (safe(() => gameTime, 0) || 0) >= (p.ultReadyAt || 0) ? 1 : 0,
+            sup: Object.keys(p.superLv || {}).length,
+            ol: (p.weapons || {}).olive || 0, ng: (p.weapons || {}).negroni || 0
         });
         if (demoRec.samples.length > 9000) demoSave();   // ~24 min cap: autosave
     }
@@ -5860,6 +6212,8 @@
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
+                demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording
+                demoRaw: () => { try { return JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { return []; } },
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
                 noteVersion,                           // pineBot.noteVersion('6.74.0', { bestTimeS: 15150, note: '...' })
                 table: () => { try { console.table(versionRows().map(r => ({ version: r.version, status: r.status, runs: r.runs, medianMin: r.medianTimeS == null ? null : +(r.medianTimeS / 60).toFixed(1), meanMin: r.meanTimeS == null ? null : +(r.meanTimeS / 60).toFixed(1), sdMin: r.sdTimeS == null ? null : +(r.sdTimeS / 60).toFixed(1), p60: r.p60, p120: r.p120, bestMin: r.bestTimeS == null ? null : +(r.bestTimeS / 60).toFixed(1), hell: r.hellRate, z: r.vsPrev ? r.vsPrev.z : null, verdict: r.vsPrev ? r.vsPrev.verdict : '', note: r.note || '' }))); } catch (e) { } return versionRows(); },
@@ -5888,7 +6242,7 @@
                     sigmasAtFloor, paramDist, hofRecord,
                     charProfile: charOf,
                     setChar: b => { if (CHARS[b]) activeChar = b; },
-                    resetUltGate: () => { lastUlt = 0; },
+                    resetUltGate: () => { lastUlt = 0; }, resetPoTracking,
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };

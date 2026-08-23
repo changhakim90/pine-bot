@@ -40,6 +40,13 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.23+crown+pat | — | | | | | | | Emergency repair: dims withdrawn, applyParams hardened against null, `sanitizeCem()` every trial, multiplier instrument-only. |
 | 6.86.0+crown+pat | — | | | | | | | CEM lockup repair: deduped/mean-tracked hall of fame, auto-restart when sigma dies, rank-based gradient, `deepFocusLv` ceiling 6→4. |
 | 6.86.1+crown | — | | | | | | | Per-character ultimates (nuke/spray/aura) read from the game source; passouts corrected to harmless obstacles and HUGGED so `nearestEnemy()` actually targets them; invulnerability windows spend danger instead of fleeing. |
+| 6.86.2+crown | — | | | | | | | Passout economics: measured kill-rate gate (abandon what cannot be killed), ult restored as the passout clear tool when adjacent, targeting comparison fixed, armour confidence + holdout anchor, tank first-super premium. |
+| 6.86.3+crown | — | | | | | | | 🎥 demo digest: the recorder now emits a pasteable few-KB analysis (passout station percentiles, ult-vs-passout-HP pairing, build/armour timeline) instead of a 9k-sample log. |
+| 6.86.4+crown | — | | | | | | | **Bank-and-detonate**, from a 19.7-min manual Pat demo: hug retracted (human stands 61-94px), ult harvest window (drift onto the pile as the ult comes up), armour-as-brawl-licence refuted, first-super premium cut, ult-level spine added. |
+| 6.86.5+crown | — | | | | | | | Ult-spine premium runs to the cap (lv<6) and moved into the arm that actually scores `ult`; TOMATO JUICE valued as ult throughput for a tank. From the second manual demo. |
+| 6.86.6+crown | — | | | | | | | Demo digest split by phase (day / hell / deep) + 40 ult uses + mid-run start marker. No behaviour change — the 90-minute demo validated the existing time-stop doctrine. |
+| 6.86.7+crown | — | | | | | | | **Flame cross was dead code**: `fireCrossUntil` is a gameTime deadline, compared against `frame` since 6.85.9 — always false. Fixed, and the burn re-modelled as the directional flamethrower it is (aim the stream, don't hug). |
+| 6.86.8+crown | — | | | | | | | CORPSE REVIVER No.2 + ABSINTHE demoted to the bottom of the junk tier (user: they can't damage holdouts). |
 
 ## 6.85.23 — EMERGENCY: 6.85.22 postmortem and repair
 
@@ -767,6 +774,55 @@ suspect rather than the tuning, and the next step is instrumenting
 `dangerAccum` rather than moving more constants.
 
 ## Findings
+
+### The flame cross was never running (found 2026-08-23, fixed in 6.86.7)
+
+Live probe: `fireCrossUntil` **7968.9**, `gameTime` **8054.4**, `frame` **635073**.
+
+- The game sets `player.fireCrossUntil = gameTime + (5 + fireCrossBonus)` and tests `gameTime < player.fireCrossUntil` — a deadline in SECONDS.
+- The bot tested `fireCrossUntil > frame`, so `flameOn` was **permanently false**. Everything gated on it — `flameAnchor`, the burn-range station collapse, the caution discount, the loot-yield rule — has been dead since 6.85.9, when the user asked for exactly this behaviour.
+- The unit tests used the same wrong comparison (fake `frame` = 0 makes it always true), so they validated the bug instead of catching it. There is now a regression test asserting a lapsed deadline reads as cold.
+- **`timeStopUntil` and `frozenUntil` ARE frame-based** (confirmed against the same live sample) — those comparisons were right and are unchanged.
+- The burn is also NOT a body-centred aura, which is what the bot's comments claimed. Source: three projectiles every 3 frames along the aim vector at speed 9-11, "레인보우건급" (rainbow-gun class), for 5s + `fireCrossBonus` (the live run had **+51s**). It is a directional flamethrower: pointing it is the whole skill, so the station no longer collapses and the planner is instead paid for headings that line the best target up with the stream (passout > wall > boss > nearest).
+
+### Manual Pat demo, 2026-08-23 (19:42, 2635 samples) — the passout economy
+
+- Passout HP measured live: **35 @ 2:35, 13.4k @ 4:34, 86k @ 7:36, 193k @ 10:08, 575k @ 14:42, 1.8M @ 18:54.** Pat's whole base output is ~439 dps, so base attacks stop mattering after ~3 minutes. Earlier estimates from the spawn formula were ~50x too low.
+- **The ultimate is the entire passout economy.** 14 casts, mean gap 75s (i.e. on cooldown), 13 reduced the passout count, **41 bodies removed** — one lv4 cast took a field of 21 down to 6.
+- Every cast was fired **55-109px from the nearest body (median 78)** — never hugging. The human BANKS passouts (24 on the floor at once) and detonates the pile.
+- Posture with OLIVE 6 / NEGRONI 5: **crowd p75 = 1 body within 90px, HP median 100%, p10 84%, 10 dashes in 20 minutes.** Armour is spent on surviving the odd hit, not on brawling.
+- Build order: OLIVE 1@75s -> 6@525s, NEGRONI 1@286s -> 5@976s, ULT lv2@384 lv3@407 lv4@939 lv5@1097, **first super at 16:49** (3 by the end). Armour, then ult, then supers.
+- flameShare 0 — this run cleared everything with ultimates alone.
+
+### Second manual Pat demo, same day (19:51, 2435 samples) — what a better run differs by
+
+Near-identical length to demo 1, but a visibly cleaner run, and the differences are all in ONE variable — how fast the ultimate scaled:
+
+| | demo 1 | demo 2 |
+|---|---|---|
+| ULT level reached | 5 (by 18:17) | **6 (by 14:52)** |
+| NEGRONI | lv5 @ 16:16 | **lv6 @ 7:21** |
+| first super | 16:49 | 12:23 |
+| passouts ever on floor | 24 | **7** |
+| dashes / crowd p75 / HP p10 | 10 / 1 / 84% | **1 / 0 / 93%** |
+| ult cadence | 75s (TOMATO JUICE x4) | 98s (none taken) |
+
+- **Ult level is the scaling variable.** Demo 2's lv6 casts wiped million-HP fields outright (3->0, 4->0); its own lv1-lv3 casts had only chipped fields of 3 down to 1.
+- Passouts never piled up in demo 2 (7 vs 24) because the casts were clearing, not chipping — the pile-up is a SYMPTOM of a low ult level, not a movement failure.
+- Station distance replicates: median 79 vs 82, casts fired 44-102px out. `patRing` late = 80 is right.
+- **TOMATO JUICE is throughput**: demo 1's four picks bought 14 casts in 20 min vs demo 2's 12.
+
+### Third manual demo — a 89:48 hell run (recording began at 21:00, 4256 samples)
+
+The deep game is a DIFFERENT PROBLEM from the day, and nothing about passouts applies to it:
+
+- **13 of the 14 recorded casts fired with ZERO passouts on the floor.** The one that had a body cleared it (4.58M HP, 1 -> 0, ult lv6). Passouts are a day/early-hell phenomenon; the deep run is not a passout economy at all.
+- **The build is TIME STOP.** 22 of 31 picks after 26:00 were `TIME STOP +2S`, with the two offered supers taken and the rest filler. Ult / OLIVE / NEGRONI were already lv6 before the recording started.
+- **Zero damage taken across 69 minutes**: HP p10 = median = 100%, while crowd p75 was **18** bodies within 90px and the max was **220**. Deep hell is survived by keeping the field paused, not by spacing.
+- **Zero dashes** in 69 minutes (day demos: 1 and 10).
+- Ult cadence stretched to ~131s here versus 75-98s in the day — the game's own cooldown scaling, not a choice.
+
+This validates the existing time-stop doctrine and the pause-aware posture rather than contradicting it, so no scoring change was made on the strength of it: TIME STOP already scores 175 in hell (plus up to +30 crowd-adapt), below super/evolve — which is the order the demo actually played.
 
 - Deep hell is a flat-damage regime: enemy damage caps at ~22 from t=600s, spawns cap at 8, HP grows ×1.4/180s (unkillable), speed grows ~quadratically (25 at 60m, 400 at 255m). Survival past ~4h is about mitigation/sustain and contact avoidance, not kill speed.
 - Tag per bartender (`+pat` / `+joe` / none = minguk). Each character needs ~30 warm-up runs before its CEM is meaningful; compare rows per tag, not pooled.

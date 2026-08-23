@@ -248,8 +248,53 @@
             // leak through, could not kill passouts at all. A free passout is
             // now HUGGED: just outside its body, where it is the nearest
             // enemy and splash/flame cover it, at zero damage cost.
+            // v6.86.2 ARMOUR CONFIDENCE (user: "pat is tanky so it can absorb
+            // most damages with levelled up olives and negroni"). Levels in
+            // the two mitigation lines buy the right to stand in the fray —
+            // which is exactly what the passout station and the ult window
+            // need. Already applied to the crowd tolerance; now it also buys
+            // down caution and the panic threshold, and a tank buys more.
+            // v6.86.4: the demo REFUTES armour-as-licence-to-brawl. With OLIVE
+            // at 6 and NEGRONI at 5 the human still held crowd p75 = 1 body
+            // within 90px, median HP 100% and p10 84% — armour was spent on
+            // not dying to the odd hit, not on standing in the fray. The
+            // discount survives only as the holdout-anchor licence.
+            armorConfPer: 0.025,   // per combined OLIVE+NEGRONI level
+            armorConfMax: 0.30,    // cap (anchor licence only — see cautionShare)
+            armorCautionShare: 0,
+            // v6.86.4 BANK-AND-DETONATE, measured off a 19.7-minute manual Pat
+            // demo (2635 samples). The human fired 14 ultimates on cooldown
+            // (mean gap 75s), 13 of which reduced the passout count, removing
+            // 41 bodies — including 15 in ONE blast from a field of 21. Every
+            // shot was taken 55-109px from the nearest body (median 78), never
+            // hugging. Base attacks are irrelevant to this: the bodies were
+            // 13k HP at 4:34, 193k at 10:08 and 1.8M at 18:54, versus Pat's
+            // ~439 dps. So passouts are not farmed one at a time — they are
+            // BANKED, and the ult is dropped into the pile when it comes up.
+            ultHarvestLeadS: 15,   // start positioning this long before the ult is ready
+            ultHarvestPull: 60,    // pull toward the cluster centroid while harvesting
+            // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
+            // every 3 frames along the aim vector, speed 9-11, rainbow-gun
+            // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
+            // during a burn the planner is paid for headings that line the
+            // best target up with the stream.
+            flameAimValue: 95,   // measured: below ~90 the aim term loses to ordinary station/loot pull
+            flameAimRange: 420,
             poHugPad: 8,
-            poFocusValue: 26,      // being the nearest thing to the station passout
+            // v6.86.2 FEASIBILITY GATE. A drunk-wave passout carries
+            // DIFF().hp * 8*(1+(estBoss-1)*0.7)*(1+gt/60*0.22) * 2 HP:
+            // ~1.4k at 5 min, 7k at 10, 27k at 15, 77k at 20, 500k at 30.
+            // Pat's whole base output is ~440 dps with every projectile
+            // landing, so past ~12 minutes a passout costs minutes of
+            // dedicated fire and the bot was orbiting bodies it could not
+            // kill. Measure the damage actually going in and walk away when
+            // the projected kill time is not worth it — they deal no contact
+            // damage, so an abandoned one is just scenery.
+            poTtkBudgetS: 30,      // day: a passout worth standing on
+            poTtkBudgetHellS: 18,  // hell: time is worth more
+            poProbeS: 6,           // in-range seconds before judging
+            poEngageRange: 150,    // "in range" for the probe clock
+            poFocusValue: 26,
             poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
@@ -541,6 +586,10 @@
     ]);
     // WATER is NOT banned (user): WATER + SUGAR craft into SIMPLE SYRUP,
     // which opens the ingredient pool toward TOMATO JUICE (ult cooldown).
+    // v6.86.8 (user-verified): these cannot damage the stationary targets —
+    // passouts and NO BOOKING walls — that the day phase is spent clearing.
+    // They are the bottom of the junk tier, below ordinary filler.
+    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER No.2', 'CORPSE REVIVER NO.2', 'ABSINTHE']);
     const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
@@ -773,6 +822,11 @@
 
     const TAB_ID = Math.random().toString(36).slice(2, 6);          // identifies this tab in a parallel farm
     let learn = loadLearn();
+    // v6.86.2 passout feasibility tracking (per run; see planMove)
+    let poTrack = { id: null, hp: 0, at: 0, inRangeS: 0, dps: 0 };
+    let poGiveUp = new Set();
+    function poReconsider() { poGiveUp = new Set(); }
+    function resetPoTracking() { poTrack = { id: null, hp: 0, at: 0, inRangeS: 0, dps: 0 }; poGiveUp = new Set(); }
     let trialParams = null;                                         // CEM sample being trialed this run
     let championRun = false;                                        // this run replays the all-time-best params
     let pendingHellEntry = false;                                   // we clicked the hell entrance — next run is hell

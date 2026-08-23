@@ -521,7 +521,7 @@
             // detour that breaks the burn costs more than any pickup is
             // worth. Everything non-vital yields while the cross burns.
             const flameNow = typeof p.fireCrossUntil === 'number' &&
-                p.fireCrossUntil > (safe(() => frame, 0) || 0);
+                p.fireCrossUntil > (safe(() => gameTime, 0) || 0);   // v6.86.7: seconds, not frames
             if (flameNow && !vital && kind !== 'timestop') v = Math.round(v * 0.45);
             // FLIGHT: a time-stop pickup is the only thing that ends an
             // unkillable chase — it outvalues everything else on the floor.
@@ -540,16 +540,24 @@
         if (!p) { moveSource = 'no player binding'; return null; }
         const { w: fw, h: fh } = fieldSize();
         const M = CONFIG.movement, T = CONFIG.threat;
+        let poTtkOut = null, poDpsOut = 0;   // v6.86.2 reporting (set by the station block)
 
         const maxHp = p.maxHp || p.maxHealth || p.hpMax || 100;
         const hp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
         const hpRatio = Math.max(0, Math.min(1, hp / (maxHp || 1)));
 
-        // FLAME CROSS ACTIVE (user: stand more ground): while the cross burns,
-        // everything near the bot dies — fear drops, farming intensifies, the
-        // standoff tightens so the burn zone stays ON the crowd.
+        // FLAME CROSS — v6.86.7 UNIT FIX. The bot compared this deadline
+        // against `frame`, but the game sets it in SECONDS:
+        //     player.fireCrossUntil = gameTime + (5 + fireCrossBonus)
+        //     if (player.fireCrossUntil && gameTime < player.fireCrossUntil)
+        // Live sample: fireCrossUntil 7968.9, gameTime 8054.4, frame 635073 —
+        // so `fireCrossUntil > frame` was ALWAYS false and every flame
+        // behaviour in this file has been dead code since it was written.
+        // (timeStopUntil and frozenUntil ARE frame-based — checked against the
+        // same sample — so those comparisons stay as they are.)
         const frameNow = safe(() => frame, 0) || 0;
-        const flameOn = typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > frameNow;
+        const gtFlame = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const flameOn = typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > gtFlame;
 
         if (hellDetected) applyHellUnban();   // v6.83.0: fifth-super key opens in hell
         const th = gatherThreats(p);
@@ -654,13 +662,26 @@
         const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
             (safe(() => player.ultSpiralUntil, 0) > gtInv);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';
-        const caution = (ultInvuln ? 0.35 : 1) *
+        // v6.86.4: how close the ultimate is — the whole passout economy keys
+        // off this (see CONFIG.movement.ultHarvestLeadS).
+        const gtUlt = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const ultAtT = safe(() => player.ultReadyAt, null);
+        const ultInS = typeof ultAtT === 'number' ? Math.max(0, ultAtT - gtUlt) : 999;
+        const ultReadyNow = typeof ultAtT === 'number' ? gtUlt >= ultAtT : false;
+        // v6.86.2: armour bought with OLIVE + NEGRONI levels is permission to
+        // hold ground. Pat (tank) converts it 1.4x, which is what lets him
+        // stand on a passout long enough for the flame cross or the ult to
+        // land instead of sliding off the body every time a mob closes.
+        const armorLv = (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
+        const armorConf = Math.min(M.armorConfMax,
+            armorLv * M.armorConfPer * (charOf().style === 'tank' ? 1.4 : 1));
+        const caution = (1 - armorConf * (M.armorCautionShare || 0)) * (ultInvuln ? 0.35 : 1) *
             (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
             (hellDetected ? M.hellCautionMul : 1) *
             (hellRecent ? 1.35 : 1) *
             (rainbowRecent ? 1.35 : 1) *
             (surgeActive ? 1.25 : 1) *
-            (flameOn ? 0.72 : 1);   // the burn IS the shield: hold the fray
+            (flameOn ? 0.85 : 1);   // v6.86.7: the burn is OFFENCE, not a shield — only a mild boldness
 
         // death-cause telemetry. LIVE-AUDIT FIX: pure exposure counting
         // misattributed deaths badly (standing NEAR a wide lane logged 'line'
@@ -745,7 +766,7 @@
         // it drives) is suspended for the window — it would spend joe's eight
         // invulnerable seconds running away from the only thing his spikes
         // can hit.
-        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
+        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 - 0.5 * armorConf) * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -958,7 +979,16 @@
         // everything except being hurt, the rival chase, and flight.
         const flameAnchor = flameOn && !hpPanic && !th.rival && !rainbowRecent && !flight &&
             th.passouts.some(po => !po.contested && !po.far && Math.hypot(po.x - p.x, po.y - p.y) < 260);
-        const anchor = flameAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
+        // v6.86.2 (user: "he needs to be anchored to keep attacking the
+        // holdouts"). A holdout — a passout or wall we are standing on — only
+        // dies to sustained fire, and sliding off it every time a mob closes
+        // is why they never finished. With armour bought (OLIVE/NEGRONI) the
+        // tank has the licence to plant. Hugging distance, not the old
+        // 220px "nearby", is what counts here.
+        const holdoutAnchor = !hpPanic && !markHere && !th.rival && !flight && armorConf > 0.05 &&
+            th.passouts.some(po => !po.contested && !po.far &&
+                (Math.hypot(po.x - p.x, po.y - p.y) - po.r) < M.poEngageRange * 0.5);
+        const anchor = flameAnchor || holdoutAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
@@ -1000,6 +1030,9 @@
             if (poNearest == null || dpo < poNearest) poNearest = dpo;
         }
         if (poW) { poCx /= poW; poCy /= poW; }
+        // v6.86.4: banking is only worth positioning for when the blast is near
+        const ultHarvest = poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
+            !hpPanic && !markHere && !projHere;
 
         // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
         // no booking mobs and passouts in day" — with a 17:59 screenshot
@@ -1062,6 +1095,24 @@
             ? ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90))
             : null;
 
+        // v6.86.7 FLAME AIM. While the cross burns, the damage goes where the
+        // bot is FACING — so choose what to point at before scoring headings.
+        // Priority follows what the burn can actually cash in: a passout it
+        // could never out-damage otherwise, then a wall, then a boss, then
+        // whatever is closest.
+        let flameTarget = null;
+        if (flameOn && !hpPanic) {   // hurt: survive first, the burn is offence
+            let bestF = -Infinity;
+            const consider = (x, y, w) => {
+                const d = Math.hypot(x - p.x, y - p.y);
+                if (d > M.flameAimRange) return;
+                const sc = w / (1 + d / 200);
+                if (sc > bestF) { bestF = sc; flameTarget = { x, y, d }; }
+            };
+            for (const po of th.passouts) if (!po.far) consider(po.x, po.y, 3);
+            for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
+        }
+
         let best = null;
         const N = M.samples;
         for (let i = 0; i <= N; i++) {
@@ -1071,6 +1122,21 @@
 
             const nx = Math.max(0, Math.min(fw, p.x + dx * step));
             const ny = Math.max(0, Math.min(fh, p.y + dy * step));
+
+            // v6.86.2: distance from THIS candidate to the nearest live body.
+            // fireBase() shoots nearestEnemy() measured from the PLAYER, so
+            // this is the number the passout station has to beat: standing
+            // closer to the passout than to any mob is the only way the base
+            // attack ever points at it. (6.86.1 compared the wrong pair — it
+            // asked whether the player was nearer the passout than the MOBS
+            // were, which is a different and usually unwinnable condition
+            // when a mob is chasing us and the passout is parked.)
+            let candNearestLive = Infinity;
+            for (const e of th.enemies) {
+                if (e.wall) continue;
+                const de = Math.hypot(nx - e.x, ny - e.y) - (e.r || 0);
+                if (de < candNearestLive) candNearestLive = de;
+            }
 
             let danger = 0;
 
@@ -1335,11 +1401,55 @@
                 // 10-minute drizzle: 8 kills). Scoring hp + 0.5*distance keeps
                 // the frailty logic but charges transit for it (same sim: 13
                 // kills, +62%). Fell-first (lowest id) still breaks ties.
-                let tgtPo = null, tgtScore = Infinity;
+                let tgtPo = null, tgtScore = Infinity; let poTtk = null;
                 for (const po of th.passouts) {
                     if (po.contested || po.far) continue;
+                    if (poGiveUp.has(po.id)) continue;   // v6.86.2: measured unkillable this run
                     const sc = po.maxHp + M.killOrderDist * Math.hypot(po.x - p.x, po.y - p.y);
                     if (sc < tgtScore || (sc === tgtScore && tgtPo && po.id < tgtPo.id)) { tgtScore = sc; tgtPo = po; }
+                }
+                // v6.86.2 FEASIBILITY. Watch the HP actually coming off the
+                // station target while we are in range of it. If the damage
+                // going in projects a kill time past the budget — or no
+                // damage lands at all — the body is scenery for the rest of
+                // the run: it deals no contact damage, and the seconds are
+                // worth more spent levelling. Only in-range time counts, so
+                // the walk over never condemns a passout.
+                if (tgtPo) {
+                    const nowPo = Date.now();
+                    if (poTrack.id !== tgtPo.id) {
+                        poTrack = { id: tgtPo.id, hp: tgtPo.hp, at: nowPo, inRangeS: 0, dps: 0 };
+                    } else {
+                        const dt = (nowPo - poTrack.at) / 1000;
+                        if (dt >= 0.4) {
+                            const inRange = (Math.hypot(tgtPo.x - p.x, tgtPo.y - p.y) - tgtPo.r) < M.poEngageRange;
+                            if (inRange) poTrack.inRangeS += dt;
+                            const drop = poTrack.hp - tgtPo.hp;
+                            if (drop > 0) {
+                                const inst = drop / dt;
+                                poTrack.dps = poTrack.dps > 0 ? poTrack.dps * 0.7 + inst * 0.3 : inst;
+                            }
+                            poTrack.hp = tgtPo.hp;
+                            poTrack.at = nowPo;
+                        }
+                    }
+                    // The probe measures BASE-ATTACK dps, and the base attack
+                    // is not the tool that clears a grown passout — the ult
+                    // and the flame cross are. While either is up (or nearly
+                    // up), a slow burn is not evidence of hopelessness.
+                    const ultAt = safe(() => player.ultReadyAt, Infinity);
+                    const ultUpSoon = flameOn || (typeof ultAt === 'number' && (gtDeepP + 12) >= ultAt);
+                    const budget = hellDetected ? M.poTtkBudgetHellS : M.poTtkBudgetS;
+                    poTtk = poTrack.dps > 0 ? tgtPo.hp / poTrack.dps : Infinity;
+                    poTtkOut = poTtk; poDpsOut = poTrack.dps;
+                    if (poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
+                        poGiveUp.add(tgtPo.id);
+                        log('passout', tgtPo.id, 'abandoned — ' +
+                            (poTrack.dps > 0 ? Math.round(poTtk) + 's to kill at ' + Math.round(poTrack.dps) + ' dps'
+                                             : 'no damage landing') +
+                            ' (budget ' + budget + 's, hp ' + Math.round(tgtPo.hp) + ')');
+                        tgtPo = null;
+                    }
                 }
                 // Corpse Reviver zombies CANNOT hit passouts (user-verified):
                 // with CR as the only cocktail, farming them is slow
@@ -1399,7 +1509,13 @@
                     // zone so the flame actually covers the body. The zone
                     // itself is still off-limits: contact ticks are what the
                     // 55-danger retreat gradient below exists to prevent.
-                    if (flameOn) ring = Math.min(ring, zone + 24);
+                    // v6.86.7: the station no longer collapses during a burn.
+                    // The cross is NOT a body-centred aura — the source fires
+                    // three projectiles every 3 frames along the AIM vector at
+                    // speed 9-11 ("레인보우건급", rainbow-gun class). It is a
+                    // directional flamethrower, so what matters is pointing it
+                    // at the target, not standing on it.
+
                     // v6.86.1 HUG THE STATION TARGET. Two source facts kill
                     // the standoff ring for a FREE passout:
                     //   1. fireBase() shoots `nearestEnemy()` over all
@@ -1412,29 +1528,28 @@
                     // to leak past the mob it was actually targeting.
                     // A contested passout keeps the old ring — the live
                     // bodies around it are the real reason to stand back.
-                    const hug = (po === tgtPo) && !po.contested;
-                    if (hug) ring = po.r + (typeof p.r === 'number' ? p.r : 7.2) + M.poHugPad;
+                    // v6.86.4: the hug is RETRACTED. It was built on the theory
+                    // that fireBase()'s nearestEnemy() had to point at the body
+                    // — but the body carries 13k HP by minute 4 and 1.8M by
+                    // minute 19, so base attacks never kill one either way.
+                    // The manual demo stands at 61-94px (median 82 centre,
+                    // ~45 from the edge), which is what patRing already said.
+                    const hug = false;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
-                    if (hug) {
-                        gain += M.passoutValue * (crOnly ? 0.4 : 1) *
-                            (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
-                        // BE the nearest enemy to it, or the shot goes
-                        // somewhere else: reward closing inside the distance
-                        // to the nearest live body.
-                        const nearestLive = th.enemies.reduce((m, e) =>
-                            Math.min(m, Math.hypot(e.x - po.x, e.y - po.y)), Infinity);
-                        if (d1 < nearestLive && dNow >= nearestLive) gain += M.poFocusValue;
-                        else if (d1 < nearestLive) gain += M.poFocusValue * 0.35;
-                        // the body itself is solid: standing in it just gets
-                        // us shoved back out, so keep a light penalty only
-                        if (d1 < zone) danger += M.poBlockPenalty * (1 - Math.min(1, d1 / zone));
-                    } else if (dNow < zone) {
-                        danger += M.poBlockPenalty * (1 - Math.min(1, d1 / (zone + 30)));
+                    if (dNow < zone) {
+                        // v6.86.4: the cost of being ON the body is BLOCKAGE,
+                        // not damage — the game shoves the player out and the
+                        // step is wasted, which can pin us against a wall in a
+                        // crowd. The magnitude that was tuned as a contact
+                        // gradient turns out to be right for the pathing cost,
+                        // so it stands; only the reasoning changed.
+                        danger += 55 * (1 - Math.min(1, d1 / (zone + 30)));
                     } else {
-                        // every non-station passout is a navigation obstacle:
-                        // impassable, but not dangerous
-                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += M.poBlockPenalty;
+                        if (po === tgtPo) gain += M.passoutValue * (crOnly ? 0.4 : 1) *
+                            (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
+                        // never path through an impassable body to reach the far side
+                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += 60;
                     }
                 }
             }
@@ -1495,11 +1610,26 @@
             // the user wants passout loot funding the ult. The gate is now the
             // safety half of `anchor` only: hurt, or a blast/shot overlapping
             // the stand position, still suspends it.
+            // v6.86.7: pay for pointing the flamethrower at the target. dx,dy
+            // is a unit heading, so this is the cosine of the angle between
+            // the stream and the target — the planner turns to face it while
+            // still free to keep its distance.
+            if (flameOn && flameTarget && !hpPanic) {
+                const tl = Math.max(1, flameTarget.d);
+                gain += M.flameAimValue * ((dx * (flameTarget.x - p.x) + dy * (flameTarget.y - p.y)) / tl);
+            }
+
+            // v6.86.4 HARVEST WINDOW. The demo's whole passout economy is
+            // positional: the human drifts onto the pile as the ult comes off
+            // cooldown and detonates from ~78px. So the centroid pull is weak
+            // background behaviour until the ult is within ultHarvestLeadS,
+            // then it becomes the dominant term.
             const ultAimOk = ultFall ? (poN >= 1 && !hpPanic && !markHere && !projHere) : (anchor && poN >= 2);
             if (ultAimOk) {
                 const eNow = Math.hypot(p.x - poCx, p.y - poCy);
                 const eNew = Math.hypot(nx - poCx, ny - poCy);
-                gain += (ultFall ? 22 : 14) * (eNow - eNew) * 0.15;
+                const w = ultHarvest ? M.ultHarvestPull : (ultFall ? 22 : 14);
+                gain += w * (eNow - eNew) * 0.15;
             }
 
             // kiting sweep + gap escape
@@ -1560,6 +1690,11 @@
             // nearest live (non-passout) body — how the ult gate decides
             // whether a spray/aura ult has anything to actually hit
             adjacent: th.enemies.reduce((m, e) => Math.min(m, Math.hypot(e.x - p.x, e.y - p.y) - (e.r || 0)), Infinity),
+            poTtk: (poTtkOut == null || !isFinite(poTtkOut)) ? null : Math.round(poTtkOut),
+            poDps: poDpsOut ? Math.round(poDpsOut) : 0, poGaveUp: poGiveUp.size,
+            armorLv, armorConf: +armorConf.toFixed(2), holdoutAnchor,
+            flameAim: flameTarget ? Math.round(flameTarget.d) : null,
+            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),

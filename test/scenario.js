@@ -299,16 +299,16 @@ if (which === 'ult-falloff') {
     // where the old gate was still waiting.
     global.enemies = [{ type: 'passout', x: 375, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 9 }];
     const p2 = pineBot.test.planMove();
-    // v6.86.1: the shortened retry gate belongs to the NUKE ult only.
-    // Pat's spiral pays dmg*9.6*2^(lv-1) per scattered projectile against a
-    // passout carrying d.hp*strength*2 — it cannot clear one, so a passout
-    // at 105px is no longer a reason for pat to fire at all.
+    // v6.86.2: pat's spiral IS the passout clear tool (39 volleys x 3 arms
+    // x 691 at lv1, 636k at lv3) but only into what it sweeps — so a passout
+    // at 105px, inside ultAdjacent, is exactly what it is for. What pat must
+    // not do is burn it on a passout across the floor (see `ult-kinds`).
     let ults = 0; global.useUltimate = () => { ults++; };
     pineBot.test.maybeAbilities(p2);
     setTimeout(() => {
         pineBot.test.maybeAbilities(p2);
-        test('pat does not spend the spray ult on a passout', () =>
-            assert.strictEqual(ults, 0, 'ults ' + ults));
+        test('pat spends the spray ult on a passout he is standing on', () =>
+            assert.ok(ults >= 1, 'ults ' + ults));
         test('pat is tagged with the spray ult kind', () =>
             assert.strictEqual(global.window.pineBotStats().charProfile.ultKind, 'spray'));
         // ...but the same plan with a body ON him is exactly what it is for
@@ -336,14 +336,28 @@ if (which === 'flame-cross') {
         return pl.dx * (po.x - 270) / 165 + pl.dy * (po.y - 270) / 165;
     };
     const cold = run(false), hot = run(true);
-    // v6.86.1: the 165px station was built on "touching a passout hurts",
-    // which the live source contradicts — and standing that far out meant
-    // fireBase()'s nearestEnemy() never picked the passout. A FREE passout is
-    // hugged now, cross or no cross, so both cases close.
-    test('Pat closes on a free passout with no cross burning', () =>
-        assert.ok(cold > 0.7, 'closing ' + cold.toFixed(2)));
-    test('with the cross burning, Pat closes on the passout', () =>
-        assert.ok(hot > 0.7, 'closing ' + hot.toFixed(2)));
+    // v6.86.4: the hug is retracted. The manual demo stands at 61-94px
+    // (median 82) and kills nothing with base attacks — so Pat holds his
+    // station until the flame (or the ult) gives him a reason to close.
+    test('without the cross, Pat holds his station', () =>
+        assert.ok(cold < 0.5, 'closing ' + cold.toFixed(2)));
+    // v6.86.7: the cross is a directional flamethrower fired along the aim
+    // vector, so the burn makes Pat TURN TO FACE the target — not stand on it.
+    test('with the cross burning, Pat points the stream at the passout', () =>
+        assert.ok(hot > 0.7, 'alignment ' + hot.toFixed(2)));
+    test('the burn deadline is read in SECONDS, not frames', () => {
+        // the game sets fireCrossUntil = gameTime + secs and tests
+        // `gameTime < fireCrossUntil`. A deadline already past must read as
+        // cold — under the old `> frame` comparison it read as burning,
+        // which is how the bug survived its own test for so long.
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9, r: 7.2, fireCrossUntil: 30 };
+        global.enemies = [po];
+        const stale = pineBot.test.planMove();
+        assert.strictEqual(stale.flameAim, null, 'a lapsed burn still counted as active');
+        global.player.fireCrossUntil = 1e5;
+        const live = pineBot.test.planMove();
+        assert.ok(live.flameAim != null, 'a live burn was not detected');
+    });
     // and the reason it is safe: the body deals no damage
     test('a lone passout raises no contact danger', () => {
         global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
@@ -802,11 +816,23 @@ if (which === 'learned') {
     let pw; for (let i = 0; i < 8; i++) pw = pineBot.test.planMove();
     test('patRing.late 118: contested passout at 110px, the planner backs out', () =>
         assert.ok(pw.dx < -0.3, 'dx ' + pw.dx.toFixed(2)));
-    // the same passout with the crowd gone is hugged, not ringed
-    global.enemies = [{ type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 }];
+    // v6.86.4: uncontested changes nothing on its own — the ring is the ring.
+    // What changes it is the ULT coming up: the demo's economy is to bank the
+    // bodies and drift onto the pile as the blast comes off cooldown.
+    global.enemies = [
+        { type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 },
+        { type: 'passout', x: 395, y: 290, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 5 }
+    ];
+    global.player.ultReadyAt = 1e9;                 // ult far away: hold the ring
     let pf; for (let i = 0; i < 8; i++) pf = pineBot.test.planMove();
-    test('the same passout, uncontested, is closed on instead', () =>
-        assert.ok(pf.dx > 0.3, 'dx ' + pf.dx.toFixed(2)));
+    test('with the ult cold, the bot still holds off the pile', () =>
+        assert.strictEqual(pf.ultHarvest, false));
+    global.player.ultReadyAt = 0;                   // ult ready: harvest
+    let ph; for (let i = 0; i < 8; i++) ph = pineBot.test.planMove();
+    test('with the ult ready, the harvest window opens', () =>
+        assert.strictEqual(ph.ultHarvest, true));
+    test('and the bot drifts onto the passout pile to detonate', () =>
+        assert.ok(ph.dx > pf.dx + 0.2, 'cold ' + pf.dx.toFixed(2) + ' ready ' + ph.dx.toFixed(2)));
     pineBot.test.applyDefaults();
     // --- (c) learned enemy-type weight multiplies the danger field.
     global.enemies = [{ type: 'bomber', x: 340, y: 270, r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true }];
@@ -928,8 +954,12 @@ if (which === 'ult-kinds') {
     const fire = (plan, ms) => { let n = 0; global.useUltimate = () => { n++; }; pineBot.test.maybeAbilities(plan); return n; };
     const base = { hpRatio: 0.9, hpPanic: false, panic: false, danger: 0, near: 2, dx: 0, dy: 0,
                    passoutsNear: 2, poCentroidDist: 60, poNearest: 60, adjacent: 400, toughness: 1 };
-    test('pat: a passout field alone does not spend the ult', () =>
-        assert.strictEqual(fire({ ...base, ultFalloff: true }), 0));
+    test('pat: a passout across the floor does not spend the ult', () =>
+        assert.strictEqual(fire({ ...base, ultFalloff: true, poNearest: 420, poCentroidDist: 420 }), 0));
+    test('pat: a passout he is standing on does', () => {
+        pineBot.test.resetUltGate();
+        assert.ok(fire({ ...base, ultFalloff: true, poNearest: 45 }) >= 1);
+    });
     test('pat: a body already on him does', () => {
         pineBot.test.resetUltGate();
         assert.ok(fire({ ...base, contactImminent: true, adjacent: 18 }) >= 1);
@@ -940,7 +970,11 @@ if (which === 'ult-kinds') {
     });
     test('joe: not spent on a passout field across the floor', () => {
         pineBot.test.setChar('joe'); pineBot.test.resetUltGate();
-        assert.strictEqual(fire({ ...base, adjacent: 400 }), 0);
+        assert.strictEqual(fire({ ...base, adjacent: 400, poNearest: 420, poCentroidDist: 420 }), 0);
+    });
+    test('joe: spikes ARE spent on a passout inside their ~149px reach', () => {
+        pineBot.test.setChar('joe'); pineBot.test.resetUltGate();
+        assert.ok(fire({ ...base, adjacent: 400, poNearest: 60 }) >= 1);
     });
     test('minguk: the nuke IS the passout clear, at any range', () => {
         pineBot.test.setChar('minguk'); pineBot.test.resetUltGate();
@@ -989,6 +1023,178 @@ if (which === 'ult-kinds') {
     done();
 }
 
+// v6.86.2 — passout feasibility: measure the damage going in, walk away from
+// what cannot be killed, but never condemn a body the ult is about to clear
+if (which === 'tank-holdout') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    // (a) a tank with no super yet puts the first one above ordinary work
+    const sup = pineBot.test.scoreCard({ n: 'SUPER VODKA MARTINI', type: 'super', lv: 0, maxlv: 6 }, 0, []);
+    test('a tank with no super pays a premium for the first one', () =>
+        assert.ok(/tank-first-super/.test(sup.why), sup.why));
+    // (a2) and the armour lines are front-loaded: worth most at minute 0,
+    // nothing by the finale, because armour is what licences the tank's
+    // whole posture for the rest of the run
+    const oliveAt = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+    global.gameTime = 60; const early = oliveAt();
+    global.gameTime = 1150; const late = oliveAt();
+    test('a tank pays an early premium for the armour lines', () =>
+        assert.ok(/tank-armor-early/.test(early.why), early.why));
+    test('the premium has decayed away by the finale', () =>
+        assert.ok(early.score > late.score, early.score.toFixed(0) + ' vs ' + late.score.toFixed(0)));
+    global.gameTime = 900;
+    // (a3) the ultimate is the tank's passout economy: the premium runs to
+    // the cap, because the last levels are where a cast wipes instead of chips
+    const ultCard = () => pineBot.test.scoreCard({ n: 'ULTIMATE UP', type: 'ult', lv: 2, maxlv: 6 }, 0, []);
+    global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9, ultLevel: 5 };
+    const nearCap = ultCard();
+    global.player.ultLevel = 6;
+    const atCapUlt = ultCard();
+    test('a tank still pays for the ult at level 5', () =>
+        assert.ok(/tank-ult-spine/.test(nearCap.why), nearCap.why));
+    test('and stops once it is maxed', () =>
+        assert.ok(!/tank-ult-spine/.test(atCapUlt.why), atCapUlt.why));
+    test('TOMATO JUICE is valued as ult throughput for a tank', () => {
+        const tj = pineBot.test.scoreCard({ n: 'TOMATO JUICE', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+        assert.ok(/tank-ult-cadence/.test(tj.why), tj.why);
+    });
+    // (a4) the corpse-reviver line cannot touch a holdout, so it sits under
+    // every other junk pick — but a pool of pure junk still has an order
+    test('the CR line ranks below ordinary junk', () => {
+        const abs = pineBot.test.scoreCard({ n: 'ABSINTHE', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+        const coin = pineBot.test.scoreCard({ n: 'COINTREAU', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+        assert.ok(/dead-vs-holdouts/.test(abs.why), abs.why);
+        assert.ok(abs.score < coin.score, abs.score + ' vs ' + coin.score);
+    });
+    test('and still below the revive, which at least buys a life', () => {
+        const abs = pineBot.test.scoreCard({ n: 'ABSINTHE', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+        const cb = pineBot.test.scoreCard({ n: 'COFFEE BEANS', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+        assert.ok(abs.score < cb.score, abs.score + ' vs ' + cb.score);
+    });
+    // (b) armour bought with OLIVE + NEGRONI buys down caution and panic
+    const at = lv => {
+        pineBot.test.setOwned({ OLIVE: lv, NEGRONI: lv });
+        global.player = { x: 270, y: 270, hp: 110, maxHp: 180, speed: 1.9, r: 7.2 };
+        global.enemies = [
+            { type: 'passout', x: 320, y: 270, r: 37, fallT: 0, hp: 5000, maxHp: 5000, id: 4 },
+            { type: 'mob', x: 250, y: 250, r: 12, hp: 400, maxHp: 400, speed: 1.3, moving: true }
+        ];
+        let pl; for (let i = 0; i < 4; i++) pl = pineBot.test.planMove();
+        return pl;
+    };
+    const bare = at(0), armored = at(6);
+    test('armour is measured off the OLIVE + NEGRONI levels', () =>
+        assert.ok(armored.armorLv === 12 && bare.armorLv === 0, armored.armorLv + '/' + bare.armorLv));
+    test('a tank converts armour into a caution discount', () =>
+        assert.ok(armored.armorConf > bare.armorConf && armored.armorConf > 0.2, 'conf ' + armored.armorConf));
+    test('the armoured tank plants on the holdout instead of sliding off', () =>
+        assert.ok(armored.holdoutAnchor === true && bare.holdoutAnchor === false,
+            armored.holdoutAnchor + '/' + bare.holdoutAnchor));
+    done();
+}
+
+if (which === 'po-feasibility') {
+    const { pineBot, logs } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const burn = (hp, dmgPerTick, ms, extra) => {
+        pineBot.test.resetPoTracking();
+        global.player = Object.assign({ x: 300, y: 270, hp: 180, maxHp: 180, speed: 1.9, r: 7.2,
+                                        ultReadyAt: 1e9 }, extra || {});
+        const po = { type: 'passout', x: 360, y: 270, r: 37, fallT: 0, hp, maxHp: hp, id: 7 };
+        global.enemies = [po];
+        let pl; const t0 = Date.now();
+        while (Date.now() - t0 < ms) {
+            pl = pineBot.test.planMove();
+            po.hp = Math.max(1, po.hp - dmgPerTick);
+            const w = Date.now(); while (Date.now() - w < 100) { }
+        }
+        return { plan: pl, po };
+    };
+    // 1400 hp is a 5-minute passout: 300 dps clears it inside the budget
+    const easy = burn(1400, 30, 4000);
+    test('a killable passout is kept as the station target', () =>
+        assert.strictEqual(easy.plan.poGaveUp, 0, 'gave up ' + easy.plan.poGaveUp));
+    test('the observed kill rate is measured, not assumed', () =>
+        assert.ok(easy.plan.poDps > 100, 'dps ' + easy.plan.poDps));
+    // 80k is a 20-minute passout: 300 dps needs 4+ minutes, far past the budget
+    const hard = burn(80000, 30, 9000);
+    test('an unkillable passout is abandoned after the probe window', () =>
+        assert.strictEqual(hard.plan.poGaveUp, 1, 'gave up ' + hard.plan.poGaveUp));
+    test('the abandonment is logged with the measured numbers', () =>
+        assert.ok(logs.some(l => /passout .* abandoned/.test(l)), logs.slice(-3).join(' | ')));
+    // ...but not while the ult — the actual clear tool — is nearly ready
+    const withUlt = burn(80000, 30, 9000, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
+    test('a body the ult is about to clear is NOT abandoned', () =>
+        assert.strictEqual(withUlt.plan.poGaveUp, 0, 'gave up ' + withUlt.plan.poGaveUp));
+    done();
+}
+
+// v6.86.3 — the 🎥 demo digest: a 9k-sample recording compressed to a few KB
+if (which === 'demo-digest') {
+    const S = [], E = [];
+    for (let i = 0; i < 720; i++) {
+        const gt = Math.round(i * 0.25);
+        const poD = gt < 60 ? null : (gt < 100 ? 140 - gt : 45);
+        S.push({ t: i * 250, gt, x: 270, y: 270, hp: gt < 90 ? 100 : 78, poD,
+            poHp: poD == null ? null : (gt < 130 ? 6000 : 0), poN: poD == null ? 0 : 2,
+            bossD: null, wallD: null, near: gt > 80 ? 4 : 1, marks: 0, fbD: null, frz: 0,
+            slow: 1, mobHp: 300, fx: 0, ulv: gt < 120 ? 1 : 2, ur: 1,
+            sup: gt < 95 ? 0 : 1, ol: gt < 40 ? 0 : 4, ng: gt < 80 ? 0 : 2 });
+    }
+    E.push({ t: 0, e: 'pick', gt: 35, a: [0, ['OLIVE', 'MINT', 'SUGAR']] });
+    E.push({ t: 0, e: 'ult', gt: 118 });
+    E.push({ t: 0, e: 'dash', gt: 60 });
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 100 },
+        storage: { pineBotDemos: JSON.stringify([{ at: 1, n: S.length, samples: S, events: E }]) } });
+    pineBot.stop();
+    const d = pineBot.demo();
+    test('a recorded demo produces a digest', () => assert.ok(!d.error, JSON.stringify(d).slice(0, 80)));
+    test('the digest is small enough to paste', () => {
+        const n = JSON.stringify(d).length;
+        assert.ok(n < 20000, n + ' chars from ' + S.length + ' samples');
+    });
+    test('it reports where the human stands while farming a passout', () =>
+        assert.ok(d.passoutStation.median === 45, JSON.stringify(d.passoutStation)));
+    test('it pairs every ultimate with the passout HP around it', () => {
+        const u = d.ultimates.uses[0];
+        assert.ok(u && u.gt === 118 && u.poHpBefore === 6000 && u.poD === 45, JSON.stringify(u));
+    });
+    test('it timestamps the build: first super, ult level, armour', () => {
+        assert.strictEqual(d.build.firstSuperGt, 95);
+        assert.strictEqual(d.build.ultLevelReached, 2);
+        assert.strictEqual(d.build.oliveTimeline['4'], 40);
+    });
+    test('it records what was actually picked, not just the pool', () =>
+        assert.strictEqual(d.build.picks[0].took, 'OLIVE'));
+    test('the digest splits the day from the deep game', () => {
+        // one demo spanning both: the day farms passouts in an empty field,
+        // the deep game has none and stands in crowds — pooling hides both
+        const S2 = [], E2 = [];
+        for (let i = 0; i < 600; i++) {
+            const gt = i * 8;
+            S2.push({ t: i * 160, gt, x: 270, y: 270, hp: gt < 1200 ? 90 : 100,
+                poD: gt < 1200 ? 80 : null, poHp: gt < 1200 ? 5000 : null, poN: gt < 1200 ? 2 : 0,
+                bossD: null, wallD: null, near: gt < 1200 ? 1 : 18, marks: 0, fbD: null, frz: 0,
+                slow: 1, mobHp: 1e4, fx: 0, ulv: 6, ur: 1, sup: 3, ol: 6, ng: 6 });
+        }
+        E2.push({ e: 'ult', gt: 300 }); E2.push({ e: 'ult', gt: 4000 });
+        try { localStorage.setItem('pineBotDemos', JSON.stringify([{ at: 1, n: S2.length, samples: S2, events: E2 }])); } catch (e) { }
+        const d2 = pineBot.demo();
+        assert.strictEqual(d2.byPhase.day.passoutStationMedian, 80);
+        assert.strictEqual(d2.byPhase.deep.passoutStationMedian, null);
+        assert.ok(d2.byPhase.deep.crowdP75 > d2.byPhase.day.crowdP75);
+        assert.strictEqual(d2.byPhase.day.ults, 1);
+        assert.strictEqual(d2.byPhase.deep.ults, 1);
+    });
+    test('an empty store says so instead of throwing', () => {
+        try { localStorage.removeItem('pineBotDemos'); } catch (e) { }
+        assert.ok(pineBot.demo().error);
+    });
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -1021,4 +1227,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

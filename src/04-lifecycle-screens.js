@@ -68,6 +68,7 @@
 
     function startRun() {
         runActive = true;
+        resetPoTracking();   // v6.86.2: passout kill-rate evidence is per run
         runStart = Date.now();
         runPicks = [];
         runPickCounts = {};

@@ -67,8 +67,20 @@
         const nukeUlt = CH.ultKind === 'nuke' || CH.ultKind == null;
         const ultAdj = A.ultAdjacent || 130;
         const adjacentNow = isFinite(plan.adjacent) ? plan.adjacent <= ultAdj : (plan.near >= 3);
-        const harvest = nukeUlt && !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
-            ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
+        // v6.86.2 CORRECTION (user, confirmed by the source arithmetic):
+        // "the only way pat can clear out passouts consistently is through
+        // flame crosses and ultimates". 6.86.1 went too far by taking
+        // passouts off the spray/aura target list entirely. The right rule is
+        // RANGE, not target type: pat's spiral pays 39 volleys x 3 arms x 691
+        // (80k at lv1, 636k at lv3) but only into what it sweeps, and joe's
+        // spikes cover ~149px. A passout is 27k HP at 15 min and 77k at 20 —
+        // hopeless for base attacks, routine for an ult fired while hugging
+        // it. So: passout + adjacent = fire; passout across the floor = no.
+        const poAdjacent = plan.poNearest != null && plan.poNearest <= ultAdj;
+        const harvest = !plan.hpPanic && (nukeUlt
+            ? ((plan.passoutsNear || 0) >= 3 ||
+               ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)))
+            : poAdjacent);
         // v6.85.8 (user: "the bot should be using the ultimate more frequently
         // to kill passouts"). Adding another TRIGGER would have done nothing —
         // `lootTargets` already fires on any passout within 190px, so every
@@ -78,8 +90,9 @@
         // after the game's own cooldown ends. With a passout in falloff range
         // the retry drops to 900 ms so the ult goes off as soon as the game
         // allows it. callGame is a no-op while the real cooldown runs.
-        const poClose = nukeUlt && plan.ultFalloff === true && !plan.hpPanic &&
-            plan.poNearest != null && plan.poNearest < 120;
+        // the retry gate drops for ANY bartender standing on a passout — the
+        // sooner the game's own cooldown is cashed in, the more bodies clear
+        const poClose = !plan.hpPanic && plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
         // siege open), bosses in range, and passout clusters. Damage +
@@ -91,7 +104,7 @@
                plan.roamingBoss === true)
             // spray/aura: only what the ult can actually reach counts, and a
             // passout is never a reason to burn it
-            : ((plan.wallNear === true || plan.bossNear === true) && adjacentNow));
+            : (poAdjacent || ((plan.wallNear === true || plan.bossNear === true) && adjacentNow)));
         const linebackerBurst = !plan.hpPanic && (plan.lines || 0) > 0 && plan.boss === true;   // charging linebacker: ult damage + invincibility
         // USER: when mob HP scales past what five supers can kill, the ult
         // becomes the regular clear tool — fire on cooldown into any group.
@@ -128,6 +141,7 @@
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt)) {
             lastUlt = now;
             callGame('useUltimate');
+            poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
         }
     }
 
@@ -232,7 +246,7 @@
             '<button id="pbStats" style="cursor:pointer" title="Stats report — copy &amp; paste to Claude">📊</button> ' +
             '<button id="pbSnap" style="cursor:pointer" title="Version comparison — freeze a snapshot of this version and show every version side by side">📸</button> ' +
             '<button id="pbReset" style="cursor:pointer" title="Reset learning (version snapshots are kept)">↺</button> ' +
-            '<button id="pbRec" style="cursor:pointer" title="Record YOUR manual play as a teaching demo (stop the bot first)">🎥</button>' +
+            '<button id="pbRec" style="cursor:pointer" title="Record YOUR manual play as a teaching demo — press once to start, again to stop; the digest opens ready to copy for Claude">🎥</button>' +
             '</div>' +
             '<div>status: <span id="pbStatus" style="color:#8fd">idle</span></div>' +
             '<div id="pbInfo" style="margin-top:5px;color:#aab"></div>';
@@ -290,6 +304,9 @@
             version: scriptTag(),
             scoringProfile: CONFIG.scoringProfile,
             bartender: activeChar || '(bandit)', charProfile: charOf(),
+            passoutFeasibility: (() => { const pl = lastPlan || {};
+                return { killTimeS: pl.poTtk == null ? null : pl.poTtk, observedDps: pl.poDps || 0,
+                         abandonedThisRun: pl.poGaveUp || 0, onField: pl.poField || 0 }; })(),
             runsTotal: learn.runs,
             runsLogged: log.length,
             byVersion: versionComparison(),
@@ -479,22 +496,110 @@
             while (all.length > 4) all.shift();
             localStorage.setItem('pineBotDemos', JSON.stringify(all));
             setStatus('🎥 saved demo: ' + demoRec.samples.length + ' samples, ' + demoRec.events.length + ' events');
+            demoRec = null;
+            showReport(demoDigest());   // v6.86.3: the digest is what gets pasted to Claude
+            return;
         } catch (e) { setStatus('demo save failed: ' + e.message); }
         demoRec = null;
     }
+    // v6.86.3 DEMO DIGEST. A 20-minute demo is ~9k samples — far too big to
+    // hand over. The questions a teaching demo has to answer are few, so the
+    // analysis runs HERE and emits a few KB: how close the human stands to a
+    // passout, whether an ultimate actually clears one, when the first super
+    // and the armour levels land, and what HP they accept before backing off.
+    function demoDigest(idx) {
+        let all = [];
+        try { all = JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { }
+        const d = all[idx == null ? all.length - 1 : idx];
+        if (!d || !d.samples || !d.samples.length) return { error: 'no demo recorded yet — press 🎥, play a run, press 🎥 again' };
+        const S = d.samples, E = d.events || [];
+        const pct = (a, q) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(b.length * q))]; };
+        const at = gt => { let best = null, bd = 1e9; for (const s of S) { const dd = Math.abs((s.gt || 0) - gt); if (dd < bd) { bd = dd; best = s; } } return best; };
+        const firstWhere = f => { for (const s of S) if (f(s)) return s.gt; return null; };
+        // where does the human STAND while farming a passout?
+        const near200 = S.filter(s => s.poD != null && s.poD < 200).map(s => s.poD);
+        // did an ultimate clear a passout? compare the nearest body's HP 3s later
+        const ults = E.filter(e => e.e === 'ult').map(e => {
+            const a = at(e.gt), b = at(e.gt + 3);
+            return { gt: e.gt, ultLv: a ? a.ulv : null, poD: a ? a.poD : null,
+                     poHpBefore: a ? a.poHp : null, poHpAfter: b ? b.poHp : null,
+                     poCountBefore: a ? a.poN : null, poCountAfter: b ? b.poN : null };
+        });
+        const hurt = S.filter(s => s.near >= 3).map(s => s.hp);
+        // v6.86.6: the day and the deep game are different problems — the
+        // 90-minute demo fired 13 of 14 recorded casts with ZERO passouts on
+        // the floor, stood in crowds of 18-220 at 100% HP and never dashed,
+        // while the day demos lived at 79-82px off a passout with crowd p75
+        // of 0-1. Pooling those into one set of percentiles hides both.
+        const phaseOf = s => (s.gt < 1200 ? 'day' : (s.gt < 3600 ? 'hell' : 'deep'));
+        const phases = {};
+        for (const key of ['day', 'hell', 'deep']) {
+            const P = S.filter(s => phaseOf(s) === key);
+            if (!P.length) continue;
+            const po = P.filter(s => s.poD != null && s.poD < 200).map(s => s.poD);
+            phases[key] = {
+                samples: P.length, fromGt: P[0].gt, toGt: P[P.length - 1].gt,
+                passoutStationMedian: pct(po, 0.5), passoutSamples: po.length,
+                passoutsOnFieldMax: Math.max(...P.map(s => s.poN || 0)),
+                hpP10: pct(P.map(s => s.hp), 0.1), hpMedian: pct(P.map(s => s.hp), 0.5),
+                crowdMedian: pct(P.map(s => s.near), 0.5), crowdP75: pct(P.map(s => s.near), 0.75),
+                crowdMax: Math.max(...P.map(s => s.near || 0)),
+                ults: E.filter(e => e.e === 'ult' && phaseOf({ gt: e.gt }) === key).length,
+                dashes: E.filter(e => e.e === 'dash' && phaseOf({ gt: e.gt }) === key).length
+            };
+        }
+        const lvAt = k => { const out = {}; for (const s of S) { const v = s[k] || 0; if (v && out[v] == null) out[v] = s.gt; } return out; };
+        return {
+            note: 'MANUAL DEMO DIGEST — paste this to Claude',
+            version: scriptTag(), char: safe(() => player.key, null),
+            durationS: Math.round((S[S.length - 1].gt || 0) - (S[0].gt || 0)),
+            reachedGt: S[S.length - 1].gt, samples: S.length,
+            passoutStation: {
+                note: 'distance to the NEAREST passout while one is within 200px',
+                p10: pct(near200, 0.1), p25: pct(near200, 0.25), median: pct(near200, 0.5),
+                p75: pct(near200, 0.75), samples: near200.length,
+                shareUnder60px: +(S.filter(s => s.poD != null && s.poD < 60).length / S.length).toFixed(3),
+                everOnField: Math.max(...S.map(s => s.poN || 0))
+            },
+            recordingStartedGt: S[0].gt,   // >0 means the recording began mid-run
+            byPhase: phases,               // day <20min | hell 20-60 | deep 60min+
+            ultimates: { count: ults.length, uses: ults.slice(0, 40) },
+            build: {
+                firstSuperGt: firstWhere(s => (s.sup || 0) >= 1),
+                supersAtEnd: S[S.length - 1].sup || 0,
+                ultLevelReached: Math.max(...S.map(s => s.ulv || 0)),
+                ultLevelTimeline: lvAt('ulv'),
+                oliveTimeline: lvAt('ol'), negroniTimeline: lvAt('ng'),
+                picks: E.filter(e => e.e === 'pick').map(e => ({ gt: e.gt,
+                    took: (e.a && Array.isArray(e.a[1])) ? e.a[1][e.a[0]] : null })).slice(0, 60)
+            },
+            posture: {
+                flameShare: +(S.reduce((n, s) => n + (s.fx || 0), 0) / S.length).toFixed(3),
+                hpP10: pct(S.map(s => s.hp), 0.1), hpMedian: pct(S.map(s => s.hp), 0.5),
+                hpMedianWhenCrowded: pct(hurt, 0.5), crowdedSamples: hurt.length,
+                crowdP75: pct(S.map(s => s.near), 0.75), crowdMax: Math.max(...S.map(s => s.near || 0)),
+                dashes: E.filter(e => e.e === 'dash').length
+            }
+        };
+    }
+
     function demoTick() {
         if (!demoRec) return;
         const p = G.player; if (!p || G.state !== 'playing') return;
         const en = Array.isArray(G.enemies) ? G.enemies.filter(Boolean) : [];
         const fr = safe(() => frame, 0) || 0;
-        let poD = null, bossD = null, wallD = null, near = 0;
+        let poD = null, bossD = null, wallD = null, near = 0, poHp = null, poN = 0;
         let frozenBossD = null, frozenN = 0, hpSum = 0, hpN = 0;
         for (const e of en) {
             const dd = Math.hypot(e.x - p.x, e.y - p.y);
             const ty = String(e.type), bc = String(e.bossChar || '');
             const froz = typeof e.frozenUntil === 'number' && e.frozenUntil > fr;
             if (froz) frozenN++;
-            if (ty === 'passout') { if (poD == null || dd < poD) poD = Math.round(dd); continue; }
+            if (ty === 'passout') {
+                poN++;
+                if (poD == null || dd < poD) { poD = Math.round(dd); poHp = Math.round(e.hp || 0); }
+                continue;
+            }
             if (/nobook/i.test(bc + ty)) { if (wallD == null || dd < wallD) wallD = Math.round(dd); }
             else if (ty === 'boss') {
                 if (bossD == null || dd < bossD) bossD = Math.round(dd);
@@ -515,7 +620,14 @@
             frz: frozenN,                                        // how many enemies are frozen (pause active?)
             slow: typeof p.slowMul === 'number' ? +p.slowMul.toFixed(2) : 1,   // freeze-aura exposure
             mobHp: hpN ? Math.round(hpSum / hpN) : 0,            // scaling proxy for ult-trigger tuning
-            fx: typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > fr ? 1 : 0
+            // v6.86.7: seconds, not frames — this is why every demo read flameShare 0
+            fx: typeof p.fireCrossUntil === 'number' && p.fireCrossUntil > (safe(() => gameTime, 0) || 0) ? 1 : 0,
+            // v6.86.3 — the build state, so a demo answers WHY the play worked
+            poHp: poHp, poN: poN,                                // nearest passout HP + how many on the floor
+            ulv: p.ultLevel || 0,
+            ur: (safe(() => gameTime, 0) || 0) >= (p.ultReadyAt || 0) ? 1 : 0,
+            sup: Object.keys(p.superLv || {}).length,
+            ol: (p.weapons || {}).olive || 0, ng: (p.weapons || {}).negroni || 0
         });
         if (demoRec.samples.length > 9000) demoSave();   // ~24 min cap: autosave
     }
@@ -536,6 +648,8 @@
                 compare: versionComparison,            // every version side by side, with deltas
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
+                demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording
+                demoRaw: () => { try { return JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { return []; } },
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
                 noteVersion,                           // pineBot.noteVersion('6.74.0', { bestTimeS: 15150, note: '...' })
                 table: () => { try { console.table(versionRows().map(r => ({ version: r.version, status: r.status, runs: r.runs, medianMin: r.medianTimeS == null ? null : +(r.medianTimeS / 60).toFixed(1), meanMin: r.meanTimeS == null ? null : +(r.meanTimeS / 60).toFixed(1), sdMin: r.sdTimeS == null ? null : +(r.sdTimeS / 60).toFixed(1), p60: r.p60, p120: r.p120, bestMin: r.bestTimeS == null ? null : +(r.bestTimeS / 60).toFixed(1), hell: r.hellRate, z: r.vsPrev ? r.vsPrev.z : null, verdict: r.vsPrev ? r.vsPrev.verdict : '', note: r.note || '' }))); } catch (e) { } return versionRows(); },
@@ -564,7 +678,7 @@
                     sigmasAtFloor, paramDist, hofRecord,
                     charProfile: charOf,
                     setChar: b => { if (CHARS[b]) activeChar = b; },
-                    resetUltGate: () => { lastUlt = 0; },
+                    resetUltGate: () => { lastUlt = 0; }, resetPoTracking,
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };
