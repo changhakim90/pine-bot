@@ -299,12 +299,23 @@ if (which === 'ult-falloff') {
     // where the old gate was still waiting.
     global.enemies = [{ type: 'passout', x: 375, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 9 }];
     const p2 = pineBot.test.planMove();
+    // v6.86.1: the shortened retry gate belongs to the NUKE ult only.
+    // Pat's spiral pays dmg*9.6*2^(lv-1) per scattered projectile against a
+    // passout carrying d.hp*strength*2 — it cannot clear one, so a passout
+    // at 105px is no longer a reason for pat to fire at all.
     let ults = 0; global.useUltimate = () => { ults++; };
     pineBot.test.maybeAbilities(p2);
     setTimeout(() => {
         pineBot.test.maybeAbilities(p2);
-        test('a passout in falloff range shortens the ult retry gate', () =>
-            assert.strictEqual(ults, 2, 'ults ' + ults + ' (expected a second ask after 1.0s)'));
+        test('pat does not spend the spray ult on a passout', () =>
+            assert.strictEqual(ults, 0, 'ults ' + ults));
+        test('pat is tagged with the spray ult kind', () =>
+            assert.strictEqual(global.window.pineBotStats().charProfile.ultKind, 'spray'));
+        // ...but the same plan with a body ON him is exactly what it is for
+        const p3 = Object.assign({}, p2, { contactImminent: true, adjacent: 20, hpRatio: 0.9 });
+        pineBot.test.maybeAbilities(p3);
+        test('pat spends it when a body is already on him', () =>
+            assert.ok(ults >= 1, 'ults ' + ults));
         done();
     }, 1000);
 }
@@ -325,12 +336,21 @@ if (which === 'flame-cross') {
         return pl.dx * (po.x - 270) / 165 + pl.dy * (po.y - 270) / 165;
     };
     const cold = run(false), hot = run(true);
-    test('without the cross, Pat holds his 165px station', () =>
-        assert.ok(cold < 0.5, 'closing ' + cold.toFixed(2)));
+    // v6.86.1: the 165px station was built on "touching a passout hurts",
+    // which the live source contradicts — and standing that far out meant
+    // fireBase()'s nearestEnemy() never picked the passout. A FREE passout is
+    // hugged now, cross or no cross, so both cases close.
+    test('Pat closes on a free passout with no cross burning', () =>
+        assert.ok(cold > 0.7, 'closing ' + cold.toFixed(2)));
     test('with the cross burning, Pat closes on the passout', () =>
         assert.ok(hot > 0.7, 'closing ' + hot.toFixed(2)));
-    test('the burn window strictly increases the closing rate', () =>
-        assert.ok(hot > cold + 0.3, 'cold ' + cold.toFixed(2) + ' hot ' + hot.toFixed(2)));
+    // and the reason it is safe: the body deals no damage
+    test('a lone passout raises no contact danger', () => {
+        global.player = { x: 270, y: 270, hp: 180, maxHp: 180, speed: 1.9 };
+        global.enemies = [{ type: 'passout', x: 300, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 7 }];
+        const pl = pineBot.test.planMove();
+        assert.ok(pl.contactImminent !== true, 'contactImminent on a harmless obstacle');
+    });
     done();
 }
 
@@ -765,13 +785,28 @@ if (which === 'learned') {
     test('killOrderDist 0.05: frailty dominates, far target wins (east)', () =>
         assert.ok(pl.dx > 0.4, 'dx ' + pl.dx.toFixed(2)));
     pineBot.test.applyDefaults();
-    // --- (b) patRing is live: widen the mid ring, the station moves out.
+    // --- (b) patRing is live. v6.86.1: it governs CONTESTED passouts — the
+    // live bodies packed around one are the real reason to stand off, and a
+    // free passout is hugged instead (it deals no damage, and hugging is the
+    // only way nearestEnemy() ever points the base attack at it).
     pineBot.test.setParam('patRing.late', 118);   // gt 650 = the late bucket
-    global.enemies = [{ type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 }];
+    global.enemies = [
+        { type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 },
+        { type: 'mob', x: 372, y: 250, r: 12, hp: 300, maxHp: 300, speed: 1.4, moving: true },
+        { type: 'mob', x: 388, y: 250, r: 12, hp: 300, maxHp: 300, speed: 1.4, moving: true },
+        { type: 'mob', x: 380, y: 300, r: 12, hp: 300, maxHp: 300, speed: 1.4, moving: true },
+        { type: 'mob', x: 360, y: 280, r: 12, hp: 300, maxHp: 300, speed: 1.4, moving: true },
+        { type: 'mob', x: 400, y: 280, r: 12, hp: 300, maxHp: 300, speed: 1.4, moving: true }
+    ];
     // dist 110 < ring 118+20: the planner must OPEN the gap (move west)
     let pw; for (let i = 0; i < 8; i++) pw = pineBot.test.planMove();
-    test('patRing.late 118: parked at 110px, the planner backs out to the wider ring', () =>
+    test('patRing.late 118: contested passout at 110px, the planner backs out', () =>
         assert.ok(pw.dx < -0.3, 'dx ' + pw.dx.toFixed(2)));
+    // the same passout with the crowd gone is hugged, not ringed
+    global.enemies = [{ type: 'passout', x: 380, y: 270, r: 20, fallT: 0, hp: 55, maxHp: 55, id: 3 }];
+    let pf; for (let i = 0; i < 8; i++) pf = pineBot.test.planMove();
+    test('the same passout, uncontested, is closed on instead', () =>
+        assert.ok(pf.dx > 0.3, 'dx ' + pf.dx.toFixed(2)));
     pineBot.test.applyDefaults();
     // --- (c) learned enemy-type weight multiplies the danger field.
     global.enemies = [{ type: 'bomber', x: 340, y: 270, r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true }];
@@ -885,6 +920,75 @@ if (which === 'cem-lockup') {
     }, 2200);
 }
 
+// v6.86.1 — per-character ultimates and the corrected passout model
+if (which === 'ult-kinds') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const fire = (plan, ms) => { let n = 0; global.useUltimate = () => { n++; }; pineBot.test.maybeAbilities(plan); return n; };
+    const base = { hpRatio: 0.9, hpPanic: false, panic: false, danger: 0, near: 2, dx: 0, dy: 0,
+                   passoutsNear: 2, poCentroidDist: 60, poNearest: 60, adjacent: 400, toughness: 1 };
+    test('pat: a passout field alone does not spend the ult', () =>
+        assert.strictEqual(fire({ ...base, ultFalloff: true }), 0));
+    test('pat: a body already on him does', () => {
+        pineBot.test.resetUltGate();
+        assert.ok(fire({ ...base, contactImminent: true, adjacent: 18 }) >= 1);
+    });
+    test('joe: eight invulnerable seconds are spent on what is adjacent', () => {
+        pineBot.test.setChar('joe'); pineBot.test.resetUltGate();
+        assert.ok(fire({ ...base, hpRatio: 0.4, adjacent: 40 }) >= 1);
+    });
+    test('joe: not spent on a passout field across the floor', () => {
+        pineBot.test.setChar('joe'); pineBot.test.resetUltGate();
+        assert.strictEqual(fire({ ...base, adjacent: 400 }), 0);
+    });
+    test('minguk: the nuke IS the passout clear, at any range', () => {
+        pineBot.test.setChar('minguk'); pineBot.test.resetUltGate();
+        assert.ok(fire({ ...base, adjacent: 400 }) >= 1);
+    });
+    test('the ult kinds match the game source', () => {
+        pineBot.test.setChar('pat');
+        assert.strictEqual(pineBot.test.charProfile().ultKind, 'spray');
+        pineBot.test.setChar('joe');
+        assert.strictEqual(pineBot.test.charProfile().ultKind, 'aura');
+        pineBot.test.setChar('minguk');
+        assert.ok(pineBot.test.charProfile().ultClearsPassouts === true);
+    });
+    // the invulnerability window: joe walks INTO the crowd, panic is off
+    const joeAt = ultUntil => {
+        pineBot.test.setChar('joe');
+        global.player = { x: 270, y: 270, hp: 22, maxHp: 100, speed: 3, ultUntil };
+        global.enemies = [
+            { type: 'mob', x: 360, y: 270, r: 12, hp: 900, maxHp: 900, speed: 1.6, moving: true },
+            { type: 'mob', x: 370, y: 285, r: 12, hp: 900, maxHp: 900, speed: 1.6, moving: true },
+            { type: 'mob', x: 350, y: 255, r: 12, hp: 900, maxHp: 900, speed: 1.6, moving: true }
+        ];
+        let pl; for (let i = 0; i < 4; i++) pl = pineBot.test.planMove();
+        return pl;
+    };
+    const inUlt = joeAt(1e6), after = joeAt(0);
+    test('the invulnerability window is detected', () =>
+        assert.ok(inUlt.ultInvuln === true && after.ultInvuln === false));
+    test('joe does not panic at 22% HP while Untouchable', () =>
+        assert.strictEqual(inUlt.hpPanic, false));
+    test('the aura posture is flagged for joe only', () => {
+        assert.strictEqual(inUlt.auraUlt, true);
+        pineBot.test.setChar('pat');
+        global.player = { x: 270, y: 270, hp: 60, maxHp: 180, speed: 1.9, ultSpiralUntil: 1e6 };
+        const patPl = pineBot.test.planMove();
+        assert.strictEqual(patPl.ultInvuln, true, 'pat spiral is an invulnerability window too');
+        assert.strictEqual(patPl.auraUlt, false, 'pat does not get joe melee posture');
+    });
+    // The point of the window is that danger stops costing anything: the
+    // planner accepts a position it would refuse at the same HP a second
+    // later, which is how joe's spikes ever reach a body.
+    test('joe accepts danger he would refuse outside the window', () =>
+        assert.ok(inUlt.danger > after.danger, 'in ' + inUlt.danger.toFixed(1) + ' after ' + after.danger.toFixed(1)));
+    test('the same low HP panics once the window closes', () =>
+        assert.strictEqual(after.hpPanic, true));
+    done();
+}
+
 if (which === 'flight') {
     // --- (c) unkillable chase: flight survives low HP, and the ult fires ---
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
@@ -917,4 +1021,4 @@ if (which === 'flight') {
     }, 2000);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

@@ -239,6 +239,18 @@
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
+            // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
+            // across ALL enemies, and passouts deal NO contact damage
+            // (`e.type!=='passout' && !isInvuln() && ...`). Standing off at a
+            // 105-245px ring therefore meant every wandering mob was nearer
+            // than the passout and the base attack never once pointed at it —
+            // the reason Pat, whose 59-frame single shots have no pierce to
+            // leak through, could not kill passouts at all. A free passout is
+            // now HUGGED: just outside its body, where it is the nearest
+            // enemy and splash/flame cover it, at zero damage cost.
+            poHugPad: 8,
+            poFocusValue: 26,      // being the nearest thing to the station passout
+            poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
@@ -286,7 +298,10 @@
             ultEnabled: true,
             ultCooldownMs: 2500,   // retry cadence only — the game's real cooldown governs
             ultCrowd: 9,           // enemies inside nearbyRadius
-            ultHpRatio: 0.4
+            ultHpRatio: 0.4,
+            // v6.86.1: how close a target must be for a NON-nuke ult to be
+            // worth spending on it (pat's spray / joe's spikes are melee)
+            ultAdjacent: 130
         },
 
         learning: {
@@ -422,12 +437,31 @@
     // dayRing/bossFloor/crowdPanic are null/true/0 for the runners: minguk's
     // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
+        // v6.86.1 ULT KINDS — read out of the live game source, not inferred.
+        // The three ultimates are different WEAPON CLASSES and the old
+        // "fire it at passouts/walls/bosses" doctrine only ever described
+        // minguk's:
+        //   nuke  (minguk) useUltimate -> claseUlt -> for(const e of enemies)
+        //         dealDmg(e, 1e7 * 2.5^(lv-1)), commented "passout 포함" —
+        //         field-wide, range-independent, one-shots ANY passout.
+        //   spray (pat)    ultSpiralUntil: rotating arms emit projectiles at
+        //         dmg*9.6*2^(lv-1) every 3 frames for (1.4+0.13*lv)*1.3 s,
+        //         plus invulnerability for the same window. Omnidirectional
+        //         and short — it only pays on what is ALREADY adjacent, and
+        //         it cannot burn down a passout at range.
+        //   aura  (joe)    ultUntil: 8+0.8*(lv-1) s of invulnerability with
+        //         spikes every 14 frames at radius ~= player.r + 149 for
+        //         max(dmg,72)*15.6*2.2^(lv-1) — a huge MELEE window that
+        //         only pays while standing in the crowd.
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
-                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true },
+                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true,
+                  ultKind: 'spray', ultReach: 150, ultClearsPassouts: false },
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
-                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false },
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false },
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
-                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false }
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  ultKind: 'nuke', ultReach: Infinity, ultClearsPassouts: true }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a

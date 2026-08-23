@@ -573,15 +573,19 @@
             }
         }
 
-        // GUARDED LOOT: an item whose straight path crosses a passout's body
-        // would drag the bot into contact damage (source-verified: passouts
-        // hurt on touch). Mute its pull — the ring farm kills the passout and
-        // frees the loot in a moment. VITAL heals keep full pull: one contact
-        // tick is a fair price when the alternative is dying.
+        // GUARDED LOOT — v6.86.1 CORRECTED. The old rule muted a loot pull to
+        // 15% when a passout stood on the path, on the stated premise that
+        // "the game's contact-damage loop has NO passout exemption". The live
+        // source says the opposite:
+        //     if(e.type!=='passout' && !isInvuln() && dist < e.r+player.r)
+        //     // 접촉 데미지 (passout=만취 손님은 장애물이라 데미지 없음)
+        // A passout is a pure OBSTACLE: it blocks and pushes the player out,
+        // and never deals damage. Only the falling drop-mark hurts, and marks
+        // are modelled separately. So the path costs a detour, not blood.
         for (const it of loot) {
             if (it.vital) continue;
             for (const po of th.passouts) {
-                if (distPointSeg(po.x, po.y, p.x, p.y, it.x, it.y) < po.r + 18) { it.v *= 0.15; break; }
+                if (distPointSeg(po.x, po.y, p.x, p.y, it.x, it.y) < po.r + 18) { it.v *= 0.85; break; }
             }
         }
 
@@ -640,7 +644,18 @@
         // Surge awareness: the game's own surge window is readable.
         const su = G.surgeUntil, gt = G.gameTime;
         const surgeActive = typeof su === 'number' && typeof gt === 'number' && su > gt;
-        const caution = (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
+        // v6.86.1 ULT INVULNERABILITY WINDOW. Both non-nuke ultimates grant
+        // real invulnerability while they run — pat's spiral for its whole
+        // (1.4+0.13*lv)*1.3 s, joe's Untouchable for 8+0.8*(lv-1) s — and the
+        // game's contact loop is gated on `!isInvuln()`. Nothing can hurt us
+        // in that window, so caution is wasted there, and for joe RETREATING
+        // wastes the ult outright: the spikes only reach player.r + ~149.
+        const gtInv = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
+            (safe(() => player.ultSpiralUntil, 0) > gtInv);
+        const auraUlt = ultInvuln && charOf().ultKind === 'aura';
+        const caution = (ultInvuln ? 0.35 : 1) *
+            (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
             (hellDetected ? M.hellCautionMul : 1) *
             (hellRecent ? 1.35 : 1) *
             (rainbowRecent ? 1.35 : 1) *
@@ -726,7 +741,11 @@
         // when the loot matters most. hpPanic = actually hurt; panic (crowd
         // included) still governs movement caution and loot greed.
         // v6.85.0: a tank panics later (more HP to spend), a runner sooner
-        const hpPanic = hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
+        // v6.86.1: nothing can damage us mid-ult, so panic (and the flight
+        // it drives) is suspended for the window — it would spend joe's eight
+        // invulnerable seconds running away from the only thing his spikes
+        // can hit.
+        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -903,7 +922,7 @@
         // loosening them is not something the directive settles, and there is
         // no measurement behind 4-vs-3.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
-        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4;
+        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !ultInvuln;
         flightRef.v = flight;
         // v6.85.20 (user): "the deep hell poison kill should be from the mobs
         // ... keep dashing away and ultimate until the bot can get timestop
@@ -1381,20 +1400,41 @@
                     // itself is still off-limits: contact ticks are what the
                     // 55-danger retreat gradient below exists to prevent.
                     if (flameOn) ring = Math.min(ring, zone + 24);
+                    // v6.86.1 HUG THE STATION TARGET. Two source facts kill
+                    // the standoff ring for a FREE passout:
+                    //   1. fireBase() shoots `nearestEnemy()` over all
+                    //      enemies — so while any live mob is closer than the
+                    //      passout, not one base attack lands on it. At the
+                    //      105-245px ring that was almost always true.
+                    //   2. passouts deal no contact damage (see gatherLoot),
+                    //      so there is nothing to stand off FROM.
+                    // Pat felt this hardest: 59-frame single shots, no pierce
+                    // to leak past the mob it was actually targeting.
+                    // A contested passout keeps the old ring — the live
+                    // bodies around it are the real reason to stand back.
+                    const hug = (po === tgtPo) && !po.contested;
+                    if (hug) ring = po.r + (typeof p.r === 'number' ? p.r : 7.2) + M.poHugPad;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
-                    if (dNow < zone) {
-                        // TOUCHING it (taking contact ticks): retreat gradient
-                        // only — no farm attraction until we're off the body
-                        danger += 55 * (1 - Math.min(1, d1 / (zone + 30)));
-                    } else {
-                        // v6.85.14: attraction comes from the ONE kill-order
-                        // target; every other passout is body-avoidance only.
-                        if (po === tgtPo) gain += M.passoutValue * (crOnly ? 0.4 : 1) *
+                    if (hug) {
+                        gain += M.passoutValue * (crOnly ? 0.4 : 1) *
                             (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
-                        // never enter the contact zone, never cut through the
-                        // body to reach the far side of the firing ring
-                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += 60;
+                        // BE the nearest enemy to it, or the shot goes
+                        // somewhere else: reward closing inside the distance
+                        // to the nearest live body.
+                        const nearestLive = th.enemies.reduce((m, e) =>
+                            Math.min(m, Math.hypot(e.x - po.x, e.y - po.y)), Infinity);
+                        if (d1 < nearestLive && dNow >= nearestLive) gain += M.poFocusValue;
+                        else if (d1 < nearestLive) gain += M.poFocusValue * 0.35;
+                        // the body itself is solid: standing in it just gets
+                        // us shoved back out, so keep a light penalty only
+                        if (d1 < zone) danger += M.poBlockPenalty * (1 - Math.min(1, d1 / zone));
+                    } else if (dNow < zone) {
+                        danger += M.poBlockPenalty * (1 - Math.min(1, d1 / (zone + 30)));
+                    } else {
+                        // every non-station passout is a navigation obstacle:
+                        // impassable, but not dangerous
+                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += M.poBlockPenalty;
                     }
                 }
             }
@@ -1463,6 +1503,16 @@
             }
 
             // kiting sweep + gap escape
+            // v6.86.1: while joe's Untouchable is up, the spikes are the whole
+            // point — walk INTO the densest body cluster inside their reach
+            // instead of kiting it. Invulnerable, so this costs nothing.
+            if (auraUlt) {
+                const reach = charOf().ultReach || 156;
+                for (const e of th.enemies) {
+                    const d1e = Math.hypot(nx - e.x, ny - e.y), d0e = Math.hypot(p.x - e.x, p.y - e.y);
+                    if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
+                }
+            }
             if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
@@ -1506,6 +1556,10 @@
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
             poNearest: poNearest == null ? null : Math.round(poNearest), ultFalloff: ultFall,
+            ultInvuln, auraUlt, ultKind: charOf().ultKind || 'nuke',
+            // nearest live (non-passout) body — how the ult gate decides
+            // whether a spray/aura ult has anything to actually hit
+            adjacent: th.enemies.reduce((m, e) => Math.min(m, Math.hypot(e.x - p.x, e.y - p.y) - (e.r || 0)), Infinity),
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),

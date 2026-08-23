@@ -51,7 +51,23 @@
         // funds the build. The game's own cooldown is the only limiter.
         // fire from the middle of the group when possible (the spiral covers
         // everyone); a big cluster or a lone passout in range fires anyway
-        const harvest = !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
+        // v6.86.1 PER-CHARACTER ULT DOCTRINE. Everything below this line used
+        // to assume minguk's nuke. Read from the live source:
+        //   nuke  (minguk): dealDmg(e, 1e7*2.5^(lv-1)) to EVERY enemy,
+        //     passouts included — a passout field is genuinely free loot, so
+        //     the harvest/lootTargets doctrine stands unchanged.
+        //   spray (pat) / aura (joe): no field-wide damage at all. A passout
+        //     carries d.hp*strength*2 HP (strength = 8*(1+(estBoss-1)*0.7)*
+        //     (1+gt/60*0.22)) — tens of thousands by minute 10 — while pat's
+        //     spiral pays dmg*9.6*2^(lv-1) per projectile scattered in every
+        //     direction and joe's spikes reach ~149px. Spending those on a
+        //     passout cluster buys nothing; their value is the invulnerability
+        //     window and what is ALREADY next to us.
+        const CH = charOf();
+        const nukeUlt = CH.ultKind === 'nuke' || CH.ultKind == null;
+        const ultAdj = A.ultAdjacent || 130;
+        const adjacentNow = isFinite(plan.adjacent) ? plan.adjacent <= ultAdj : (plan.near >= 3);
+        const harvest = nukeUlt && !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
             ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
         // v6.85.8 (user: "the bot should be using the ultimate more frequently
         // to kill passouts"). Adding another TRIGGER would have done nothing —
@@ -62,7 +78,7 @@
         // after the game's own cooldown ends. With a passout in falloff range
         // the retry drops to 900 ms so the ult goes off as soon as the game
         // allows it. callGame is a no-op while the real cooldown runs.
-        const poClose = plan.ultFalloff === true && !plan.hpPanic &&
+        const poClose = nukeUlt && plan.ultFalloff === true && !plan.hpPanic &&
             plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
@@ -70,13 +86,22 @@
         // invincibility, and the loot funds the build.
         // MINGUK ULT DOCTRINE (user): the ultimate is the roaming-boss and
         // passout killer — any of them in range is reason enough to fire.
-        const lootTargets = !plan.hpPanic &&
-            (plan.wallNear === true || plan.bossNear === true || (plan.passoutsNear || 0) >= 1 ||
-             plan.roamingBoss === true);
+        const lootTargets = !plan.hpPanic && (nukeUlt
+            ? (plan.wallNear === true || plan.bossNear === true || (plan.passoutsNear || 0) >= 1 ||
+               plan.roamingBoss === true)
+            // spray/aura: only what the ult can actually reach counts, and a
+            // passout is never a reason to burn it
+            : ((plan.wallNear === true || plan.bossNear === true) && adjacentNow));
         const linebackerBurst = !plan.hpPanic && (plan.lines || 0) > 0 && plan.boss === true;   // charging linebacker: ult damage + invincibility
         // USER: when mob HP scales past what five supers can kill, the ult
         // becomes the regular clear tool — fire on cooldown into any group.
-        const scalingMobs = (plan.toughness || 0) > 2 && plan.near >= 2 && !plan.hpPanic;
+        const scalingMobs = (plan.toughness || 0) > 2 && plan.near >= 2 && !plan.hpPanic &&
+            (nukeUlt || adjacentNow);
+        // v6.86.1: for the two invulnerability ults, "something is about to
+        // hit me and bodies are close" IS the payoff — spend it there rather
+        // than saving it for a harvest that cannot happen.
+        const survivalUlt = !nukeUlt && (plan.hpRatio < 0.55 || plan.contactImminent === true ||
+            plan.flight === true || (plan.panic === true && adjacentNow));
         // DEEP RUN (user): past ~80 minutes, or any time flight mode is on,
         // the ult goes off on cooldown — killing is how a TIME STOP drops,
         // and the invincibility window is free survival either way.
@@ -100,7 +125,7 @@
         if (poClose) ultGate = Math.min(ultGate, 900);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
-                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave)) {
+                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt)) {
             lastUlt = now;
             callGame('useUltimate');
         }
@@ -537,6 +562,9 @@
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     sigmasAtFloor, paramDist, hofRecord,
+                    charProfile: charOf,
+                    setChar: b => { if (CHARS[b]) activeChar = b; },
+                    resetUltGate: () => { lastUlt = 0; },
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.86.0
+// @version      6.86.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.86.0';
+    const SCRIPT_VERSION = '6.86.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -241,6 +241,18 @@
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
+            // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
+            // across ALL enemies, and passouts deal NO contact damage
+            // (`e.type!=='passout' && !isInvuln() && ...`). Standing off at a
+            // 105-245px ring therefore meant every wandering mob was nearer
+            // than the passout and the base attack never once pointed at it —
+            // the reason Pat, whose 59-frame single shots have no pierce to
+            // leak through, could not kill passouts at all. A free passout is
+            // now HUGGED: just outside its body, where it is the nearest
+            // enemy and splash/flame cover it, at zero damage cost.
+            poHugPad: 8,
+            poFocusValue: 26,      // being the nearest thing to the station passout
+            poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
@@ -288,7 +300,10 @@
             ultEnabled: true,
             ultCooldownMs: 2500,   // retry cadence only — the game's real cooldown governs
             ultCrowd: 9,           // enemies inside nearbyRadius
-            ultHpRatio: 0.4
+            ultHpRatio: 0.4,
+            // v6.86.1: how close a target must be for a NON-nuke ult to be
+            // worth spending on it (pat's spray / joe's spikes are melee)
+            ultAdjacent: 130
         },
 
         learning: {
@@ -424,12 +439,31 @@
     // dayRing/bossFloor/crowdPanic are null/true/0 for the runners: minguk's
     // 118/112/105 curve is HIS OWN calibration and is left untouched.
     const CHARS = {
+        // v6.86.1 ULT KINDS — read out of the live game source, not inferred.
+        // The three ultimates are different WEAPON CLASSES and the old
+        // "fire it at passouts/walls/bosses" doctrine only ever described
+        // minguk's:
+        //   nuke  (minguk) useUltimate -> claseUlt -> for(const e of enemies)
+        //         dealDmg(e, 1e7 * 2.5^(lv-1)), commented "passout 포함" —
+        //         field-wide, range-independent, one-shots ANY passout.
+        //   spray (pat)    ultSpiralUntil: rotating arms emit projectiles at
+        //         dmg*9.6*2^(lv-1) every 3 frames for (1.4+0.13*lv)*1.3 s,
+        //         plus invulnerability for the same window. Omnidirectional
+        //         and short — it only pays on what is ALREADY adjacent, and
+        //         it cannot burn down a passout at range.
+        //   aura  (joe)    ultUntil: 8+0.8*(lv-1) s of invulnerability with
+        //         spikes every 14 frames at radius ~= player.r + 149 for
+        //         max(dmg,72)*15.6*2.2^(lv-1) — a huge MELEE window that
+        //         only pays while standing in the crowd.
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
-                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true },
+                  dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true,
+                  ultKind: 'spray', ultReach: 150, ultClearsPassouts: false },
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
-                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false },
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false },
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
-                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false }
+                  dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  ultKind: 'nuke', ultReach: Infinity, ultClearsPassouts: true }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything
     // keyed on it — learned store, version tag, posture profile — is a
@@ -4289,15 +4323,19 @@
             }
         }
 
-        // GUARDED LOOT: an item whose straight path crosses a passout's body
-        // would drag the bot into contact damage (source-verified: passouts
-        // hurt on touch). Mute its pull — the ring farm kills the passout and
-        // frees the loot in a moment. VITAL heals keep full pull: one contact
-        // tick is a fair price when the alternative is dying.
+        // GUARDED LOOT — v6.86.1 CORRECTED. The old rule muted a loot pull to
+        // 15% when a passout stood on the path, on the stated premise that
+        // "the game's contact-damage loop has NO passout exemption". The live
+        // source says the opposite:
+        //     if(e.type!=='passout' && !isInvuln() && dist < e.r+player.r)
+        //     // 접촉 데미지 (passout=만취 손님은 장애물이라 데미지 없음)
+        // A passout is a pure OBSTACLE: it blocks and pushes the player out,
+        // and never deals damage. Only the falling drop-mark hurts, and marks
+        // are modelled separately. So the path costs a detour, not blood.
         for (const it of loot) {
             if (it.vital) continue;
             for (const po of th.passouts) {
-                if (distPointSeg(po.x, po.y, p.x, p.y, it.x, it.y) < po.r + 18) { it.v *= 0.15; break; }
+                if (distPointSeg(po.x, po.y, p.x, p.y, it.x, it.y) < po.r + 18) { it.v *= 0.85; break; }
             }
         }
 
@@ -4356,7 +4394,18 @@
         // Surge awareness: the game's own surge window is readable.
         const su = G.surgeUntil, gt = G.gameTime;
         const surgeActive = typeof su === 'number' && typeof gt === 'number' && su > gt;
-        const caution = (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
+        // v6.86.1 ULT INVULNERABILITY WINDOW. Both non-nuke ultimates grant
+        // real invulnerability while they run — pat's spiral for its whole
+        // (1.4+0.13*lv)*1.3 s, joe's Untouchable for 8+0.8*(lv-1) s — and the
+        // game's contact loop is gated on `!isInvuln()`. Nothing can hurt us
+        // in that window, so caution is wasted there, and for joe RETREATING
+        // wastes the ult outright: the spikes only reach player.r + ~149.
+        const gtInv = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
+            (safe(() => player.ultSpiralUntil, 0) > gtInv);
+        const auraUlt = ultInvuln && charOf().ultKind === 'aura';
+        const caution = (ultInvuln ? 0.35 : 1) *
+            (1 + 0.4 * late + 0.3 * Math.min(1, Math.max(0, toughnessAvg - 1))) *
             (hellDetected ? M.hellCautionMul : 1) *
             (hellRecent ? 1.35 : 1) *
             (rainbowRecent ? 1.35 : 1) *
@@ -4442,7 +4491,11 @@
         // when the loot matters most. hpPanic = actually hurt; panic (crowd
         // included) still governs movement caution and loot greed.
         // v6.85.0: a tank panics later (more HP to spend), a runner sooner
-        const hpPanic = hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
+        // v6.86.1: nothing can damage us mid-ult, so panic (and the flight
+        // it drives) is suspended for the window — it would spend joe's eight
+        // invulnerable seconds running away from the only thing his spikes
+        // can hit.
+        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -4619,7 +4672,7 @@
         // loosening them is not something the directive settles, and there is
         // no measurement behind 4-vs-3.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
-        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4;
+        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !ultInvuln;
         flightRef.v = flight;
         // v6.85.20 (user): "the deep hell poison kill should be from the mobs
         // ... keep dashing away and ultimate until the bot can get timestop
@@ -5097,20 +5150,41 @@
                     // itself is still off-limits: contact ticks are what the
                     // 55-danger retreat gradient below exists to prevent.
                     if (flameOn) ring = Math.min(ring, zone + 24);
+                    // v6.86.1 HUG THE STATION TARGET. Two source facts kill
+                    // the standoff ring for a FREE passout:
+                    //   1. fireBase() shoots `nearestEnemy()` over all
+                    //      enemies — so while any live mob is closer than the
+                    //      passout, not one base attack lands on it. At the
+                    //      105-245px ring that was almost always true.
+                    //   2. passouts deal no contact damage (see gatherLoot),
+                    //      so there is nothing to stand off FROM.
+                    // Pat felt this hardest: 59-frame single shots, no pierce
+                    // to leak past the mob it was actually targeting.
+                    // A contested passout keeps the old ring — the live
+                    // bodies around it are the real reason to stand back.
+                    const hug = (po === tgtPo) && !po.contested;
+                    if (hug) ring = po.r + (typeof p.r === 'number' ? p.r : 7.2) + M.poHugPad;
                     const dNow = Math.hypot(p.x - po.x, p.y - po.y);
                     const d1 = Math.hypot(nx - po.x, ny - po.y);
-                    if (dNow < zone) {
-                        // TOUCHING it (taking contact ticks): retreat gradient
-                        // only — no farm attraction until we're off the body
-                        danger += 55 * (1 - Math.min(1, d1 / (zone + 30)));
-                    } else {
-                        // v6.85.14: attraction comes from the ONE kill-order
-                        // target; every other passout is body-avoidance only.
-                        if (po === tgtPo) gain += M.passoutValue * (crOnly ? 0.4 : 1) *
+                    if (hug) {
+                        gain += M.passoutValue * (crOnly ? 0.4 : 1) *
                             (Math.abs(dNow - ring) - Math.abs(d1 - ring)) * 0.15;
-                        // never enter the contact zone, never cut through the
-                        // body to reach the far side of the firing ring
-                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += 60;
+                        // BE the nearest enemy to it, or the shot goes
+                        // somewhere else: reward closing inside the distance
+                        // to the nearest live body.
+                        const nearestLive = th.enemies.reduce((m, e) =>
+                            Math.min(m, Math.hypot(e.x - po.x, e.y - po.y)), Infinity);
+                        if (d1 < nearestLive && dNow >= nearestLive) gain += M.poFocusValue;
+                        else if (d1 < nearestLive) gain += M.poFocusValue * 0.35;
+                        // the body itself is solid: standing in it just gets
+                        // us shoved back out, so keep a light penalty only
+                        if (d1 < zone) danger += M.poBlockPenalty * (1 - Math.min(1, d1 / zone));
+                    } else if (dNow < zone) {
+                        danger += M.poBlockPenalty * (1 - Math.min(1, d1 / (zone + 30)));
+                    } else {
+                        // every non-station passout is a navigation obstacle:
+                        // impassable, but not dangerous
+                        if (d1 < zone || distPointSeg(po.x, po.y, p.x, p.y, nx, ny) < zone) danger += M.poBlockPenalty;
                     }
                 }
             }
@@ -5179,6 +5253,16 @@
             }
 
             // kiting sweep + gap escape
+            // v6.86.1: while joe's Untouchable is up, the spikes are the whole
+            // point — walk INTO the densest body cluster inside their reach
+            // instead of kiting it. Invulnerable, so this costs nothing.
+            if (auraUlt) {
+                const reach = charOf().ultReach || 156;
+                for (const e of th.enemies) {
+                    const d1e = Math.hypot(nx - e.x, ny - e.y), d0e = Math.hypot(p.x - e.x, p.y - e.y);
+                    if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
+                }
+            }
             if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
@@ -5222,6 +5306,10 @@
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
             poNearest: poNearest == null ? null : Math.round(poNearest), ultFalloff: ultFall,
+            ultInvuln, auraUlt, ultKind: charOf().ultKind || 'nuke',
+            // nearest live (non-passout) body — how the ult gate decides
+            // whether a spray/aura ult has anything to actually hit
+            adjacent: th.enemies.reduce((m, e) => Math.min(m, Math.hypot(e.x - p.x, e.y - p.y) - (e.r || 0)), Infinity),
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
@@ -5287,7 +5375,23 @@
         // funds the build. The game's own cooldown is the only limiter.
         // fire from the middle of the group when possible (the spiral covers
         // everyone); a big cluster or a lone passout in range fires anyway
-        const harvest = !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
+        // v6.86.1 PER-CHARACTER ULT DOCTRINE. Everything below this line used
+        // to assume minguk's nuke. Read from the live source:
+        //   nuke  (minguk): dealDmg(e, 1e7*2.5^(lv-1)) to EVERY enemy,
+        //     passouts included — a passout field is genuinely free loot, so
+        //     the harvest/lootTargets doctrine stands unchanged.
+        //   spray (pat) / aura (joe): no field-wide damage at all. A passout
+        //     carries d.hp*strength*2 HP (strength = 8*(1+(estBoss-1)*0.7)*
+        //     (1+gt/60*0.22)) — tens of thousands by minute 10 — while pat's
+        //     spiral pays dmg*9.6*2^(lv-1) per projectile scattered in every
+        //     direction and joe's spikes reach ~149px. Spending those on a
+        //     passout cluster buys nothing; their value is the invulnerability
+        //     window and what is ALREADY next to us.
+        const CH = charOf();
+        const nukeUlt = CH.ultKind === 'nuke' || CH.ultKind == null;
+        const ultAdj = A.ultAdjacent || 130;
+        const adjacentNow = isFinite(plan.adjacent) ? plan.adjacent <= ultAdj : (plan.near >= 3);
+        const harvest = nukeUlt && !plan.hpPanic && ((plan.passoutsNear || 0) >= 3 ||
             ((plan.passoutsNear || 0) >= 1 && (plan.poCentroidDist == null || plan.poCentroidDist < 80)));
         // v6.85.8 (user: "the bot should be using the ultimate more frequently
         // to kill passouts"). Adding another TRIGGER would have done nothing —
@@ -5298,7 +5402,7 @@
         // after the game's own cooldown ends. With a passout in falloff range
         // the retry drops to 900 ms so the ult goes off as soon as the game
         // allows it. callGame is a no-op while the real cooldown runs.
-        const poClose = plan.ultFalloff === true && !plan.hpPanic &&
+        const poClose = nukeUlt && plan.ultFalloff === true && !plan.hpPanic &&
             plan.poNearest != null && plan.poNearest < 120;
         // USER DOCTRINE: an available ultimate is SPENT on the high-loot
         // targets — NO BOOKING walls (42x hp: the ult burst breaks the
@@ -5306,13 +5410,22 @@
         // invincibility, and the loot funds the build.
         // MINGUK ULT DOCTRINE (user): the ultimate is the roaming-boss and
         // passout killer — any of them in range is reason enough to fire.
-        const lootTargets = !plan.hpPanic &&
-            (plan.wallNear === true || plan.bossNear === true || (plan.passoutsNear || 0) >= 1 ||
-             plan.roamingBoss === true);
+        const lootTargets = !plan.hpPanic && (nukeUlt
+            ? (plan.wallNear === true || plan.bossNear === true || (plan.passoutsNear || 0) >= 1 ||
+               plan.roamingBoss === true)
+            // spray/aura: only what the ult can actually reach counts, and a
+            // passout is never a reason to burn it
+            : ((plan.wallNear === true || plan.bossNear === true) && adjacentNow));
         const linebackerBurst = !plan.hpPanic && (plan.lines || 0) > 0 && plan.boss === true;   // charging linebacker: ult damage + invincibility
         // USER: when mob HP scales past what five supers can kill, the ult
         // becomes the regular clear tool — fire on cooldown into any group.
-        const scalingMobs = (plan.toughness || 0) > 2 && plan.near >= 2 && !plan.hpPanic;
+        const scalingMobs = (plan.toughness || 0) > 2 && plan.near >= 2 && !plan.hpPanic &&
+            (nukeUlt || adjacentNow);
+        // v6.86.1: for the two invulnerability ults, "something is about to
+        // hit me and bodies are close" IS the payoff — spend it there rather
+        // than saving it for a harvest that cannot happen.
+        const survivalUlt = !nukeUlt && (plan.hpRatio < 0.55 || plan.contactImminent === true ||
+            plan.flight === true || (plan.panic === true && adjacentNow));
         // DEEP RUN (user): past ~80 minutes, or any time flight mode is on,
         // the ult goes off on cooldown — killing is how a TIME STOP drops,
         // and the invincibility window is free survival either way.
@@ -5336,7 +5449,7 @@
         if (poClose) ultGate = Math.min(ultGate, 900);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
-                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave)) {
+                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt)) {
             lastUlt = now;
             callGame('useUltimate');
         }
@@ -5773,6 +5886,9 @@
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     sigmasAtFloor, paramDist, hofRecord,
+                    charProfile: charOf,
+                    setChar: b => { if (CHARS[b]) activeChar = b; },
+                    resetUltGate: () => { lastUlt = 0; },
                     reloadLearn: () => { learn = loadLearn(); }
                 }
             };

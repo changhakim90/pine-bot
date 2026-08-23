@@ -39,6 +39,7 @@ Metrics come from the in-game 📸 table (`pineBot.compare()`). Judge on median 
 | 6.85.22+crown+pat | **273** | **843** | 961 | 5585 | 0.02 | 0 | 0.18 | **REGRESSION, z=−3.1.** Null-poisoned params (suicide day ring, ×0 transit charge) + enemy-fear ratchet. Postmortem in 6.85.23. |
 | 6.85.23+crown+pat | — | | | | | | | Emergency repair: dims withdrawn, applyParams hardened against null, `sanitizeCem()` every trial, multiplier instrument-only. |
 | 6.86.0+crown+pat | — | | | | | | | CEM lockup repair: deduped/mean-tracked hall of fame, auto-restart when sigma dies, rank-based gradient, `deepFocusLv` ceiling 6→4. |
+| 6.86.1+crown | — | | | | | | | Per-character ultimates (nuke/spray/aura) read from the game source; passouts corrected to harmless obstacles and HUGGED so `nearestEnemy()` actually targets them; invulnerability windows spend danger instead of fleeing. |
 
 ## 6.85.23 — EMERGENCY: 6.85.22 postmortem and repair
 
