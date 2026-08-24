@@ -215,9 +215,17 @@
                 // were ending shortly after it appeared. This is no longer a
                 // learned policy or a timing window — it is a ban. Only a pool
                 // with literally nothing else can force it.
+                // v6.88.0 AUDIT D2: resolve the policy BEFORE the ban's break.
+                // It used to sit one line after it, which made the only write
+                // to `rainbowChoice` in the codebase unreachable — so it stayed
+                // null and `stallMode` in the planner (05: rainbowChoice ===
+                // 'skip' && hellDetected && !zoner) was permanently false. The
+                // documented stall doctrine never engaged: a hell run at 60% HP
+                // with no zoner still charged bosses. The gun stays banned;
+                // only the bookkeeping moved above the break.
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 if (CONFIG.banRainbowGun) { add(-1000, 'gun-BANNED'); break; }
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 // v6.85.21 (user: "rainbowgun is still appearing"). Skip
                 // scored the gun at 18 — a REFUSAL that outbid every avoided
                 // filler (they score negative) and every weak card under 18.
@@ -593,7 +601,7 @@
                 }
             }
             if (PLAN_INGREDIENTS.includes(name)) add(Math.round(CONFIG.strategy.roadmapBonus * 0.8), 'roadmap');   // double-counts: super key + craft part
-            if (name === 'ABSINTHE' && !(ownedLevels['CORPSE REVIVER No.2'] > 0)) add(-6, 'absinthe-trap');
+            if (name === 'ABSINTHE' && !(ownedLevels['CORPSE REVIVER NO.2'] > 0)) add(-6, 'absinthe-trap');
         } else if (score === 0) {
             add(12, 'unknown');
         }
@@ -1085,7 +1093,15 @@
         if (!pool) return false;
         const sig = poolSignature(pool);
         const now = Date.now();
-        if (sig === lastPoolSig && now - lastPickAt < 900) return false; // already acted on this pool
+        // v6.88.0 AUDIT C4. This was a 900 ms TIME window, not a latch. If the
+        // pick click missed (clickCardByIndex/clickCardByName can both return
+        // false and nobody checked), the whole side-effect block below re-ran
+        // and repeated every mutation: ownedLevels bumped again, runPicks and
+        // runPickCtx pushed again, craftsThisRun++ again. Five seconds of a
+        // stuck pool recorded six picks of one card — and ownedLevels then
+        // drifts ABOVE the true level, so atCap/isMaxed lie to the whole scorer
+        // for the rest of the run. The latch now holds until the pool changes.
+        if (sig === lastPoolSig) return false;
         learnFromPool(pool);
         if (hellDetected) applyHellUnban();
 
@@ -1232,6 +1248,21 @@
         return best;
     }
     function clickText(re) { return clickEl(findByText(re)); }
+    // v6.88.0 AUDIT C3/S2: findByText with a veto, so a matching-but-forbidden
+    // element (the hell leaderboard TOGGLE; an OK on the name form) is skipped
+    // without masking a legitimate match elsewhere on the screen.
+    function clickTextIf(re, ok) {
+        const all = [...document.querySelectorAll('button, a, [role="button"], [onclick], .btn, div, span, li')];
+        let best = null, bestLen = Infinity;
+        for (const el of all) {
+            let t = '';
+            try { t = (el.textContent || '').trim(); } catch (e) { continue; }
+            if (!t || t.length > 120 || !re.test(t) || !visible(el)) continue;
+            if (typeof ok === 'function' && !ok(el)) continue;
+            if (t.length < bestLen) { best = el; bestLen = t.length; }
+        }
+        return clickEl(best);
+    }
 
     function cardElements() {
         const sels = ['#levelCards > *', '.levelup .card', '.upgrade-card', '#upCards > *', '.cards > *', '.choice'];

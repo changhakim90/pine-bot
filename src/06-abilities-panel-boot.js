@@ -268,23 +268,38 @@
             const p = lastPlan;
             const hidden = document.hidden === true;
             const vs = (learn.versions || {})[scriptTag()];
-            infoEl.innerHTML =
+            // v6.88.0 AUDIT S1. This was innerHTML. `lastAction` is built in
+            // clickEl from the clicked element's textContent — and the bot's
+            // stuck-breaker clicks by TEXT across div/span/li, so a leaderboard
+            // row carrying another player's display name can reach this line.
+            // Concatenated into innerHTML on a 400 ms timer, a crafted name
+            // executes in the game's origin. The static chrome is still markup;
+            // every value that comes from the page goes in as a text node.
+            const rows = [
                 'tab: ' + TAB_ID + '   runs(all tabs): ' + learn.runs +
-                (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : '') + '<br>' +
-                (hidden ? '<b style="color:#f88">⚠ background tab — game frozen by the browser; keep this window visible</b><br>' : '') +
-                'state: <b style="color:#ffd98a">' + (st == null ? '(unreadable)' : st) + '</b><br>' +
-                'move: ' + moveSource + '<br>' +
-                'build: ' + (primaryCocktail || '—') + '<br>' +
-                'picks: ' + runPicks.length + '<br>' +
+                    (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : ''),
+                hidden ? '\u26a0 background tab — game frozen by the browser; keep this window visible' : null,
+                'state: ' + (st == null ? '(unreadable)' : st),
+                'move: ' + moveSource,
+                'build: ' + (primaryCocktail || '\u2014'),
+                'picks: ' + runPicks.length,
                 'model: CEM g' + learn.cem.gen + ' (' + learn.cem.batch.length + '/' + CONFIG.learning.batchSize + ')' +
-                (championRun ? ' 👑' : '') +
-                (lastDeathCause ? '   died→' + lastDeathCause : '') +
-                (learn.hof.length ? '   best ' + learn.hof[0].r.toFixed(2) : '') +
-                (learn.genHistory.length >= 2
-                    ? (learn.genHistory[learn.genHistory.length - 1] > learn.genHistory[learn.genHistory.length - 2] ? ' ↑' : ' ↓')
-                    : '') + '<br>' +
-                (p ? p.diag + '<br>' : '') +
-                'last: ' + String(lastAction).slice(0, 34);
+                    (championRun ? ' \ud83d\udc51' : '') +
+                    (lastDeathCause ? '   died\u2192' + lastDeathCause : '') +
+                    (learn.hof.length && isFinite(learn.hof[0].r) ? '   best ' + learn.hof[0].r.toFixed(2) : '') +
+                    (learn.genHistory.length >= 2
+                        ? (learn.genHistory[learn.genHistory.length - 1] > learn.genHistory[learn.genHistory.length - 2] ? ' \u2191' : ' \u2193')
+                        : ''),
+                p ? p.diag : null,
+                'last: ' + String(lastAction).slice(0, 34)
+            ];
+            infoEl.textContent = '';
+            for (const r of rows) {
+                if (r == null) continue;
+                const line = document.createElement('div');
+                line.textContent = r;
+                infoEl.appendChild(line);
+            }
         }, 400);
     }
 
@@ -590,10 +605,18 @@
         const fr = safe(() => frame, 0) || 0;
         let poD = null, bossD = null, wallD = null, near = 0, poHp = null, poN = 0;
         let frozenBossD = null, frozenN = 0, hpSum = 0, hpN = 0;
+        const globalStop = typeof p.timeStopUntil === 'number' && p.timeStopUntil > fr;
         for (const e of en) {
             const dd = Math.hypot(e.x - p.x, e.y - p.y);
             const ty = String(e.type), bc = String(e.bossChar || '');
-            const froz = typeof e.frozenUntil === 'number' && e.frozenUntil > fr;
+            // v6.88.0 AUDIT R3: a TIME STOP item sets player.timeStopUntil
+            // ONLY; frozenUntil is WHISKY SOUR's per-enemy freeze. The planner
+            // was fixed to OR the two; demoTick was not — so every manual demo
+            // recorded frz: 0, and the "how close does the human stand to a
+            // PAUSED boss?" measurement that calibrated stopBossPull /
+            // stopStation / the burn station was structurally zero in all of
+            // them. Same class as the flameShare units bug.
+            const froz = globalStop || (typeof e.frozenUntil === 'number' && e.frozenUntil > fr);
             if (froz) frozenN++;
             if (ty === 'passout') {
                 poN++;
@@ -662,6 +685,11 @@
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
+                    // v6.88.0 AUDIT: hooks for the regression suite
+                    versionRows, applyParams, saveLearn, pruneVersions,
+                    craftPending: () => craftPending, crafts: () => craftsThisRun,
+                    resetCraftLatch: () => { craftPending = null; },
+                    notNameForm, clickTextIf,
                     handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,

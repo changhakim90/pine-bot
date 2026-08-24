@@ -1597,7 +1597,11 @@ if (which === 'craft-prompt') {
     // THE REAL WIRING. 6.87.5 put this in STATE_HANDLERS.playing(), which
     // handleScreens() never reaches — its `st === 'playing'` branch returns
     // first. Drive handleScreens() itself, the way the main loop does.
+    // v6.88.0: the prompt is now latched by signature after the first click
+    // (AUDIT C1), so clear the latch to simulate a NEW prompt rather than the
+    // same one still sitting there — that case is covered by `audit-craft`.
     clicked.length = 0;
+    pineBot.test.resetCraftLatch();
     global.state = 'playing';
     test('handleScreens answers the prompt during play', () =>
         assert.strictEqual(pineBot.test.handleScreens(), true));
@@ -1625,4 +1629,162 @@ if (which === 'evo-tip') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.88.0 — the static-audit regressions. Each of these asserts a defect that
+// was live in 6.87.6 and is now fixed; deleting the fix must make it fail.
+if (which === 'audit-signal') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    const T = pineBot.test;
+
+    // --- C2: isFinite(null) fabricated a verdict from a single run ---
+    const seed = () => {
+        const L = pineBot.learn();
+        L.snapshots = [];
+        L.versions = {
+            'A+crown': { n: 40, sumT: 40000, sumT2: 4.2e7, bestT: 3000, sumR: 40, sumD: 0, sumS: 0,
+                         hell: 20, day: 20, sumSupers: 40, deaths: {}, times: new Array(40).fill(1000), over60: 0, over120: 0 },
+            'B+crown': { n: 1, sumT: 1315, sumT2: 1729225, bestT: 1315, sumR: 2, sumD: 0, sumS: 0,
+                         hell: 1, day: 1, sumSupers: 1, deaths: {}, times: [1315], over60: 0, over120: 0 }
+        };
+        return T.versionRows();
+    };
+    // Pin the ARITHMETIC, not the label: at n=1 seTimeS is null, and the old
+    // global isFinite let null through as 0 in the Welch denominator. z must be
+    // null — a verdict string alone would still pass with the bug present.
+    test('a one-run row produces no z at all', () => {
+        const b = seed().find(r => r.version === 'B+crown');
+        assert.ok(b.vsPrev, 'no vsPrev block at all');
+        assert.strictEqual(b.vsPrev.z, null, 'z = ' + b.vsPrev.z);
+    });
+    test('and says why rather than rendering a verdict', () => {
+        const b = seed().find(r => r.version === 'B+crown');
+        assert.ok(/insufficient|UNDERPOWERED/.test(b.vsPrev.verdict), b.vsPrev.verdict);
+    });
+    test('and a row under the floor is labelled underpowered', () => {
+        const b = seed().find(r => r.version === 'B+crown');
+        assert.strictEqual(b.underpowered, true);
+    });
+    test('a null field is no longer treated as zero', () =>
+        assert.strictEqual(Number.isFinite(null), false));
+
+    // --- D5: champion params clamped to the live box ---
+    test('an out-of-box champion value is clamped, not applied', () => {
+        T.applyParams({ 'strategy.deepFocusLv': 999 });
+        const got = pineBot.config.strategy.deepFocusLv;
+        assert.ok(got <= 6 && got > 0, 'deepFocusLv = ' + got);
+    });
+    test('and a below-box value is clamped up', () => {
+        T.applyParams({ 'strategy.deepFocusLv': -50 });
+        assert.ok(pineBot.config.strategy.deepFocusLv >= 0, pineBot.config.strategy.deepFocusLv);
+    });
+
+    // --- D1: the CORPSE REVIVER key is reachable now ---
+    // NOTE: two legitimate exemptions have to be cleared before the ban can
+    // show — an avoided weapon is NOT junk while no cocktail is owned (it is
+    // the only path to having a weapon), and the -70 needs the pool to hold a
+    // real alternative. Both are correct behaviour; the test sets them up.
+    T.setOwned({ 'SOUTH SIDE': 3 });
+    const crPool = [
+        { n: 'CORPSE REVIVER No.2', type: 'weapon', lv: 0, maxlv: 6 },
+        { n: 'SOUTH SIDE', type: 'weapon', lv: 3, maxlv: 6 }
+    ];
+    test('CORPSE REVIVER No.2 is recognised as junk', () => {
+        const c = T.scoreCard(crPool[0], 0, crPool);
+        assert.ok(/user-avoid|junk-cap|dead-vs-holdouts/.test(c.why), c.why);
+    });
+    test('and it scores below the plan cocktail beside it', () => {
+        const cr = T.scoreCard(crPool[0], 0, crPool);
+        const ok = T.scoreCard(crPool[1], 1, crPool);
+        assert.ok(cr.score < ok.score, cr.score.toFixed(0) + ' vs ' + ok.score.toFixed(0));
+    });
+    test('the ABSINTHE trap exemption can now fire', () => {
+        T.setOwned({ 'CORPSE REVIVER NO.2': 2 });
+        const a = T.scoreCard({ n: 'ABSINTHE', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+        assert.ok(!/absinthe-trap/.test(a.why), a.why);
+    });
+
+    // --- D2: the stall policy is resolved even though the gun is banned ---
+    test('the gun is still banned', () => {
+        const g = T.scoreCard({ n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 1 }, 0, []);
+        assert.ok(g.score < -100 && /BANNED/.test(g.why), g.why);
+    });
+    done();
+}
+
+// v6.88.0 — the craft prompt must count once per craft, not once per tick
+if (which === 'audit-craft') {
+    const clicked = [];
+    let present = true;
+    const btn = {
+        id: 'craftBtn', className: '', textContent: 'MAKE BLACK VERMOUTH', style: {},
+        querySelector: () => null, querySelectorAll: () => [],
+        click() { clicked.push('MAKE'); }, dispatchEvent() { return true; },
+        appendChild() {}, remove() {},
+        getBoundingClientRect: () => ({ width: 120, height: 30, top: 100, left: 100 })
+    };
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    global.document.querySelector = sel => (present && /craftBtn/.test(sel)) ? btn : null;
+    global.document.querySelectorAll = () => present ? [btn] : [];
+    const T = pineBot.test;
+    const before = T.crafts();
+    // twenty ticks with the prompt stuck on screen
+    for (let i = 0; i < 20; i++) T.takeCraftPrompt();
+    test('a stuck prompt is clicked exactly once', () =>
+        assert.strictEqual(clicked.length, 1, clicked.length + ' clicks'));
+    test('and credits NO craft while it is still up', () =>
+        assert.strictEqual(T.crafts(), before, 'counted ' + (T.crafts() - before)));
+    // the prompt clears — THAT is the proof the click worked
+    present = false;
+    T.takeCraftPrompt();
+    test('the craft is credited once the prompt clears', () =>
+        assert.strictEqual(T.crafts(), before + 1));
+    T.takeCraftPrompt(); T.takeCraftPrompt();
+    test('and is not credited again afterwards', () =>
+        assert.strictEqual(T.crafts(), before + 1));
+    done();
+}
+
+// v6.88.0 — click safety: the leaderboard toggle and the name form
+if (which === 'audit-clicks') {
+    const clicked = [];
+    const mk = (text, id, cls) => ({
+        id: id || '', className: cls || '', textContent: text, style: {},
+        querySelector: () => null, querySelectorAll: () => [],
+        click() { clicked.push(text); }, dispatchEvent() { return true; }, closest: () => null,
+        getAttribute: () => null, appendChild() {}, remove() {}, parentElement: null,
+        getBoundingClientRect: () => ({ width: 100, height: 24, top: 10, left: 10 })
+    });
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'over', gameTime: 0 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    // S2: an OK next to a live text input is the logbook name form
+    const okBtn = mk('OK', '', '');
+    const input = { tagName: 'INPUT', style: {}, closest: () => null,
+        getBoundingClientRect: () => ({ width: 120, height: 20, top: 5, left: 5 }) };
+    global.document.querySelectorAll = sel => /input/i.test(sel) ? [input] : [okBtn];
+    test('OK is refused while a name input is on screen', () =>
+        assert.strictEqual(T.notNameForm(okBtn), false));
+    test('so are the other submit words', () => {
+        for (const w of ['CONFIRM', 'YES', 'SAVE', 'DONE'])
+            assert.strictEqual(T.notNameForm(mk(w)), false, w + ' was allowed');
+    });
+    test('but RETRY still is — leaving the screen is the point', () =>
+        assert.strictEqual(T.notNameForm(mk('RETRY')), true));
+    // ...and allowed once the form is gone
+    global.document.querySelectorAll = sel => /input/i.test(sel) ? [] : [okBtn];
+    test('and allowed once the form is gone', () =>
+        assert.strictEqual(T.notNameForm(okBtn), true));
+    // C3: the hell board TOGGLE must never be the hell-entry click
+    const toggle = mk('🔥 HELL', 'hellToggleBtn', '');
+    const notToggle = el => el && !/toggle|board|tab|switch/i.test(
+        (el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('onclick') || ''));
+    test('the leaderboard toggle is vetoed by the hell-entry guard', () =>
+        assert.strictEqual(notToggle(toggle), false));
+    test('a real hell door is not', () =>
+        assert.strictEqual(notToggle(mk('ENTER HELL', 'hellDoor', '')), true));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

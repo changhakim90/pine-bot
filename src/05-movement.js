@@ -328,9 +328,19 @@
         // along rays — never hold a ring on it; kite and let homing/directed
         // fire do the work (they track it even off-screen).
         try {
-            const owners = new Set((G.roadLines || []).map(l => l && l.owner).filter(o => o != null));
-            if (owners.size) for (const e of out.enemies) {
-                if (e.boss && !e.wall) e.linebacker = true;   // lanes up: treat lane-capable bosses as chargers
+            // v6.88.0 AUDIT D4. This built a Set from `l.owner`, but the
+            // source-verified roadLine shape (see lineCost below) is
+            // {x, y, ang, armed, dmg} — there is no owner field. The Set was
+            // therefore always empty, `e.linebacker` was never assigned
+            // anywhere in the codebase, and the `if (e.linebacker) continue`
+            // guard in the boss-engagement block was dead: the bot parked at
+            // its firing ring on a charging Last Call Linebacker, which is the
+            // death the rule was written to prevent. The owner cannot be
+            // identified from the real shape, so flag on ARMED lanes being
+            // present at all — during a charge telegraph, no boss is ringable.
+            const armedLanes = (G.roadLines || []).some(l => l && (l.armed || l.armed === undefined));
+            if (armedLanes) for (const e of out.enemies) {
+                if (e.boss && !e.wall) e.linebacker = true;
             }
         } catch (e) { }
 
@@ -957,6 +967,13 @@
         // mobile the closer it came to dying. The crowd gates are unchanged:
         // loosening them is not something the directive settles, and there is
         // no measurement behind 4-vs-3.
+        // v6.88.0 AUDIT D3: `distant` is now READ. It was written onto every
+        // gathered enemy and never read anywhere, so the exclusions its own
+        // comment promises ("excluded from the danger field, the crowd counts
+        // and contactImminent") did not exist. In hell with slowMul 0.5 a
+        // distant boss at 210px still contributed danger ~5.4 — above the 4.8
+        // dash threshold — so the bot dashed away from the boss the firing-ring
+        // term was simultaneously paying it to approach.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
         // v6.87.0: the crowd that triggers flight is per character. Fleeing is
         // a speed bet, and pat cannot win it — at 1.9 he is slower than deep
@@ -1027,7 +1044,7 @@
         // no-booking walls — a CR-only build farms both at base-attack speed,
         // so the detour incentive is cut for each. (Hoisted out of the
         // candidate loop — audit fix: was recomputed 33x per tick, twice.)
-        const crOnly = (ownedLevels['CORPSE REVIVER No.2'] || 0) > 0 && ownedCocktailCount() === 1;
+        const crOnly = (ownedLevels['CORPSE REVIVER NO.2'] || 0) > 0 && ownedCocktailCount() === 1;
         const crOnlyW = crOnly;
         // USER DIRECTIVE: the first 20 minutes are the FUNDING phase — kill
         // every NO BOOKING wall, passout, and boss to bankroll the rainbow
@@ -1099,6 +1116,7 @@
             const horizon = 12 + (DH.horizonFrames - 12) * depth;   // deep hell: see the lunge earlier
             for (const e of th.enemies) {
                 if (e.wall || e.frozen) continue;
+                if (e.distant) continue;   // v6.88.0 AUDIT D3: off-canvas, gathered only for the ring
                 const fx2 = e.x + e.vx * horizon, fy2 = e.y + e.vy * horizon;   // ~0.2s ahead (longer at depth)
                 const pad = ((e.boss || e.rival) ? 26 : 12) * (1 + (DH.bossPadMul - 1) * depth);
                 if (Math.hypot(fx2 - p.x, fy2 - p.y) < e.r + pad) { contactImminent = true; break; }
@@ -1178,6 +1196,10 @@
             let danger = 0;
 
             for (const e of th.enemies) {
+                // v6.88.0 AUDIT D3: a distant boss is gathered ONLY so the
+                // firing-ring term can see it. Letting it into the danger field
+                // made the planner flee the target it was being paid to close on.
+                if (e.distant) continue;
                 const fx = e.x + e.vx * stepFrames;
                 const fy = e.y + e.vy * stepFrames;
                 const d = Math.hypot(nx - fx, ny - fy);

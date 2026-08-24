@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.87.6
+// @version      6.88.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.87.6';
+    const SCRIPT_VERSION = '6.88.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -494,6 +494,14 @@
             // VERSION SNAPSHOTS: how many frozen per-version records to keep,
             // and how many best runs each version remembers.
             snapshotKeep: 24,
+            // v6.88.0 AUDIT R1/C2. versionKeep bounds the SHARED comparison
+            // table, which was unbounded and is what eventually blows the
+            // origin quota (~3.7 KB per row once its 600-run time ring fills).
+            // minMeaningfulRuns is the significance floor the tables now print
+            // for themselves — every historical misreading in this project came
+            // from taking a row under it seriously.
+            versionKeep: 40,
+            minMeaningfulRuns: 20,
             versionTopRuns: 5,
             versionTimesKeep: 600      // per-version survival-time list (median / SD); oldest dropped past this
         },
@@ -662,11 +670,20 @@
         return b;
     }
 
+    // v6.88.0 AUDIT D1: every key here is UPPERCASE because baseNameOf()
+    // uppercases the card name before any lookup. 'CORPSE REVIVER No.2' was
+    // mixed case in six tables, so AVOID_COCKTAILS.has(), COCKTAILS.includes(),
+    // SUPER_KEY_INGREDIENT, WEAPON_TAGS and COCKTAIL_PRIORITY all MISSED for
+    // it: the user's "absolute junk pile" directive never fired, and taking the
+    // card left ownedCocktailCount() at 0 — which re-triggered the first-weapon
+    // bonus and suppressed OLIVE's two largest bonuses for the rest of the run.
+    // DEAD_VS_HOLDOUTS already carried both spellings, evidence this was hit
+    // once and patched at one site only. Keep new entries uppercase.
     const COCKTAILS = [
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'MOJITO', 'COSMOPOLITAN',
         'GIN TONIC', 'WHISKEY HIGHBALL', 'VODKA TONIC', 'VODKA CRANBERRY', 'SOUTH SIDE',
         'MARGARITA', 'DRY MARTINI', 'VODKA MARTINI', 'MOSCOW MULE', 'WHISKY SOUR',
-        'NEGRONI', 'BLOODY MARY', 'ESPRESSO MARTINI', 'CORPSE REVIVER No.2'
+        'NEGRONI', 'BLOODY MARY', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2'
     ];
 
     // Cocktail -> the ingredient that must be MAXED to unlock its super form.
@@ -677,7 +694,7 @@
         'VODKA CRANBERRY': 'CRANBERRY', 'SOUTH SIDE': 'MINT', 'MARGARITA': 'ORANGE',
         'DRY MARTINI': 'OLIVE', 'VODKA MARTINI': 'DRY VERMOUTH', 'MOSCOW MULE': 'GINGER BEER',
         'WHISKY SOUR': 'LEMON', 'NEGRONI': 'CAMPARI', 'BLOODY MARY': 'TOMATO JUICE',
-        'ESPRESSO MARTINI': 'COFFEE BEANS', 'CORPSE REVIVER No.2': 'ABSINTHE'
+        'ESPRESSO MARTINI': 'COFFEE BEANS', 'CORPSE REVIVER NO.2': 'ABSINTHE'
     };
 
     // Secret crafts: every part at Lv6 fuses into the result.
@@ -695,7 +712,7 @@
     const COCKTAIL_PRIORITY = {
         'GIN TONIC': 34, 'VODKA TONIC': 32, 'COSMOPOLITAN': 30, 'WHISKEY HIGHBALL': 30,
         'SOUTH SIDE': 28, 'DRY MARTINI': 27, 'VODKA MARTINI': 27, 'NEGRONI': 26,
-        'CORPSE REVIVER No.2': 26, 'WHISKY SOUR': 25, 'ESPRESSO MARTINI': 18,
+        'CORPSE REVIVER NO.2': 26, 'WHISKY SOUR': 25, 'ESPRESSO MARTINI': 18,
         'MARGARITA': 23, 'MOSCOW MULE': 23, 'MOJITO': 22, 'SIDECAR': 22,
         'MANHATTAN': 21, 'OLD FASHIONED': 21, 'GIMLET': 20, 'VODKA CRANBERRY': 19,
         'BLOODY MARY': 18
@@ -717,7 +734,7 @@
     // cocktails are excluded from experiment rosters and self-composition.
     const AVOID_COCKTAILS = new Set([
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'WHISKEY HIGHBALL',
-        'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER No.2',
+        'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2',
         // MINGUK guard: these two would complete a SIXTH super off in-plan
         // keys (SUGAR, OLIVE) and summon the gun — banned by design
         'MOJITO', 'DRY MARTINI'
@@ -727,7 +744,7 @@
     // v6.86.8 (user-verified): these cannot damage the stationary targets —
     // passouts and NO BOOKING walls — that the day phase is spent clearing.
     // They are the bottom of the junk tier, below ordinary filler.
-    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER No.2', 'CORPSE REVIVER NO.2', 'ABSINTHE']);
+    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER NO.2', 'ABSINTHE']);
     const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
@@ -817,7 +834,7 @@
         'NEGRONI': ['defense'],                             // dodge chance + HP shield
         'BLOODY MARY': ['orbit', 'boss'],                   // figure-8 glass, chili peppers
         'ESPRESSO MARTINI': ['burst', 'tanky'],             // sky lightning hits hard but lands RANDOMLY — no boss duty (user-verified)
-        'CORPSE REVIVER No.2': ['summon', 'defense'],       // tanky self-healing zombie allies
+        'CORPSE REVIVER NO.2': ['summon', 'defense'],       // tanky self-healing zombie allies
         'SIMPLE SYRUP': ['aoe'], 'CITRUS TRIO': ['orbit', 'swarm'],
         'SODA GUN': ['sustained'], 'BLACK VERMOUTH': ['summon']
     };
@@ -937,7 +954,19 @@
         // null params (patRing.early null -> a 20px suicide station;
         // killOrderDist null -> x0 = the frailest-first regression). Only a
         // genuine finite number is ever applied.
-        for (const k of Object.keys(TUNABLE)) if (typeof p[k] === 'number' && isFinite(p[k])) setParam(k, p[k]);
+        // v6.88.0 AUDIT D5: and only ever INSIDE the live TUNABLE box. Champion
+        // replays did `{...learn.hof[0].p}` with no clamp, so vectors stored
+        // under an older, wider box survived every narrowing. 6.86.0 tightened
+        // strategy.deepFocusLv from 6 to 4 precisely because a mean of 5.63 was
+        // build-starving — yet every 4th run replayed 5.63, and refitCem then
+        // pulled the mean back toward it. applyParams is the one choke point
+        // every path goes through, so the clamp belongs here.
+        for (const k of Object.keys(TUNABLE)) {
+            const v = p[k];
+            if (typeof v !== 'number' || !isFinite(v)) continue;
+            const box = TUNABLE[k];
+            setParam(k, Math.max(box.min, Math.min(box.max, v)));
+        }
     }
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"
@@ -1053,6 +1082,8 @@
     let ownedMax = {};                  // NAME -> maxlv
     let lastPoolSig = null;
     let lastPickAt = 0;
+    let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
+    let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max
     let hellDetected = false;
     let hellEnteredAt = 0;      // when this run crossed into hell (the entry surge is the killer)
@@ -1266,6 +1297,29 @@
     }
 
     function loadLearn() {
+        // v6.88.0 AUDIT R2: the JSON.parse calls were wrapped but every
+        // structural access after them was not, and `d.x = d.x || {}` does not
+        // catch a wrong TYPE. A stored {"cem":{"mean":5}} passed the truthiness
+        // guard and then threw on property assignment to a number — and because
+        // loadLearn runs at module scope, that throw aborted the whole IIFE and
+        // NO PART of the bot loaded, permanently, until localStorage was cleared
+        // by hand. With @grant none the script shares storage with the game
+        // page, so this was reachable by anything with same-origin write access.
+        try { return loadLearnInner(); }
+        catch (e) {
+            log('STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken');
+            try { localStorage.setItem(learnKey() + '.broken', localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
+            try { return loadLearnInner(); } catch (e2) { return blankLearn(); }
+        }
+    }
+    function blankLearn() {
+        return {
+            bartender: activeChar || 'minguk', items: {}, totalPicks: 0, history: [], runs: 0,
+            builds: {}, hof: [], genHistory: [], runLog: [], rosters: {}, versions: {}, snapshots: [],
+            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {}
+        };
+    }
+    function loadLearnInner() {
         let d = null;
         try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
         if (!d || typeof d !== 'object') d = {};
@@ -1392,13 +1446,50 @@
         return d;
     }
     function saveLearn() {
+        // v6.88.0 AUDIT R1. Three defects in five lines. (1) The SHARED blob was
+        // written first, so a quota throw skipped the per-bartender store —
+        // the CEM mean/sigma, hall of fame, item and build stats — entirely.
+        // (2) The catch was empty, so that happened silently: learn.runs stops
+        // advancing, the CEM stops refitting across reloads, and nothing says
+        // so. (3) learn.versions grows a permanent ~3.7 KB entry per
+        // version x profile x bartender and was never pruned, which is what
+        // eventually causes the throw. Now: own store first (it is the one
+        // that must survive), versions pruned like snapshots already were, and
+        // a failure is logged and surfaced once.
+        const own = (() => { const { versions, snapshots, ...rest } = learn; return rest; })();
+        let ok = true;
+        try { localStorage.setItem(learnKey(), JSON.stringify(own)); }
+        catch (e) { ok = false; log('SAVE FAILED (own store): ' + (e && e.name) + ' — learning for this run is lost'); }
         try {
-            // shared: versions + snapshots (+ lastVersion for the freeze check)
-            localStorage.setItem(SHARED_KEY, JSON.stringify({ versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion }));
-            // per-bartender: everything else
-            const { versions, snapshots, ...own } = learn;
-            localStorage.setItem(learnKey(), JSON.stringify(own));
-        } catch (e) { }
+            pruneVersions();
+            localStorage.setItem(SHARED_KEY, JSON.stringify({
+                versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
+            }));
+        } catch (e) {
+            log('SAVE FAILED (shared table): ' + (e && e.name) + ' — comparison history is not being recorded');
+            ok = false;
+        }
+        if (!ok && !saveWarned) { saveWarned = true; try { setStatus('⚠ localStorage full — learning is NOT being saved'); } catch (e2) { } }
+        return ok;
+    }
+
+    // v6.88.0 AUDIT R1: keep the shared comparison table bounded. Rows are kept
+    // by run count (the ones that carry evidence), never below the most recent
+    // versionKeep tags, so an active version is never dropped mid-measurement.
+    function pruneVersions() {
+        const V = learn.versions || {};
+        const keys = Object.keys(V);
+        const cap = CONFIG.learning.versionKeep || 40;
+        if (keys.length <= cap) return;
+        const recent = new Set(keys.slice(-8));
+        recent.add(scriptTag());
+        const ranked = keys.filter(k => !recent.has(k))
+            .sort((a, b) => (V[b].n || 0) - (V[a].n || 0))
+            .slice(0, Math.max(0, cap - recent.size));
+        const keep = new Set([...recent, ...ranked]);
+        let dropped = 0;
+        for (const k of keys) if (!keep.has(k)) { delete V[k]; dropped++; }
+        if (dropped) log('pruned ' + dropped + ' low-evidence version row(s) from the shared table');
     }
     function resetLearn() {
         // Snapshots are the historical record — freeze the live version
@@ -1444,25 +1535,43 @@
             for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
             return String(a.version).localeCompare(String(b.version));
         };
+        // v6.88.0 AUDIT C2. Every guard here used the GLOBAL isFinite, and
+        // `isFinite(null) === true` — so every unknown field passed as 0.
+        //   * the hand-seeded 6.74.0 row carries meanTimeS: null, so the next
+        //     row reported invented deltas against a version with no mean;
+        //   * a row with ONE run has seTimeS === null (rollupStats leaves sd
+        //     null at n=1), which entered the Welch denominator as zero.
+        // That is exactly how 6.85.18+crown+pat came to read n=1, z=+8.66,
+        // "better" — immediately before its successor read z=-32.43 at n=57.
+        // Number.isFinite rejects null. A verdict also now requires 2+ runs on
+        // BOTH sides, and rows under the significance floor say so out loud.
+        const fin = Number.isFinite;
+        const MIN_VERDICT_RUNS = 2;
         const out = Object.values(rows).sort(cmp);
         let prev = null;
         for (const r of out) {
-            if (prev && isFinite(r.meanTimeS) && isFinite(prev.meanTimeS)) {
+            if (r.runs < CONFIG.learning.minMeaningfulRuns) r.underpowered = true;
+            if (prev && fin(r.meanTimeS) && fin(prev.meanTimeS)) {
                 // z-score of the mean-time gap (Welch). |z| < 2 = still noise.
                 let z = null;
-                if (isFinite(r.seTimeS) && isFinite(prev.seTimeS) && (r.seTimeS || prev.seTimeS))
+                if (fin(r.seTimeS) && fin(prev.seTimeS) && (r.seTimeS || prev.seTimeS) &&
+                    r.runs >= MIN_VERDICT_RUNS && prev.runs >= MIN_VERDICT_RUNS)
                     z = +((r.meanTimeS - prev.meanTimeS) / Math.sqrt(r.seTimeS * r.seTimeS + prev.seTimeS * prev.seTimeS)).toFixed(2);
                 r.vsPrev = {
                     version: prev.version,
                     meanTimeS: r.meanTimeS - prev.meanTimeS,
-                    medianTimeS: (isFinite(r.medianTimeS) && isFinite(prev.medianTimeS)) ? r.medianTimeS - prev.medianTimeS : null,
-                    bestTimeS: (isFinite(r.bestTimeS) && isFinite(prev.bestTimeS)) ? r.bestTimeS - prev.bestTimeS : null,
-                    hellRate: (isFinite(r.hellRate) && isFinite(prev.hellRate)) ? +(r.hellRate - prev.hellRate).toFixed(2) : null,
-                    p60: (isFinite(r.p60) && isFinite(prev.p60)) ? +(r.p60 - prev.p60).toFixed(2) : null,
-                    z, verdict: z == null ? 'insufficient data' : (Math.abs(z) < 2 ? 'noise (|z|<2)' : (z > 0 ? 'better (z>=2)' : 'worse (z<=-2)'))
+                    medianTimeS: (fin(r.medianTimeS) && fin(prev.medianTimeS)) ? r.medianTimeS - prev.medianTimeS : null,
+                    bestTimeS: (fin(r.bestTimeS) && fin(prev.bestTimeS)) ? r.bestTimeS - prev.bestTimeS : null,
+                    hellRate: (fin(r.hellRate) && fin(prev.hellRate)) ? +(r.hellRate - prev.hellRate).toFixed(2) : null,
+                    p60: (fin(r.p60) && fin(prev.p60)) ? +(r.p60 - prev.p60).toFixed(2) : null,
+                    z, verdict: z == null ? 'insufficient data'
+                        : (r.underpowered || prev.underpowered)
+                            ? 'UNDERPOWERED (n<' + CONFIG.learning.minMeaningfulRuns + ') — z is not evidence'
+                            : (Math.abs(z) < 2 ? 'noise (|z|<2)' : (z > 0 ? 'better (z>=2)' : 'worse (z<=-2)'))
                 };
             }
-            if (isFinite(r.meanTimeS)) prev = r;
+            // only a row with a REAL mean becomes the comparison baseline
+            if (fin(r.meanTimeS) && r.runs >= MIN_VERDICT_RUNS) prev = r;
         }
         return out;
     }
@@ -1618,6 +1727,16 @@
         c.ss = 1; c.pc = {}; c.batch = [];
         delete c.prevBatchMean;
         c.stall = 0;
+        // v6.88.0 AUDIT D6: bestBatchMean is an ALL-TIME high-water mark and was
+        // never reset here. Rewards are outlier-dominated by design (one
+        // 250-minute run scores ~4.2 against a typical ~1.0), so a single deep
+        // run pinned it permanently — after which maybeRestart saw every later
+        // generation as not-improving, the stall counter climbed to the limit
+        // unconditionally, and restartSearch fired on a permanent cycle,
+        // pruning the hall of fame to one entry each time. Clearing it makes
+        // "improvement" mean improvement since the restart, which is the only
+        // thing the stall counter can sensibly measure.
+        c.bestBatchMean = null;
         c.restarts = (c.restarts || 0) + 1;
         c.lastRestartRun = learn.runs;
         // keep only the single best entry: three near-identical elites are how
@@ -2366,9 +2485,17 @@
                 // were ending shortly after it appeared. This is no longer a
                 // learned policy or a timing window — it is a ban. Only a pool
                 // with literally nothing else can force it.
+                // v6.88.0 AUDIT D2: resolve the policy BEFORE the ban's break.
+                // It used to sit one line after it, which made the only write
+                // to `rainbowChoice` in the codebase unreachable — so it stayed
+                // null and `stallMode` in the planner (05: rainbowChoice ===
+                // 'skip' && hellDetected && !zoner) was permanently false. The
+                // documented stall doctrine never engaged: a hell run at 60% HP
+                // with no zoner still charged bosses. The gun stays banned;
+                // only the bookkeeping moved above the break.
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 if (CONFIG.banRainbowGun) { add(-1000, 'gun-BANNED'); break; }
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 // v6.85.21 (user: "rainbowgun is still appearing"). Skip
                 // scored the gun at 18 — a REFUSAL that outbid every avoided
                 // filler (they score negative) and every weak card under 18.
@@ -2744,7 +2871,7 @@
                 }
             }
             if (PLAN_INGREDIENTS.includes(name)) add(Math.round(CONFIG.strategy.roadmapBonus * 0.8), 'roadmap');   // double-counts: super key + craft part
-            if (name === 'ABSINTHE' && !(ownedLevels['CORPSE REVIVER No.2'] > 0)) add(-6, 'absinthe-trap');
+            if (name === 'ABSINTHE' && !(ownedLevels['CORPSE REVIVER NO.2'] > 0)) add(-6, 'absinthe-trap');
         } else if (score === 0) {
             add(12, 'unknown');
         }
@@ -3236,7 +3363,15 @@
         if (!pool) return false;
         const sig = poolSignature(pool);
         const now = Date.now();
-        if (sig === lastPoolSig && now - lastPickAt < 900) return false; // already acted on this pool
+        // v6.88.0 AUDIT C4. This was a 900 ms TIME window, not a latch. If the
+        // pick click missed (clickCardByIndex/clickCardByName can both return
+        // false and nobody checked), the whole side-effect block below re-ran
+        // and repeated every mutation: ownedLevels bumped again, runPicks and
+        // runPickCtx pushed again, craftsThisRun++ again. Five seconds of a
+        // stuck pool recorded six picks of one card — and ownedLevels then
+        // drifts ABOVE the true level, so atCap/isMaxed lie to the whole scorer
+        // for the rest of the run. The latch now holds until the pool changes.
+        if (sig === lastPoolSig) return false;
         learnFromPool(pool);
         if (hellDetected) applyHellUnban();
 
@@ -3383,6 +3518,21 @@
         return best;
     }
     function clickText(re) { return clickEl(findByText(re)); }
+    // v6.88.0 AUDIT C3/S2: findByText with a veto, so a matching-but-forbidden
+    // element (the hell leaderboard TOGGLE; an OK on the name form) is skipped
+    // without masking a legitimate match elsewhere on the screen.
+    function clickTextIf(re, ok) {
+        const all = [...document.querySelectorAll('button, a, [role="button"], [onclick], .btn, div, span, li')];
+        let best = null, bestLen = Infinity;
+        for (const el of all) {
+            let t = '';
+            try { t = (el.textContent || '').trim(); } catch (e) { continue; }
+            if (!t || t.length > 120 || !re.test(t) || !visible(el)) continue;
+            if (typeof ok === 'function' && !ok(el)) continue;
+            if (t.length < bestLen) { best = el; bestLen = t.length; }
+        }
+        return clickEl(best);
+    }
 
     function cardElements() {
         const sels = ['#levelCards > *', '.levelup .card', '.upgrade-card', '#upCards > *', '.cards > *', '.choice'];
@@ -3724,18 +3874,48 @@
     // Never click NOT NOW: declining is strictly worse than any pick.
     function takeCraftPrompt() {
         try {
+            // v6.88.0 AUDIT C1. The previous version incremented craftsThisRun
+            // BEFORE clicking, did not check whether the click landed, and had
+            // no dedupe — while handleScreens calls this every overlayMs (260ms)
+            // for as long as the prompt is up. A prompt the game ignores was
+            // therefore worth ~4 crafts per second: ten seconds booked 38, and
+            // `milestones.craft * 38 = 1.90` is larger than the entire
+            // time+downs+sales contribution to the reward. That number went
+            // into cem.batch, the elites and the hall of fame, so the optimiser
+            // converged on whichever vector happened to be playing while a
+            // prompt was stuck. Now: latch on the prompt's identity, and only
+            // COUNT the craft once the prompt is gone (proof the click worked).
             const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
-            if (yes && visible(yes)) { craftsThisRun++; clickEl(yes); setStatus('craft: fused'); return true; }
-            // fall back to text, allowing for the result name after MAKE
-            const btns = [...document.querySelectorAll('button, [onclick], .btn')];
-            for (const b of btns) {
-                const t = (b.textContent || '').trim();
-                if (!visible(b)) continue;
-                if (/^(not now|later|no thanks)/i.test(t)) continue;   // the decline button
-                if (/^make\b|^combine\b|^fuse\b|조합|만들기/i.test(t)) {
-                    craftsThisRun++; clickEl(b); setStatus('craft: ' + t.slice(0, 24)); return true;
+            let target = (yes && visible(yes)) ? yes : null;
+            let label = target ? (target.textContent || 'craft').trim() : '';
+            if (!target) {
+                for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
+                    const t = (b.textContent || '').trim();
+                    if (!visible(b)) continue;
+                    // v6.88.0 AUDIT S2-adjacent: the decline filter was English
+                    // only while the accept side matched Korean anywhere in the
+                    // label, so a Korean decline could be clicked. Both sides
+                    // are now anchored and both languages are covered.
+                    if (/^(not now|later|no thanks)\b/i.test(t)) continue;
+                    if (/^(안\s*함|나중에|취소)/.test(t)) continue;
+                    if (/^(make|combine|fuse)\b/i.test(t) || /^(조합|만들기)/.test(t)) { target = b; label = t; break; }
                 }
             }
+            if (!target) {
+                // prompt gone: if we clicked one, THAT is when it counts
+                if (craftPending) {
+                    craftsThisRun++;
+                    log('craft confirmed: ' + craftPending + ' (total ' + craftsThisRun + ')');
+                    craftPending = null;
+                }
+                return false;
+            }
+            const sig = (target.id || '') + '|' + label.slice(0, 40);
+            if (sig === craftPending) return true;   // already clicked THIS prompt — wait it out
+            craftPending = sig;
+            clickEl(target);
+            setStatus('craft: ' + label.slice(0, 24));
+            return true;
         } catch (e) { }
         return false;
     }
@@ -3801,6 +3981,31 @@
 
     function looksLikeNameEntry() {
         return [...document.querySelectorAll('input')].some(visible);
+    }
+    // v6.88.0 AUDIT S2: never press a control that sits on a form with a live
+    // text input — that is the logbook name entry, and a bot entry in it is
+    // exactly what the crown rules forbid.
+    function notNameForm(el) {
+        try {
+            if (!el) return false;
+            const idc = (el.id || '') + ' ' + (el.className || '');
+            if (/save|submit|enter\s*name/i.test(idc)) return false;
+            // No visible text input on screen: this is not the logbook.
+            if (!looksLikeNameEntry()) return true;
+            // A name form IS up. Refuse the SUBMIT vocabulary outright — an
+            // ancestor walk is not enough, because the button is usually a
+            // SIBLING of the input rather than its parent, and a flat layout
+            // then reads as safe. Navigation labels stay allowed, because
+            // leaving the screen is exactly what the bot needs to do here.
+            const t = (el.textContent || '').trim();
+            if (/^(ok|okay|confirm|yes|submit|save|done|enter|register|기록|확인|저장)\b/i.test(t)) return false;
+            let n = el, hops = 0;
+            while (n && hops++ < 4) {
+                if (n.querySelectorAll && [...n.querySelectorAll('input')].some(visible)) return false;
+                n = n.parentElement;
+            }
+        } catch (e) { }
+        return true;
     }
 
     // Did this run beat EVERY entry in the logbook (rank #1)? The book shows
@@ -3900,7 +4105,17 @@
     // flagging (the in-run HUD/lexical latch confirms real hell entry).
     function tryAfterHoursHell() {
         if (!CONFIG.autoEnterHell) return false;
-        if (clickText(/enter\s*hell|go\s*to\s*hell|🔥\s*hell/i) ||
+        // v6.88.0 AUDIT C3. `🔥 hell` also matches #hellToggleBtn, the results
+        // screen's LEADERBOARD toggle — which is present after perfectly normal
+        // runs. The /toggle/ exclusion existed only on the loose fallback below
+        // (which does NOT latch hellDetected); the dangerous path had none. A
+        // stray toggle click therefore set pendingHellEntry, and startRun then
+        // scored the whole NEXT day run under hell rules, collecting
+        // hellEntered + the unbounded hellTimeBonus for a run that never left
+        // the day. Same exclusion, applied where it matters.
+        const notToggle = el => el && !/toggle|board|tab|switch/i.test(
+            (el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('onclick') || ''));
+        if (clickTextIf(/enter\s*hell|go\s*to\s*hell|🔥\s*hell/i, notToggle) ||
             clickByHandler(/enter\s*_?hell|enterhell/i) ||
             clickByIdClass(/hell(btn|button|door|entry|enter)|enterhell/i)) {
             hellDetected = true;
@@ -4040,6 +4255,19 @@
                 clickText(/again|continue|title|back/i);
         },
         highscore() {
+            // v6.88.0 AUDIT C5. over() opens with finishRun()+releaseAll(); this
+            // peer terminal state did neither, yet reads lastRunStats through
+            // recordStopReason. If the game can reach 'highscore' without
+            // passing 'over', the run was never credited, the crown check
+            // compared the PREVIOUS run's time, keys stayed held, and runActive
+            // stayed true — so the next run inherited ownedLevels, supersMade,
+            // hellDetected and runStart, and two runs were eventually credited
+            // as one. Idempotent: finishRun is a no-op once runActive is false.
+            if (runActive) {
+                deathSnapshot = deathSnapshot || snapshotStats();
+                finishRun();
+                releaseAll();
+            }
             const reason = recordStopReason();
             if (reason) {
                 stopBot(reason);
@@ -4053,7 +4281,7 @@
             // flip the internal state while the overlay stays up, leaving the
             // game running "behind" the high score screen.
             return clickText(/^\W*retry\b/i) || clickText(/again|continue/i) ||
-                !!callFirst(['backToTitle']) || clickText(/title|back|ok/i);
+                !!callFirst(['backToTitle']) || clickTextIf(/^(title|back|ok|menu)$/i, notNameForm);
         },
         plaza() {
             // VERIFIED: 'plaza' is the SOCIAL chat hub (openPlaza/plazaSay),
@@ -4178,8 +4406,13 @@
             stuckTries++;
             lastStateAt = now;
             log('stuck in state', st, '— generic click attempt', stuckTries);
-            const generic = /start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close|after\s*hours/i;
-            if (!clickText(generic)) {
+            // v6.88.0 AUDIT S2: `ok`, `yes` and `confirm` were unanchored, which
+            // is the vocabulary of a name-SUBMIT button (and `ok` matches inside
+            // LOGBOOK). The stated invariant is that the logbook is never
+            // touched by the bot; enforce it on this branch too, not only on the
+            // last-resort one below.
+            const generic = /^(start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close)\b|after\s*hours/i;
+            if (!clickTextIf(generic, notNameForm)) {
                 const els = cardElements();
                 if (els.length) clickEl(els[Math.min(stuckTries - 1, els.length - 1)]);
                 else {
@@ -4535,9 +4768,19 @@
         // along rays — never hold a ring on it; kite and let homing/directed
         // fire do the work (they track it even off-screen).
         try {
-            const owners = new Set((G.roadLines || []).map(l => l && l.owner).filter(o => o != null));
-            if (owners.size) for (const e of out.enemies) {
-                if (e.boss && !e.wall) e.linebacker = true;   // lanes up: treat lane-capable bosses as chargers
+            // v6.88.0 AUDIT D4. This built a Set from `l.owner`, but the
+            // source-verified roadLine shape (see lineCost below) is
+            // {x, y, ang, armed, dmg} — there is no owner field. The Set was
+            // therefore always empty, `e.linebacker` was never assigned
+            // anywhere in the codebase, and the `if (e.linebacker) continue`
+            // guard in the boss-engagement block was dead: the bot parked at
+            // its firing ring on a charging Last Call Linebacker, which is the
+            // death the rule was written to prevent. The owner cannot be
+            // identified from the real shape, so flag on ARMED lanes being
+            // present at all — during a charge telegraph, no boss is ringable.
+            const armedLanes = (G.roadLines || []).some(l => l && (l.armed || l.armed === undefined));
+            if (armedLanes) for (const e of out.enemies) {
+                if (e.boss && !e.wall) e.linebacker = true;
             }
         } catch (e) { }
 
@@ -5164,6 +5407,13 @@
         // mobile the closer it came to dying. The crowd gates are unchanged:
         // loosening them is not something the directive settles, and there is
         // no measurement behind 4-vs-3.
+        // v6.88.0 AUDIT D3: `distant` is now READ. It was written onto every
+        // gathered enemy and never read anywhere, so the exclusions its own
+        // comment promises ("excluded from the danger field, the crowd counts
+        // and contactImminent") did not exist. In hell with slowMul 0.5 a
+        // distant boss at 210px still contributed danger ~5.4 — above the 4.8
+        // dash threshold — so the bot dashed away from the boss the firing-ring
+        // term was simultaneously paying it to approach.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
         // v6.87.0: the crowd that triggers flight is per character. Fleeing is
         // a speed bet, and pat cannot win it — at 1.9 he is slower than deep
@@ -5234,7 +5484,7 @@
         // no-booking walls — a CR-only build farms both at base-attack speed,
         // so the detour incentive is cut for each. (Hoisted out of the
         // candidate loop — audit fix: was recomputed 33x per tick, twice.)
-        const crOnly = (ownedLevels['CORPSE REVIVER No.2'] || 0) > 0 && ownedCocktailCount() === 1;
+        const crOnly = (ownedLevels['CORPSE REVIVER NO.2'] || 0) > 0 && ownedCocktailCount() === 1;
         const crOnlyW = crOnly;
         // USER DIRECTIVE: the first 20 minutes are the FUNDING phase — kill
         // every NO BOOKING wall, passout, and boss to bankroll the rainbow
@@ -5306,6 +5556,7 @@
             const horizon = 12 + (DH.horizonFrames - 12) * depth;   // deep hell: see the lunge earlier
             for (const e of th.enemies) {
                 if (e.wall || e.frozen) continue;
+                if (e.distant) continue;   // v6.88.0 AUDIT D3: off-canvas, gathered only for the ring
                 const fx2 = e.x + e.vx * horizon, fy2 = e.y + e.vy * horizon;   // ~0.2s ahead (longer at depth)
                 const pad = ((e.boss || e.rival) ? 26 : 12) * (1 + (DH.bossPadMul - 1) * depth);
                 if (Math.hypot(fx2 - p.x, fy2 - p.y) < e.r + pad) { contactImminent = true; break; }
@@ -5385,6 +5636,10 @@
             let danger = 0;
 
             for (const e of th.enemies) {
+                // v6.88.0 AUDIT D3: a distant boss is gathered ONLY so the
+                // firing-ring term can see it. Letting it into the danger field
+                // made the planner flee the target it was being paid to close on.
+                if (e.distant) continue;
                 const fx = e.x + e.vx * stepFrames;
                 const fy = e.y + e.vy * stepFrames;
                 const d = Math.hypot(nx - fx, ny - fy);
@@ -6221,23 +6476,38 @@
             const p = lastPlan;
             const hidden = document.hidden === true;
             const vs = (learn.versions || {})[scriptTag()];
-            infoEl.innerHTML =
+            // v6.88.0 AUDIT S1. This was innerHTML. `lastAction` is built in
+            // clickEl from the clicked element's textContent — and the bot's
+            // stuck-breaker clicks by TEXT across div/span/li, so a leaderboard
+            // row carrying another player's display name can reach this line.
+            // Concatenated into innerHTML on a 400 ms timer, a crafted name
+            // executes in the game's origin. The static chrome is still markup;
+            // every value that comes from the page goes in as a text node.
+            const rows = [
                 'tab: ' + TAB_ID + '   runs(all tabs): ' + learn.runs +
-                (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : '') + '<br>' +
-                (hidden ? '<b style="color:#f88">⚠ background tab — game frozen by the browser; keep this window visible</b><br>' : '') +
-                'state: <b style="color:#ffd98a">' + (st == null ? '(unreadable)' : st) + '</b><br>' +
-                'move: ' + moveSource + '<br>' +
-                'build: ' + (primaryCocktail || '—') + '<br>' +
-                'picks: ' + runPicks.length + '<br>' +
+                    (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : ''),
+                hidden ? '\u26a0 background tab — game frozen by the browser; keep this window visible' : null,
+                'state: ' + (st == null ? '(unreadable)' : st),
+                'move: ' + moveSource,
+                'build: ' + (primaryCocktail || '\u2014'),
+                'picks: ' + runPicks.length,
                 'model: CEM g' + learn.cem.gen + ' (' + learn.cem.batch.length + '/' + CONFIG.learning.batchSize + ')' +
-                (championRun ? ' 👑' : '') +
-                (lastDeathCause ? '   died→' + lastDeathCause : '') +
-                (learn.hof.length ? '   best ' + learn.hof[0].r.toFixed(2) : '') +
-                (learn.genHistory.length >= 2
-                    ? (learn.genHistory[learn.genHistory.length - 1] > learn.genHistory[learn.genHistory.length - 2] ? ' ↑' : ' ↓')
-                    : '') + '<br>' +
-                (p ? p.diag + '<br>' : '') +
-                'last: ' + String(lastAction).slice(0, 34);
+                    (championRun ? ' \ud83d\udc51' : '') +
+                    (lastDeathCause ? '   died\u2192' + lastDeathCause : '') +
+                    (learn.hof.length && isFinite(learn.hof[0].r) ? '   best ' + learn.hof[0].r.toFixed(2) : '') +
+                    (learn.genHistory.length >= 2
+                        ? (learn.genHistory[learn.genHistory.length - 1] > learn.genHistory[learn.genHistory.length - 2] ? ' \u2191' : ' \u2193')
+                        : ''),
+                p ? p.diag : null,
+                'last: ' + String(lastAction).slice(0, 34)
+            ];
+            infoEl.textContent = '';
+            for (const r of rows) {
+                if (r == null) continue;
+                const line = document.createElement('div');
+                line.textContent = r;
+                infoEl.appendChild(line);
+            }
         }, 400);
     }
 
@@ -6543,10 +6813,18 @@
         const fr = safe(() => frame, 0) || 0;
         let poD = null, bossD = null, wallD = null, near = 0, poHp = null, poN = 0;
         let frozenBossD = null, frozenN = 0, hpSum = 0, hpN = 0;
+        const globalStop = typeof p.timeStopUntil === 'number' && p.timeStopUntil > fr;
         for (const e of en) {
             const dd = Math.hypot(e.x - p.x, e.y - p.y);
             const ty = String(e.type), bc = String(e.bossChar || '');
-            const froz = typeof e.frozenUntil === 'number' && e.frozenUntil > fr;
+            // v6.88.0 AUDIT R3: a TIME STOP item sets player.timeStopUntil
+            // ONLY; frozenUntil is WHISKY SOUR's per-enemy freeze. The planner
+            // was fixed to OR the two; demoTick was not — so every manual demo
+            // recorded frz: 0, and the "how close does the human stand to a
+            // PAUSED boss?" measurement that calibrated stopBossPull /
+            // stopStation / the burn station was structurally zero in all of
+            // them. Same class as the flameShare units bug.
+            const froz = globalStop || (typeof e.frozenUntil === 'number' && e.frozenUntil > fr);
             if (froz) frozenN++;
             if (ty === 'passout') {
                 poN++;
@@ -6615,6 +6893,11 @@
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
+                    // v6.88.0 AUDIT: hooks for the regression suite
+                    versionRows, applyParams, saveLearn, pruneVersions,
+                    craftPending: () => craftPending, crafts: () => craftsThisRun,
+                    resetCraftLatch: () => { craftPending = null; },
+                    notNameForm, clickTextIf,
                     handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,

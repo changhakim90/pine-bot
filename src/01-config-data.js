@@ -492,6 +492,14 @@
             // VERSION SNAPSHOTS: how many frozen per-version records to keep,
             // and how many best runs each version remembers.
             snapshotKeep: 24,
+            // v6.88.0 AUDIT R1/C2. versionKeep bounds the SHARED comparison
+            // table, which was unbounded and is what eventually blows the
+            // origin quota (~3.7 KB per row once its 600-run time ring fills).
+            // minMeaningfulRuns is the significance floor the tables now print
+            // for themselves — every historical misreading in this project came
+            // from taking a row under it seriously.
+            versionKeep: 40,
+            minMeaningfulRuns: 20,
             versionTopRuns: 5,
             versionTimesKeep: 600      // per-version survival-time list (median / SD); oldest dropped past this
         },
@@ -660,11 +668,20 @@
         return b;
     }
 
+    // v6.88.0 AUDIT D1: every key here is UPPERCASE because baseNameOf()
+    // uppercases the card name before any lookup. 'CORPSE REVIVER No.2' was
+    // mixed case in six tables, so AVOID_COCKTAILS.has(), COCKTAILS.includes(),
+    // SUPER_KEY_INGREDIENT, WEAPON_TAGS and COCKTAIL_PRIORITY all MISSED for
+    // it: the user's "absolute junk pile" directive never fired, and taking the
+    // card left ownedCocktailCount() at 0 — which re-triggered the first-weapon
+    // bonus and suppressed OLIVE's two largest bonuses for the rest of the run.
+    // DEAD_VS_HOLDOUTS already carried both spellings, evidence this was hit
+    // once and patched at one site only. Keep new entries uppercase.
     const COCKTAILS = [
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'MOJITO', 'COSMOPOLITAN',
         'GIN TONIC', 'WHISKEY HIGHBALL', 'VODKA TONIC', 'VODKA CRANBERRY', 'SOUTH SIDE',
         'MARGARITA', 'DRY MARTINI', 'VODKA MARTINI', 'MOSCOW MULE', 'WHISKY SOUR',
-        'NEGRONI', 'BLOODY MARY', 'ESPRESSO MARTINI', 'CORPSE REVIVER No.2'
+        'NEGRONI', 'BLOODY MARY', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2'
     ];
 
     // Cocktail -> the ingredient that must be MAXED to unlock its super form.
@@ -675,7 +692,7 @@
         'VODKA CRANBERRY': 'CRANBERRY', 'SOUTH SIDE': 'MINT', 'MARGARITA': 'ORANGE',
         'DRY MARTINI': 'OLIVE', 'VODKA MARTINI': 'DRY VERMOUTH', 'MOSCOW MULE': 'GINGER BEER',
         'WHISKY SOUR': 'LEMON', 'NEGRONI': 'CAMPARI', 'BLOODY MARY': 'TOMATO JUICE',
-        'ESPRESSO MARTINI': 'COFFEE BEANS', 'CORPSE REVIVER No.2': 'ABSINTHE'
+        'ESPRESSO MARTINI': 'COFFEE BEANS', 'CORPSE REVIVER NO.2': 'ABSINTHE'
     };
 
     // Secret crafts: every part at Lv6 fuses into the result.
@@ -693,7 +710,7 @@
     const COCKTAIL_PRIORITY = {
         'GIN TONIC': 34, 'VODKA TONIC': 32, 'COSMOPOLITAN': 30, 'WHISKEY HIGHBALL': 30,
         'SOUTH SIDE': 28, 'DRY MARTINI': 27, 'VODKA MARTINI': 27, 'NEGRONI': 26,
-        'CORPSE REVIVER No.2': 26, 'WHISKY SOUR': 25, 'ESPRESSO MARTINI': 18,
+        'CORPSE REVIVER NO.2': 26, 'WHISKY SOUR': 25, 'ESPRESSO MARTINI': 18,
         'MARGARITA': 23, 'MOSCOW MULE': 23, 'MOJITO': 22, 'SIDECAR': 22,
         'MANHATTAN': 21, 'OLD FASHIONED': 21, 'GIMLET': 20, 'VODKA CRANBERRY': 19,
         'BLOODY MARY': 18
@@ -715,7 +732,7 @@
     // cocktails are excluded from experiment rosters and self-composition.
     const AVOID_COCKTAILS = new Set([
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'WHISKEY HIGHBALL',
-        'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER No.2',
+        'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2',
         // MINGUK guard: these two would complete a SIXTH super off in-plan
         // keys (SUGAR, OLIVE) and summon the gun — banned by design
         'MOJITO', 'DRY MARTINI'
@@ -725,7 +742,7 @@
     // v6.86.8 (user-verified): these cannot damage the stationary targets —
     // passouts and NO BOOKING walls — that the day phase is spent clearing.
     // They are the bottom of the junk tier, below ordinary filler.
-    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER No.2', 'CORPSE REVIVER NO.2', 'ABSINTHE']);
+    const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER NO.2', 'ABSINTHE']);
     const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
@@ -815,7 +832,7 @@
         'NEGRONI': ['defense'],                             // dodge chance + HP shield
         'BLOODY MARY': ['orbit', 'boss'],                   // figure-8 glass, chili peppers
         'ESPRESSO MARTINI': ['burst', 'tanky'],             // sky lightning hits hard but lands RANDOMLY — no boss duty (user-verified)
-        'CORPSE REVIVER No.2': ['summon', 'defense'],       // tanky self-healing zombie allies
+        'CORPSE REVIVER NO.2': ['summon', 'defense'],       // tanky self-healing zombie allies
         'SIMPLE SYRUP': ['aoe'], 'CITRUS TRIO': ['orbit', 'swarm'],
         'SODA GUN': ['sustained'], 'BLACK VERMOUTH': ['summon']
     };
@@ -935,7 +952,19 @@
         // null params (patRing.early null -> a 20px suicide station;
         // killOrderDist null -> x0 = the frailest-first regression). Only a
         // genuine finite number is ever applied.
-        for (const k of Object.keys(TUNABLE)) if (typeof p[k] === 'number' && isFinite(p[k])) setParam(k, p[k]);
+        // v6.88.0 AUDIT D5: and only ever INSIDE the live TUNABLE box. Champion
+        // replays did `{...learn.hof[0].p}` with no clamp, so vectors stored
+        // under an older, wider box survived every narrowing. 6.86.0 tightened
+        // strategy.deepFocusLv from 6 to 4 precisely because a mean of 5.63 was
+        // build-starving — yet every 4th run replayed 5.63, and refitCem then
+        // pulled the mean back toward it. applyParams is the one choke point
+        // every path goes through, so the clamp belongs here.
+        for (const k of Object.keys(TUNABLE)) {
+            const v = p[k];
+            if (typeof v !== 'number' || !isFinite(v)) continue;
+            const box = TUNABLE[k];
+            setParam(k, Math.max(box.min, Math.min(box.max, v)));
+        }
     }
     // VERSION TAG: the rollup key. The scoring profile is part of the tag,
     // so "6.80.0 playing the crown rules" and "6.80.0 playing the 6.79 rules"
@@ -1051,6 +1080,8 @@
     let ownedMax = {};                  // NAME -> maxlv
     let lastPoolSig = null;
     let lastPickAt = 0;
+    let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
+    let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max
     let hellDetected = false;
     let hellEnteredAt = 0;      // when this run crossed into hell (the entry surge is the killer)

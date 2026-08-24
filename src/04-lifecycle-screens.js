@@ -292,18 +292,48 @@
     // Never click NOT NOW: declining is strictly worse than any pick.
     function takeCraftPrompt() {
         try {
+            // v6.88.0 AUDIT C1. The previous version incremented craftsThisRun
+            // BEFORE clicking, did not check whether the click landed, and had
+            // no dedupe — while handleScreens calls this every overlayMs (260ms)
+            // for as long as the prompt is up. A prompt the game ignores was
+            // therefore worth ~4 crafts per second: ten seconds booked 38, and
+            // `milestones.craft * 38 = 1.90` is larger than the entire
+            // time+downs+sales contribution to the reward. That number went
+            // into cem.batch, the elites and the hall of fame, so the optimiser
+            // converged on whichever vector happened to be playing while a
+            // prompt was stuck. Now: latch on the prompt's identity, and only
+            // COUNT the craft once the prompt is gone (proof the click worked).
             const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
-            if (yes && visible(yes)) { craftsThisRun++; clickEl(yes); setStatus('craft: fused'); return true; }
-            // fall back to text, allowing for the result name after MAKE
-            const btns = [...document.querySelectorAll('button, [onclick], .btn')];
-            for (const b of btns) {
-                const t = (b.textContent || '').trim();
-                if (!visible(b)) continue;
-                if (/^(not now|later|no thanks)/i.test(t)) continue;   // the decline button
-                if (/^make\b|^combine\b|^fuse\b|조합|만들기/i.test(t)) {
-                    craftsThisRun++; clickEl(b); setStatus('craft: ' + t.slice(0, 24)); return true;
+            let target = (yes && visible(yes)) ? yes : null;
+            let label = target ? (target.textContent || 'craft').trim() : '';
+            if (!target) {
+                for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
+                    const t = (b.textContent || '').trim();
+                    if (!visible(b)) continue;
+                    // v6.88.0 AUDIT S2-adjacent: the decline filter was English
+                    // only while the accept side matched Korean anywhere in the
+                    // label, so a Korean decline could be clicked. Both sides
+                    // are now anchored and both languages are covered.
+                    if (/^(not now|later|no thanks)\b/i.test(t)) continue;
+                    if (/^(안\s*함|나중에|취소)/.test(t)) continue;
+                    if (/^(make|combine|fuse)\b/i.test(t) || /^(조합|만들기)/.test(t)) { target = b; label = t; break; }
                 }
             }
+            if (!target) {
+                // prompt gone: if we clicked one, THAT is when it counts
+                if (craftPending) {
+                    craftsThisRun++;
+                    log('craft confirmed: ' + craftPending + ' (total ' + craftsThisRun + ')');
+                    craftPending = null;
+                }
+                return false;
+            }
+            const sig = (target.id || '') + '|' + label.slice(0, 40);
+            if (sig === craftPending) return true;   // already clicked THIS prompt — wait it out
+            craftPending = sig;
+            clickEl(target);
+            setStatus('craft: ' + label.slice(0, 24));
+            return true;
         } catch (e) { }
         return false;
     }
@@ -369,6 +399,31 @@
 
     function looksLikeNameEntry() {
         return [...document.querySelectorAll('input')].some(visible);
+    }
+    // v6.88.0 AUDIT S2: never press a control that sits on a form with a live
+    // text input — that is the logbook name entry, and a bot entry in it is
+    // exactly what the crown rules forbid.
+    function notNameForm(el) {
+        try {
+            if (!el) return false;
+            const idc = (el.id || '') + ' ' + (el.className || '');
+            if (/save|submit|enter\s*name/i.test(idc)) return false;
+            // No visible text input on screen: this is not the logbook.
+            if (!looksLikeNameEntry()) return true;
+            // A name form IS up. Refuse the SUBMIT vocabulary outright — an
+            // ancestor walk is not enough, because the button is usually a
+            // SIBLING of the input rather than its parent, and a flat layout
+            // then reads as safe. Navigation labels stay allowed, because
+            // leaving the screen is exactly what the bot needs to do here.
+            const t = (el.textContent || '').trim();
+            if (/^(ok|okay|confirm|yes|submit|save|done|enter|register|기록|확인|저장)\b/i.test(t)) return false;
+            let n = el, hops = 0;
+            while (n && hops++ < 4) {
+                if (n.querySelectorAll && [...n.querySelectorAll('input')].some(visible)) return false;
+                n = n.parentElement;
+            }
+        } catch (e) { }
+        return true;
     }
 
     // Did this run beat EVERY entry in the logbook (rank #1)? The book shows
@@ -468,7 +523,17 @@
     // flagging (the in-run HUD/lexical latch confirms real hell entry).
     function tryAfterHoursHell() {
         if (!CONFIG.autoEnterHell) return false;
-        if (clickText(/enter\s*hell|go\s*to\s*hell|🔥\s*hell/i) ||
+        // v6.88.0 AUDIT C3. `🔥 hell` also matches #hellToggleBtn, the results
+        // screen's LEADERBOARD toggle — which is present after perfectly normal
+        // runs. The /toggle/ exclusion existed only on the loose fallback below
+        // (which does NOT latch hellDetected); the dangerous path had none. A
+        // stray toggle click therefore set pendingHellEntry, and startRun then
+        // scored the whole NEXT day run under hell rules, collecting
+        // hellEntered + the unbounded hellTimeBonus for a run that never left
+        // the day. Same exclusion, applied where it matters.
+        const notToggle = el => el && !/toggle|board|tab|switch/i.test(
+            (el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('onclick') || ''));
+        if (clickTextIf(/enter\s*hell|go\s*to\s*hell|🔥\s*hell/i, notToggle) ||
             clickByHandler(/enter\s*_?hell|enterhell/i) ||
             clickByIdClass(/hell(btn|button|door|entry|enter)|enterhell/i)) {
             hellDetected = true;
@@ -608,6 +673,19 @@
                 clickText(/again|continue|title|back/i);
         },
         highscore() {
+            // v6.88.0 AUDIT C5. over() opens with finishRun()+releaseAll(); this
+            // peer terminal state did neither, yet reads lastRunStats through
+            // recordStopReason. If the game can reach 'highscore' without
+            // passing 'over', the run was never credited, the crown check
+            // compared the PREVIOUS run's time, keys stayed held, and runActive
+            // stayed true — so the next run inherited ownedLevels, supersMade,
+            // hellDetected and runStart, and two runs were eventually credited
+            // as one. Idempotent: finishRun is a no-op once runActive is false.
+            if (runActive) {
+                deathSnapshot = deathSnapshot || snapshotStats();
+                finishRun();
+                releaseAll();
+            }
             const reason = recordStopReason();
             if (reason) {
                 stopBot(reason);
@@ -621,7 +699,7 @@
             // flip the internal state while the overlay stays up, leaving the
             // game running "behind" the high score screen.
             return clickText(/^\W*retry\b/i) || clickText(/again|continue/i) ||
-                !!callFirst(['backToTitle']) || clickText(/title|back|ok/i);
+                !!callFirst(['backToTitle']) || clickTextIf(/^(title|back|ok|menu)$/i, notNameForm);
         },
         plaza() {
             // VERIFIED: 'plaza' is the SOCIAL chat hub (openPlaza/plazaSay),
@@ -746,8 +824,13 @@
             stuckTries++;
             lastStateAt = now;
             log('stuck in state', st, '— generic click attempt', stuckTries);
-            const generic = /start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close|after\s*hours/i;
-            if (!clickText(generic)) {
+            // v6.88.0 AUDIT S2: `ok`, `yes` and `confirm` were unanchored, which
+            // is the vocabulary of a name-SUBMIT button (and `ok` matches inside
+            // LOGBOOK). The stated invariant is that the logbook is never
+            // touched by the bot; enforce it on this branch too, not only on the
+            // last-resort one below.
+            const generic = /^(start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close)\b|after\s*hours/i;
+            if (!clickTextIf(generic, notNameForm)) {
                 const els = cardElements();
                 if (els.length) clickEl(els[Math.min(stuckTries - 1, els.length - 1)]);
                 else {

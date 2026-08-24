@@ -55,6 +55,29 @@
     }
 
     function loadLearn() {
+        // v6.88.0 AUDIT R2: the JSON.parse calls were wrapped but every
+        // structural access after them was not, and `d.x = d.x || {}` does not
+        // catch a wrong TYPE. A stored {"cem":{"mean":5}} passed the truthiness
+        // guard and then threw on property assignment to a number — and because
+        // loadLearn runs at module scope, that throw aborted the whole IIFE and
+        // NO PART of the bot loaded, permanently, until localStorage was cleared
+        // by hand. With @grant none the script shares storage with the game
+        // page, so this was reachable by anything with same-origin write access.
+        try { return loadLearnInner(); }
+        catch (e) {
+            log('STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken');
+            try { localStorage.setItem(learnKey() + '.broken', localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
+            try { return loadLearnInner(); } catch (e2) { return blankLearn(); }
+        }
+    }
+    function blankLearn() {
+        return {
+            bartender: activeChar || 'minguk', items: {}, totalPicks: 0, history: [], runs: 0,
+            builds: {}, hof: [], genHistory: [], runLog: [], rosters: {}, versions: {}, snapshots: [],
+            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {}
+        };
+    }
+    function loadLearnInner() {
         let d = null;
         try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
         if (!d || typeof d !== 'object') d = {};
@@ -181,13 +204,50 @@
         return d;
     }
     function saveLearn() {
+        // v6.88.0 AUDIT R1. Three defects in five lines. (1) The SHARED blob was
+        // written first, so a quota throw skipped the per-bartender store —
+        // the CEM mean/sigma, hall of fame, item and build stats — entirely.
+        // (2) The catch was empty, so that happened silently: learn.runs stops
+        // advancing, the CEM stops refitting across reloads, and nothing says
+        // so. (3) learn.versions grows a permanent ~3.7 KB entry per
+        // version x profile x bartender and was never pruned, which is what
+        // eventually causes the throw. Now: own store first (it is the one
+        // that must survive), versions pruned like snapshots already were, and
+        // a failure is logged and surfaced once.
+        const own = (() => { const { versions, snapshots, ...rest } = learn; return rest; })();
+        let ok = true;
+        try { localStorage.setItem(learnKey(), JSON.stringify(own)); }
+        catch (e) { ok = false; log('SAVE FAILED (own store): ' + (e && e.name) + ' — learning for this run is lost'); }
         try {
-            // shared: versions + snapshots (+ lastVersion for the freeze check)
-            localStorage.setItem(SHARED_KEY, JSON.stringify({ versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion }));
-            // per-bartender: everything else
-            const { versions, snapshots, ...own } = learn;
-            localStorage.setItem(learnKey(), JSON.stringify(own));
-        } catch (e) { }
+            pruneVersions();
+            localStorage.setItem(SHARED_KEY, JSON.stringify({
+                versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
+            }));
+        } catch (e) {
+            log('SAVE FAILED (shared table): ' + (e && e.name) + ' — comparison history is not being recorded');
+            ok = false;
+        }
+        if (!ok && !saveWarned) { saveWarned = true; try { setStatus('⚠ localStorage full — learning is NOT being saved'); } catch (e2) { } }
+        return ok;
+    }
+
+    // v6.88.0 AUDIT R1: keep the shared comparison table bounded. Rows are kept
+    // by run count (the ones that carry evidence), never below the most recent
+    // versionKeep tags, so an active version is never dropped mid-measurement.
+    function pruneVersions() {
+        const V = learn.versions || {};
+        const keys = Object.keys(V);
+        const cap = CONFIG.learning.versionKeep || 40;
+        if (keys.length <= cap) return;
+        const recent = new Set(keys.slice(-8));
+        recent.add(scriptTag());
+        const ranked = keys.filter(k => !recent.has(k))
+            .sort((a, b) => (V[b].n || 0) - (V[a].n || 0))
+            .slice(0, Math.max(0, cap - recent.size));
+        const keep = new Set([...recent, ...ranked]);
+        let dropped = 0;
+        for (const k of keys) if (!keep.has(k)) { delete V[k]; dropped++; }
+        if (dropped) log('pruned ' + dropped + ' low-evidence version row(s) from the shared table');
     }
     function resetLearn() {
         // Snapshots are the historical record — freeze the live version
@@ -233,25 +293,43 @@
             for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
             return String(a.version).localeCompare(String(b.version));
         };
+        // v6.88.0 AUDIT C2. Every guard here used the GLOBAL isFinite, and
+        // `isFinite(null) === true` — so every unknown field passed as 0.
+        //   * the hand-seeded 6.74.0 row carries meanTimeS: null, so the next
+        //     row reported invented deltas against a version with no mean;
+        //   * a row with ONE run has seTimeS === null (rollupStats leaves sd
+        //     null at n=1), which entered the Welch denominator as zero.
+        // That is exactly how 6.85.18+crown+pat came to read n=1, z=+8.66,
+        // "better" — immediately before its successor read z=-32.43 at n=57.
+        // Number.isFinite rejects null. A verdict also now requires 2+ runs on
+        // BOTH sides, and rows under the significance floor say so out loud.
+        const fin = Number.isFinite;
+        const MIN_VERDICT_RUNS = 2;
         const out = Object.values(rows).sort(cmp);
         let prev = null;
         for (const r of out) {
-            if (prev && isFinite(r.meanTimeS) && isFinite(prev.meanTimeS)) {
+            if (r.runs < CONFIG.learning.minMeaningfulRuns) r.underpowered = true;
+            if (prev && fin(r.meanTimeS) && fin(prev.meanTimeS)) {
                 // z-score of the mean-time gap (Welch). |z| < 2 = still noise.
                 let z = null;
-                if (isFinite(r.seTimeS) && isFinite(prev.seTimeS) && (r.seTimeS || prev.seTimeS))
+                if (fin(r.seTimeS) && fin(prev.seTimeS) && (r.seTimeS || prev.seTimeS) &&
+                    r.runs >= MIN_VERDICT_RUNS && prev.runs >= MIN_VERDICT_RUNS)
                     z = +((r.meanTimeS - prev.meanTimeS) / Math.sqrt(r.seTimeS * r.seTimeS + prev.seTimeS * prev.seTimeS)).toFixed(2);
                 r.vsPrev = {
                     version: prev.version,
                     meanTimeS: r.meanTimeS - prev.meanTimeS,
-                    medianTimeS: (isFinite(r.medianTimeS) && isFinite(prev.medianTimeS)) ? r.medianTimeS - prev.medianTimeS : null,
-                    bestTimeS: (isFinite(r.bestTimeS) && isFinite(prev.bestTimeS)) ? r.bestTimeS - prev.bestTimeS : null,
-                    hellRate: (isFinite(r.hellRate) && isFinite(prev.hellRate)) ? +(r.hellRate - prev.hellRate).toFixed(2) : null,
-                    p60: (isFinite(r.p60) && isFinite(prev.p60)) ? +(r.p60 - prev.p60).toFixed(2) : null,
-                    z, verdict: z == null ? 'insufficient data' : (Math.abs(z) < 2 ? 'noise (|z|<2)' : (z > 0 ? 'better (z>=2)' : 'worse (z<=-2)'))
+                    medianTimeS: (fin(r.medianTimeS) && fin(prev.medianTimeS)) ? r.medianTimeS - prev.medianTimeS : null,
+                    bestTimeS: (fin(r.bestTimeS) && fin(prev.bestTimeS)) ? r.bestTimeS - prev.bestTimeS : null,
+                    hellRate: (fin(r.hellRate) && fin(prev.hellRate)) ? +(r.hellRate - prev.hellRate).toFixed(2) : null,
+                    p60: (fin(r.p60) && fin(prev.p60)) ? +(r.p60 - prev.p60).toFixed(2) : null,
+                    z, verdict: z == null ? 'insufficient data'
+                        : (r.underpowered || prev.underpowered)
+                            ? 'UNDERPOWERED (n<' + CONFIG.learning.minMeaningfulRuns + ') — z is not evidence'
+                            : (Math.abs(z) < 2 ? 'noise (|z|<2)' : (z > 0 ? 'better (z>=2)' : 'worse (z<=-2)'))
                 };
             }
-            if (isFinite(r.meanTimeS)) prev = r;
+            // only a row with a REAL mean becomes the comparison baseline
+            if (fin(r.meanTimeS) && r.runs >= MIN_VERDICT_RUNS) prev = r;
         }
         return out;
     }
@@ -407,6 +485,16 @@
         c.ss = 1; c.pc = {}; c.batch = [];
         delete c.prevBatchMean;
         c.stall = 0;
+        // v6.88.0 AUDIT D6: bestBatchMean is an ALL-TIME high-water mark and was
+        // never reset here. Rewards are outlier-dominated by design (one
+        // 250-minute run scores ~4.2 against a typical ~1.0), so a single deep
+        // run pinned it permanently — after which maybeRestart saw every later
+        // generation as not-improving, the stall counter climbed to the limit
+        // unconditionally, and restartSearch fired on a permanent cycle,
+        // pruning the hall of fame to one entry each time. Clearing it makes
+        // "improvement" mean improvement since the restart, which is the only
+        // thing the stall counter can sensibly measure.
+        c.bestBatchMean = null;
         c.restarts = (c.restarts || 0) + 1;
         c.lastRestartRun = learn.runs;
         // keep only the single best entry: three near-identical elites are how
