@@ -109,6 +109,50 @@
         return t < 360 ? 'early' : (t < 900 ? 'mid' : 'late');
     }
 
+    // NOTE (v6.87.3): this lives ABOVE scoreCard deliberately. Its
+    // neighbours — opensNewSuperLine, liveSuperCount, isCraftFinish — are
+    // nested INSIDE scoreCard, which is invisible until something outside
+    // tries to call them. handleLevelUp needs this one, so it belongs at
+    // module scope.
+    // v6.87.2 (user: "the bot needs to choose from the junk pool that doesn't
+    // lead to the rainbow gun upgrade" + "cap the supercocktails to 5").
+    //
+    // opensNewSuperLine() above only fires on the LAST pick of a line — the
+    // one where the other half is already maxed. That is too late to steer a
+    // junk pool: the picks that actually walk the bot toward a sixth super are
+    // the ordinary-looking ones several levels earlier. This returns how far
+    // a card carries an OFF-PLAN line, 0 (cannot ever) .. 1 (completes it now),
+    // so junk can be ORDERED by it instead of only vetoed at the end.
+    //
+    // Lines that can never complete score 0 and are not penalised: a key on
+    // the permanent ban list (LEMON, ORANGE — neither is ever hell-unbanned)
+    // means that super is unreachable no matter how many levels go in.
+    function gunPathProgress(type, name) {
+        try {
+            const sl = (G.player && G.player.superLv) || {};
+            const made = c => {
+                const k = String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
+                return Object.keys(sl).some(s2 => s2.toLowerCase().replace(/[^a-z0-9]/g, '') === k && sl[s2] > 0);
+            };
+            const NEVER_UNBANNED = new Set(['LEMON', 'ORANGE']);
+            const cocktails = [];
+            if (type === 'weapon' && COCKTAILS.includes(name)) cocktails.push(name);
+            else if (type === 'passive') for (const c of COCKTAILS) if (SUPER_KEY_INGREDIENT[c] === name) cocktails.push(c);
+            let worst = 0;
+            for (const c of cocktails) {
+                if (PLAN_COCKTAILS.includes(c)) continue;      // one of the sanctioned five
+                if (made(c)) continue;                          // already a line we counted
+                const key = SUPER_KEY_INGREDIENT[c];
+                if (!key || NEVER_UNBANNED.has(key)) continue;  // unreachable line: harmless
+                const cMax = ownedMax[c] || 6, kMax = ownedMax[key] || 6;
+                const cLv = Math.min(cMax, (ownedLevels[c] || 0) + (type === 'weapon' ? 1 : 0));
+                const kLv = Math.min(kMax, (ownedLevels[key] || 0) + (type === 'passive' ? 1 : 0));
+                worst = Math.max(worst, (cLv / cMax + kLv / kMax) / 2);
+            }
+            return worst;
+        } catch (e) { return 0; }
+    }
+
     function scoreCard(card, index, poolArr) {
         const type = String((card && card.type) || '').toLowerCase();
         const name = baseNameOf(card);
@@ -780,18 +824,49 @@
         return false;
     }
 
+
     // GUN-GUARD (user: junk pool is free as long as no rainbow): the
         // gate is six MAXED supers — so the SIXTH super unlock card is the
         // one pick that can ever endanger the stall doctrine. At five
         // supers, any further super card is refused outright.
         {
+            const CAP = CONFIG.maxSuperLines || 5;
             const nSupers = Math.max(supersMade.size, liveSuperCount());
             // the sixth super IS the gun — refuse the unlock card...
-            if (type === 'super' && nSupers >= 5) add(-500, 'gun-guard');
+            if (type === 'super' && nSupers >= CAP) add(-500, 'gun-guard');
             // ...and refuse anything that would OPEN a sixth line in the
             // first place (user: block it when picking weapons/ingredients).
-            if (nSupers >= 5 && (type === 'weapon' || type === 'passive') &&
+            if (nSupers >= CAP && (type === 'weapon' || type === 'passive') &&
                 opensNewSuperLine(type, name)) add(-500, 'gun-guard-source');
+            // v6.87.2: the same refusal one step earlier and independent of the
+            // count — a card that COMPLETES a line outside the planned five is
+            // a sixth line by construction, because the roster only ever holds
+            // five. Waiting for nSupers to reach the cap let the pool hand us
+            // the sixth line while we were still at four.
+            if ((type === 'weapon' || type === 'passive') && !atCap) {
+                const risk = gunPathProgress(type, name);
+                if (risk >= 0.999) add(-500, 'gun-path-complete');
+                // ...and BELOW that, ordering rather than vetoing. When the
+                // pool is all junk the bot must still take something; it should
+                // take the junk that does NOT walk toward the gate.
+                //
+                // v6.87.4 CORRECTION, from the first measured 6.87.3 runs:
+                // supers/run fell 3.2 -> 0.5 and hell rate 1.0 -> 0.5 (n=5 and
+                // n=4, so weak evidence, but the MECHANISM is not in doubt).
+                // 6.87.2 taxed EVERY off-plan line from its very first level,
+                // and minguk's best recent runs are built on exactly those —
+                // DRY MARTINI, VODKA CRANBERRY, COSMOPOLITAN. Two levels in an
+                // off-plan cocktail is damage, not a gun path: it cannot become
+                // a super without many more picks, and the -500 above catches
+                // the pick that would actually finish it.
+                // So the tax now starts only past the HALFWAY mark, where a
+                // line is genuinely in danger of completing, and climbs steeply
+                // from there. Below half, off-plan cards are judged on merit.
+                else if (risk > CONFIG.gunPathFloor) {
+                    const t = (risk - CONFIG.gunPathFloor) / Math.max(1e-6, 1 - CONFIG.gunPathFloor);
+                    add(-Math.round(6 + 60 * t), 'gun-path');
+                }
+            }
         }
 
         // KNOCKBACK+ZONE COMBO (user directive): SUPER VODKA CRANBERRY's
@@ -994,14 +1069,52 @@
         const best = scored[0];
         if (!best) return false;
 
+        // v6.87.3 (user): "at a certain point in the early hell mode, there are
+        // only 2 choices forcing the bot to pick a super cocktail leading item".
+        // A FORCED pool is one where EVERY card walks an off-plan super line —
+        // no safe sink on offer, so whatever we take advances the gate. Two
+        // things follow.
+        //
+        // First, this is worth a re-roll even when the pool does not look
+        // "weak": the old threshold (best < 22) misses a pool of two decent
+        // cards that both happen to be gun paths.
+        //
+        // Second, it is worth RECORDING. The mechanic behind a two-card pool is
+        // not something I can read from here — most likely the plan's own lines
+        // have hit their caps and can no longer absorb a level, so the game has
+        // nothing left to offer but new ones. `pineBot.gunForced()` keeps what
+        // was actually on the table so the cause can be read off real runs
+        // instead of guessed at.
+        const gunRisk = c => gunPathProgress(String((c && c.type) || '').toLowerCase(), baseNameOf(c));
+        const forcedGunPool = pool.length > 0 && pool.every(c => {
+            const t = String((c && c.type) || '').toLowerCase();
+            if (t === 'rainbowup') return true;
+            return (t === 'weapon' || t === 'passive') && gunRisk(c) > 0;
+        });
+        if (forcedGunPool) {
+            gunForcedLog.push({
+                gt: Math.round((typeof G.gameTime === 'number' ? G.gameTime : 0)),
+                hell: hellDetected === true,
+                offered: pool.map(c => baseNameOf(c) + '(' + String((c && c.type) || '') + ' lv' + (levelOf(c) || 0) +
+                    ' risk' + gunRisk(c).toFixed(2) + ')'),
+                supers: supersMade.size,   // liveSuperCount is scoped inside scoreCard
+                took: null
+            });
+            while (gunForcedLog.length > 40) gunForcedLog.shift();
+            log('FORCED gun pool (' + pool.length + ' cards, all gun paths): ' +
+                gunForcedLog[gunForcedLog.length - 1].offered.join(' | '));
+        }
+
         // GINGER BEER grants level-up RE-ROLLS (recipe book): if the whole
         // pool is weak, spend one instead of eating a dead pick. Once per pool.
-        if (best.score < 22 && sig !== lastRerollSig) {
+        // v6.87.3: a forced gun pool re-rolls on its own account, whatever it
+        // scores — spending a re-roll is strictly better than opening a line.
+        if ((best.score < 22 || forcedGunPool) && sig !== lastRerollSig) {
             const rr = findByText(/re-?roll/i);
             if (rr) {
                 lastRerollSig = sig;
                 clickEl(rr);
-                setStatus('weak pool — re-rolled');
+                setStatus(forcedGunPool ? 'forced gun pool — re-rolled' : 'weak pool — re-rolled');
                 return true;
             }
         }
@@ -1028,6 +1141,8 @@
         else if (best.type === 'evolve') craftsThisRun++;
         else if (best.type === 'rainbowup') { rainbowThisRun = true; rainbowAt = Date.now(); }
 
+        // v6.87.3: close the loop — which of the bad options did we eat?
+        if (forcedGunPool && gunForcedLog.length) gunForcedLog[gunForcedLog.length - 1].took = best.name;
         pickAudit.push({
             gt: Math.round((typeof G.gameTime === 'number' ? G.gameTime : 0)),
             took: best.name, score: Math.round(best.score), why: best.why.trim(),

@@ -294,6 +294,21 @@
         rainbowPolicyOverride: 'skip',
         // v6.86.9: a hard ban, above the learned policy and the timing window.
         banRainbowGun: true,
+        // v6.87.2 (user): "cap the supercocktails to 5 cocktails". The Rainbow
+        // Gun's gate is SIX maxed supers, so five is the number that closes it
+        // by construction. Both charRoadmap rosters are built to exactly five
+        // completable lines (asserted by the `roster-cap` test); this is the
+        // RUNTIME half of the same rule, for the pools that offer things the
+        // roster never planned for. A card that would open or finish a sixth
+        // line is refused outright, whatever the pool looks like.
+        maxSuperLines: 5,
+        // v6.87.4: how far an OFF-PLAN super line must already be before the
+        // bot starts paying to avoid it. Below this, an off-plan cocktail is
+        // just damage and is judged on merit; above it, the line is close
+        // enough to completing that every level is a step toward the gun.
+        // 6.87.2 set this to 0 in effect — taxing every off-plan card from its
+        // first level — and the first runs showed supers/run collapsing.
+        gunPathFloor: 0.5,
 
         // HELL UNBAN (v6.83.0): ingredients that leave the avoid list and
         // join the plan the moment a run is in hell. GINGER BEER = MOSCOW
@@ -1022,6 +1037,10 @@
     let supersMade = new Set();   // names of super cocktails unlocked this run (hell-readiness gate)
     let runPickCtx = [];          // {name, x} per pick this run, credited at run end (LinUCB)
     let pickAudit = [];           // last picks with scores + reasoning — every selection is KEY (user)
+    // v6.87.3: level-up pools where EVERY card walked an off-plan super line,
+    // with what was offered and what had to be taken. Survives across runs so
+    // a handful of hell entries is enough to characterise the mechanic.
+    let gunForcedLog = [];
 
     let runActive = false;
     let runStart = 0;

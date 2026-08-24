@@ -1460,4 +1460,107 @@ if (which === 'char-posture') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.87.2 — the junk pool must not walk toward the Rainbow Gun, and the
+// super lines are capped at five.
+if (which === 'gun-path') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    test('the cap is five super lines', () =>
+        assert.strictEqual(pineBot.config.maxSuperLines, 5));
+    // OLD FASHIONED is off-plan and keyed by ANGOSTURA (junk). Hold the
+    // cocktail near its cap so ANGOSTURA levels visibly walk toward a super.
+    T.setOwned({ 'OLD FASHIONED': 6, 'ANGOSTURA': 5, 'COINTREAU': 1, 'GIMLET': 1, 'LIME': 1 });
+    const ango = T.scoreCard({ n: 'ANGOSTURA', type: 'passive', lv: 5, maxlv: 6 }, 0, []);
+    const cointreau = T.scoreCard({ n: 'COINTREAU', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+    test('a junk pick that COMPLETES an off-plan super is refused outright', () =>
+        assert.ok(ango.score < -100, ango.score.toFixed(0) + ' ' + ango.why));
+    test('and it is refused before the super count reaches the cap', () =>
+        assert.ok(/gun-path-complete/.test(ango.why), ango.why));
+    test('ordinary junk is preferred over gun-path junk', () =>
+        assert.ok(cointreau.score > ango.score,
+            'cointreau ' + cointreau.score.toFixed(0) + ' vs angostura ' + ango.score.toFixed(0)));
+    // partial progress is ORDERED, not vetoed: a fresh off-plan key beats one
+    // most of the way home
+    T.setOwned({ 'SIDECAR': 5, 'COINTREAU': 4, 'GIMLET': 1, 'LIME': 0 });
+    const nearly = T.scoreCard({ n: 'COINTREAU', type: 'passive', lv: 4, maxlv: 6 }, 0, []);
+    const fresh = T.scoreCard({ n: 'LIME', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+    test('a key most of the way to a sixth line is penalised', () =>
+        assert.ok(/gun-path/.test(nearly.why), nearly.why));
+    test('and ranks below a junk key that has barely started', () =>
+        assert.ok(fresh.score > nearly.score,
+            'lime ' + fresh.score.toFixed(0) + ' vs cointreau ' + nearly.score.toFixed(0)));
+    // lines that can NEVER complete are harmless and must not be penalised:
+    // LEMON and ORANGE are permanently banned, so their supers are unreachable
+    const lemon = T.scoreCard({ n: 'LEMON', type: 'passive', lv: 3, maxlv: 6 }, 0, []);
+    test('a permanently unreachable line is not treated as a gun path', () =>
+        assert.ok(!/gun-path/.test(lemon.why), lemon.why));
+    // and the sanctioned five are never penalised as gun paths
+    const plan = T.roadmap().cocktails[0];
+    const planCard = T.scoreCard({ n: plan, type: 'weapon', lv: 3, maxlv: 6 }, 0, []);
+    test('the planned five are never treated as a gun path', () =>
+        assert.ok(!/gun-path/.test(planCard.why), plan + ': ' + planCard.why));
+    // v6.87.4: an off-plan line that has barely started is NOT taxed — two
+    // levels in a fresh cocktail is damage, not a gun path, and taxing it
+    // collapsed supers/run in the first 6.87.3 runs.
+    T.setOwned({ 'MARGARITA': 1, 'ORANGE': 0, 'GIMLET': 1, 'LIME': 1, 'ESPRESSO MARTINI': 1, 'COFFEE BEANS': 1 });
+    const early = T.scoreCard({ n: 'ESPRESSO MARTINI', type: 'weapon', lv: 1, maxlv: 6 }, 0, []);
+    test('an off-plan line at level 1 is judged on merit, not taxed', () =>
+        assert.ok(!/gun-path/.test(early.why), early.why));
+    test('the floor is halfway', () => assert.strictEqual(pineBot.config.gunPathFloor, 0.5));
+    // ...but past halfway the tax appears and climbs
+    T.setOwned({ 'ESPRESSO MARTINI': 5, 'COFFEE BEANS': 3 });
+    const halfway = T.scoreCard({ n: 'COFFEE BEANS', type: 'passive', lv: 3, maxlv: 6 }, 0, []);
+    T.setOwned({ 'ESPRESSO MARTINI': 6, 'COFFEE BEANS': 4 });
+    const nearer = T.scoreCard({ n: 'COFFEE BEANS', type: 'passive', lv: 4, maxlv: 6 }, 0, []);
+    test('past halfway the tax appears', () =>
+        assert.ok(/gun-path/.test(halfway.why), halfway.why));
+    // compare the PENALTY, not the final score — the junk cap clamps both
+    const tax = r => { const m = /gun-path(-?\d+)/.exec(r.why); return m ? Math.abs(+m[1]) : 0; };
+    test('and climbs as the line closes', () =>
+        assert.ok(tax(nearer) > tax(halfway), tax(nearer) + ' vs ' + tax(halfway)));
+    done();
+}
+
+
+
+// v6.87.3 — the forced pool: early hell offers two cards and BOTH walk an
+// off-plan super line, so whatever the bot takes advances the gate.
+if (which === 'gun-forced') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1300 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    // two off-plan lines, both part-built: OLD FASHIONED/ANGOSTURA and
+    // SIDECAR/COINTREAU. Nothing safe on the table.
+    T.setOwned({ 'OLD FASHIONED': 4, 'ANGOSTURA': 4, 'SIDECAR': 4, 'COINTREAU': 4 });
+    global.window._pool = [
+        { n: 'ANGOSTURA', type: 'passive', lv: 4, maxlv: 6 },
+        { n: 'COINTREAU', type: 'passive', lv: 4, maxlv: 6 }
+    ];
+    test('both cards are recognised as gun paths', () => {
+        assert.ok(T.gunPathProgress('passive', 'ANGOSTURA') > 0, 'angostura');
+        assert.ok(T.gunPathProgress('passive', 'COINTREAU') > 0, 'cointreau');
+    });
+    T.handleLevelUp();
+    const f = pineBot.gunForced();
+    test('the forced pool is recorded', () => assert.strictEqual(f.n, 1, JSON.stringify(f)));
+    test('it keeps what was actually on the table', () =>
+        assert.ok(f.pools[0].offered.length === 2 &&
+            f.pools[0].offered.every(o => /risk0\.\d/.test(o)), JSON.stringify(f.pools[0].offered)));
+    test('and which one had to be eaten', () =>
+        assert.ok(['ANGOSTURA', 'COINTREAU'].includes(f.pools[0].took), String(f.pools[0].took)));
+    // a pool with ONE safe card is not forced — the safe card is simply taken
+    global.window._pool = [
+        { n: 'ANGOSTURA', type: 'passive', lv: 4, maxlv: 6 },
+        { n: 'TIME STOP', type: 'item', lv: 1, maxlv: 6 }
+    ];
+    T.handleLevelUp();
+    test('a pool with any safe option is NOT flagged as forced', () =>
+        assert.strictEqual(pineBot.gunForced().n, 1, 'flagged a pool that had a way out'));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

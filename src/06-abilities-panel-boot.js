@@ -661,6 +661,7 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
+                    handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,
                     // test-only: age the hell-entry stamp so the 90s entry
@@ -693,6 +694,15 @@
             // lost HP. p95 is the practical outer edge: past it our damage was
             // not landing. Compare against the ring the planner actually holds
             // (max(e.r+55, min(reach+10,150)) in hell, max(reach+60,240) in day).
+            // v6.87.3: pineBot.gunForced() — every level-up pool that offered
+            // nothing but off-plan super lines: when it happened, what was on
+            // the table, and which one had to be eaten.
+            window.pineBot.gunForced = () => ({
+                n: gunForcedLog.length,
+                note: gunForcedLog.length ? 'pools where every card advanced an off-plan super line'
+                                          : 'no forced pool seen yet',
+                pools: gunForcedLog.slice(-20)
+            });
             window.pineBot.bossHitRange = () => {
                 const a = bossHitD.slice().sort((x, y) => x - y);
                 if (!a.length) return { n: 0, note: 'no boss damage observed yet — run until a boss is engaged' };
@@ -743,7 +753,7 @@
             };
             window.pineBotDiagnose = diagnose;
             window.pineBotStats = buildStatsReport;
-        } catch (e) { }
+        } catch (e) { log('BOOT API FAILED: ' + (e && e.message)); }   // v6.87.3: was a silent catch; a missing hook cost an hour
         if (CONFIG.autoStart) setTimeout(startBot, 900);
         // v6.83.1: end-to-end release test — no behaviour change. If this line
         // shows in the console after a self-update, the whole pipeline works.
