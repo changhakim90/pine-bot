@@ -312,7 +312,17 @@
             case 'sp_tequila': add(65, 'tequila'); break;
             case 'gold': add(14, 'gold'); break;
             case 'gen': add(30, 'generator'); break;
-            default: break;
+            default:
+                // v6.88.1: an unrecognised type scores 0, and a pool of three
+                // unknowns ties at 0 — the sort then hands the pick to card 0,
+                // which is indistinguishable from a blind click. That is how
+                // "clicking random items" would look if the game ever renamed
+                // a type. It cannot be scored blind, but it must not be silent.
+                if (type && !UNKNOWN_TYPES.has(type)) {
+                    UNKNOWN_TYPES.add(type);
+                    log('UNSCORED card type "' + type + '" (' + name + ') — picks in this family are arbitrary');
+                }
+                break;
         }
 
         // Enemy-adaptive bonuses: what we're actually fighting shapes what we
@@ -1100,8 +1110,25 @@
         // runPickCtx pushed again, craftsThisRun++ again. Five seconds of a
         // stuck pool recorded six picks of one card — and ownedLevels then
         // drifts ABOVE the true level, so atCap/isMaxed lie to the whole scorer
-        // for the rest of the run. The latch now holds until the pool changes.
-        if (sig === lastPoolSig) return false;
+        // for the rest of the run.
+        //
+        // v6.88.1 L2: ...and the cure was worse than the disease. `lastPoolSig`
+        // is cleared only at startRun, so the FIRST repeat of a pool signature
+        // latched handleLevelUp to `false` for the rest of the run. Above LV 60
+        // the pool is mostly stat cards with no level in the signature, so the
+        // same trio recurs within a few levels — after which the level-up screen
+        // stayed up forever, the game clock froze, and the generic stuck-breaker
+        // spent the run clicking the settings gear, the recipe book and pause.
+        // Observed live at LV 71 / TIME 69:46 with the screen open and
+        // "picked TIME STOP +2S" still on the panel.
+        //
+        // The two cases the old 900 ms window could not tell apart are told
+        // apart by pool IDENTITY, not content: the game allocates a new array
+        // per level-up, so a new object is always a new decision, while the
+        // same object within the window is our own missed click. The real C4
+        // defect — side effects recorded for a pick that never landed — is
+        // fixed below instead, by committing them only after the pick lands.
+        if (pool === lastPoolRef && sig === lastPoolSig && now - lastPickAt < 900) return false;
         learnFromPool(pool);
         if (hellDetected) applyHellUnban();
 
@@ -1159,8 +1186,20 @@
             }
         }
 
+        // v6.88.1 L2: TAKE THE CARD FIRST. Everything below this line mutates
+        // run state — ownedLevels, runPicks, the milestone counters, the LinUCB
+        // training set — and none of it may be recorded for a pick the game
+        // never received. This is the defect AUDIT C4 was aiming at; ordering
+        // fixes it without a latch that can outlive the screen.
+        const landed = hasGame('pickUpgrade')
+            ? (callGame('pickUpgrade', best.index), true)
+            : (clickCardByIndex(best.index) || clickCardByName(best.name));
+        if (!landed) return false;   // retry next tick; nothing recorded
+
         lastPoolSig = sig;
+        lastPoolRef = pool;
         lastPickAt = now;
+        levelupStuckAt = 0;
 
         // Commit to a build the first time we take a cocktail.
         if (!primaryCocktail && COCKTAILS.includes(best.name)) primaryCocktail = best.name;
@@ -1193,8 +1232,7 @@
         setStatus('picked ' + best.name);
 
         lastLevelUpAt = Date.now();
-        if (hasGame('pickUpgrade')) { callGame('pickUpgrade', best.index); return true; }
-        return clickCardByIndex(best.index) || clickCardByName(best.name);
+        return true;   // v6.88.1 L2: the pick already landed, above.
     }
 
     // =================================================================

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.88.0
+// @version      6.88.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.88.0';
+    const SCRIPT_VERSION = '6.88.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -1082,6 +1082,22 @@
     let ownedMax = {};                  // NAME -> maxlv
     let lastPoolSig = null;
     let lastPickAt = 0;
+    // v6.88.1 L1: the pool OBJECT we last acted on. The game builds a fresh
+    // array for each level-up, so identity distinguishes "the same screen is
+    // still up (our click missed)" from "a new level-up that happens to offer
+    // the identical trio" — which a content signature cannot do. At LV 70 the
+    // stat cards (FLAME CROSS +1s / TIME STOP +2s / TEQUILA SHOT +20) carry no
+    // level, so consecutive pools are byte-identical several times a run.
+    let lastPoolRef = null;
+    const UNKNOWN_TYPES = new Set();   // v6.88.1: report an unscored card type once
+    // v6.88.1 L4: the game's persistent chrome. The stuck-breaker blind-clicks
+    // its way along every visible control, and these are always on the page:
+    // clicking them opens modals that add MORE controls, so the breaker feeds
+    // itself. An observed run spent 24 s cycling settings -> book -> STAFF ->
+    // ITEMS -> CLOSE with a LEVEL UP sitting unanswered behind them. None of
+    // these has ever advanced a stuck state.
+    const CHROME_CTRL = /^(save|settings|options|close|recipes?|mobs?|staff|items|drinks|book|index|music|sfx|sound|mute|pause|resume|quit|exit|menu|credits|help|language|한국어|english)\b|^[⚙📖⏸⏯🔇🔊🔈✕✖×☰❓]/i;
+    let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
     let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max
@@ -2582,7 +2598,17 @@
             case 'sp_tequila': add(65, 'tequila'); break;
             case 'gold': add(14, 'gold'); break;
             case 'gen': add(30, 'generator'); break;
-            default: break;
+            default:
+                // v6.88.1: an unrecognised type scores 0, and a pool of three
+                // unknowns ties at 0 — the sort then hands the pick to card 0,
+                // which is indistinguishable from a blind click. That is how
+                // "clicking random items" would look if the game ever renamed
+                // a type. It cannot be scored blind, but it must not be silent.
+                if (type && !UNKNOWN_TYPES.has(type)) {
+                    UNKNOWN_TYPES.add(type);
+                    log('UNSCORED card type "' + type + '" (' + name + ') — picks in this family are arbitrary');
+                }
+                break;
         }
 
         // Enemy-adaptive bonuses: what we're actually fighting shapes what we
@@ -3370,8 +3396,25 @@
         // runPickCtx pushed again, craftsThisRun++ again. Five seconds of a
         // stuck pool recorded six picks of one card — and ownedLevels then
         // drifts ABOVE the true level, so atCap/isMaxed lie to the whole scorer
-        // for the rest of the run. The latch now holds until the pool changes.
-        if (sig === lastPoolSig) return false;
+        // for the rest of the run.
+        //
+        // v6.88.1 L2: ...and the cure was worse than the disease. `lastPoolSig`
+        // is cleared only at startRun, so the FIRST repeat of a pool signature
+        // latched handleLevelUp to `false` for the rest of the run. Above LV 60
+        // the pool is mostly stat cards with no level in the signature, so the
+        // same trio recurs within a few levels — after which the level-up screen
+        // stayed up forever, the game clock froze, and the generic stuck-breaker
+        // spent the run clicking the settings gear, the recipe book and pause.
+        // Observed live at LV 71 / TIME 69:46 with the screen open and
+        // "picked TIME STOP +2S" still on the panel.
+        //
+        // The two cases the old 900 ms window could not tell apart are told
+        // apart by pool IDENTITY, not content: the game allocates a new array
+        // per level-up, so a new object is always a new decision, while the
+        // same object within the window is our own missed click. The real C4
+        // defect — side effects recorded for a pick that never landed — is
+        // fixed below instead, by committing them only after the pick lands.
+        if (pool === lastPoolRef && sig === lastPoolSig && now - lastPickAt < 900) return false;
         learnFromPool(pool);
         if (hellDetected) applyHellUnban();
 
@@ -3429,8 +3472,20 @@
             }
         }
 
+        // v6.88.1 L2: TAKE THE CARD FIRST. Everything below this line mutates
+        // run state — ownedLevels, runPicks, the milestone counters, the LinUCB
+        // training set — and none of it may be recorded for a pick the game
+        // never received. This is the defect AUDIT C4 was aiming at; ordering
+        // fixes it without a latch that can outlive the screen.
+        const landed = hasGame('pickUpgrade')
+            ? (callGame('pickUpgrade', best.index), true)
+            : (clickCardByIndex(best.index) || clickCardByName(best.name));
+        if (!landed) return false;   // retry next tick; nothing recorded
+
         lastPoolSig = sig;
+        lastPoolRef = pool;
         lastPickAt = now;
+        levelupStuckAt = 0;
 
         // Commit to a build the first time we take a cocktail.
         if (!primaryCocktail && COCKTAILS.includes(best.name)) primaryCocktail = best.name;
@@ -3463,8 +3518,7 @@
         setStatus('picked ' + best.name);
 
         lastLevelUpAt = Date.now();
-        if (hasGame('pickUpgrade')) { callGame('pickUpgrade', best.index); return true; }
-        return clickCardByIndex(best.index) || clickCardByName(best.name);
+        return true;   // v6.88.1 L2: the pick already landed, above.
     }
 
     // =================================================================
@@ -3658,6 +3712,8 @@
         ownedLevels = {};
         ownedMax = {};
         lastPoolSig = null;
+        lastPoolRef = null;
+        levelupStuckAt = 0;
         hellDetected = pendingHellEntry;   // we took the hell entrance — this run IS hell
         hellEnteredAt = pendingHellEntry ? Date.now() : 0;
         pendingHellEntry = false;
@@ -4202,7 +4258,29 @@
         // checked here or it is never seen at all.
         playing() { return takeCraftPrompt(); },
         levelup() {
-            return handleLevelUp() || clickCardByIndex(0);
+            // v6.88.1 L3: this handler now OWNS the stall. It used to fall
+            // through to `clickCardByIndex(0)`, which returns false whenever
+            // cardElements() matches none of its six selectors (it matches none
+            // in the live DOM) — and a false here hands the screen to the
+            // generic stuck-breaker, which proceeded to click the settings gear,
+            // the recipe book, the mute toggle and pause, in order, forever.
+            // A level-up is never resolved by any of those, so the breaker must
+            // not see this state at all: claim the tick either way.
+            if (handleLevelUp()) { levelupStuckAt = 0; return true; }
+            const now = Date.now();
+            if (!levelupStuckAt) levelupStuckAt = now;
+            if (now - levelupStuckAt > 2500) {
+                // Held for 2.5 s with nothing taken. Force the latch open and
+                // eat the first card — a suboptimal pick costs one card; a
+                // wedged level-up costs the run.
+                levelupStuckAt = now;
+                lastPoolSig = null; lastPoolRef = null;
+                log('level-up wedged — forcing a pick');
+                setStatus('level-up wedged — forced pick');
+                if (hasGame('pickUpgrade')) { callGame('pickUpgrade', 0); return true; }
+                clickCardByIndex(0) || clickText(/\+\s*\d|lv\.?\s*\d/i);
+            }
+            return true;
         },
         craft() {
             // Secret crafts are always an upgrade — accept, and pick the best option.
@@ -4413,13 +4491,33 @@
             // last-resort one below.
             const generic = /^(start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close)\b|after\s*hours/i;
             if (!clickTextIf(generic, notNameForm)) {
-                const els = cardElements();
+                // v6.88.1 L4: cardElements()'s selectors are loose ('.cards > *',
+                // '.choice'), so on a screen that is not a level-up they can
+                // resolve to the HUD. Vetoed here too — a "card" named PAUSE is
+                // not a card.
+                const els = cardElements().filter(el => !CHROME_CTRL.test(String(el.textContent || '').trim()));
                 if (els.length) clickEl(els[Math.min(stuckTries - 1, els.length - 1)]);
                 else {
-                    // never blind-click SAVE — the logbook must stay untouched
+                    // never blind-click SAVE — the logbook must stay untouched.
+                    // v6.88.1 L4: nor the game's CHROME. The blind click walks
+                    // `stuckTries` along every visible button on the page, and
+                    // the persistent HUD controls (⚙ settings, 📖 recipe book,
+                    // ⏸ pause, 🔇 mute, and the book's own tab strip) are always
+                    // among them. Clicking those opens modals that put MORE
+                    // buttons on the page, so the breaker feeds itself: an
+                    // observed run spent 24 s cycling settings → book → STAFF →
+                    // ITEMS → CLOSE while a LEVEL UP sat unanswered behind them.
+                    // None of these controls has ever advanced a stuck state.
                     const any = [...document.querySelectorAll('button, [role="button"], .btn')]
-                        .filter(el => visible(el) && !/save/i.test(el.textContent || ''));
+                        .filter(el => {
+                            if (!visible(el)) return false;
+                            const t = String(el.textContent || '').trim();
+                            // an unlabelled icon button is chrome more often than not
+                            if (!t || t.length <= 2) return false;
+                            return !CHROME_CTRL.test(t);
+                        });
                     if (any.length) clickEl(any[Math.min(stuckTries - 1, any.length - 1)]);
+                    else log('stuck-breaker: nothing safe to click (all chrome)');
                 }
             }
             acted = true;
@@ -6909,6 +7007,10 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    // v6.88.1: a pick that never landed must leave BOTH of these
+                    // untouched — that is the whole assertion of levelup-miss.
+                    getOwned: () => Object.assign({}, ownedLevels),
+                    pickAudit: () => pickAudit.slice(),
                     setParam: (k, v) => setParam(k, v),
                     setEnemyMul: obj => { learn.enemyTypeMul = obj; },
                     hitTypes: () => Object.assign({}, hitTypeRun),

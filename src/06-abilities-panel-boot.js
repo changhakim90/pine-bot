@@ -701,6 +701,10 @@
                     // (zoner / MOJITO sniper / anchor) key on owned levels that
                     // are otherwise only learned from level-up cards.
                     setOwned: obj => { for (const k in obj) ownedLevels[k] = obj[k]; },
+                    // v6.88.1: a pick that never landed must leave BOTH of these
+                    // untouched — that is the whole assertion of levelup-miss.
+                    getOwned: () => Object.assign({}, ownedLevels),
+                    pickAudit: () => pickAudit.slice(),
                     setParam: (k, v) => setParam(k, v),
                     setEnemyMul: obj => { learn.enemyTypeMul = obj; },
                     hitTypes: () => Object.assign({}, hitTypeRun),

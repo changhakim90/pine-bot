@@ -76,6 +76,8 @@
         ownedLevels = {};
         ownedMax = {};
         lastPoolSig = null;
+        lastPoolRef = null;
+        levelupStuckAt = 0;
         hellDetected = pendingHellEntry;   // we took the hell entrance — this run IS hell
         hellEnteredAt = pendingHellEntry ? Date.now() : 0;
         pendingHellEntry = false;
@@ -620,7 +622,29 @@
         // checked here or it is never seen at all.
         playing() { return takeCraftPrompt(); },
         levelup() {
-            return handleLevelUp() || clickCardByIndex(0);
+            // v6.88.1 L3: this handler now OWNS the stall. It used to fall
+            // through to `clickCardByIndex(0)`, which returns false whenever
+            // cardElements() matches none of its six selectors (it matches none
+            // in the live DOM) — and a false here hands the screen to the
+            // generic stuck-breaker, which proceeded to click the settings gear,
+            // the recipe book, the mute toggle and pause, in order, forever.
+            // A level-up is never resolved by any of those, so the breaker must
+            // not see this state at all: claim the tick either way.
+            if (handleLevelUp()) { levelupStuckAt = 0; return true; }
+            const now = Date.now();
+            if (!levelupStuckAt) levelupStuckAt = now;
+            if (now - levelupStuckAt > 2500) {
+                // Held for 2.5 s with nothing taken. Force the latch open and
+                // eat the first card — a suboptimal pick costs one card; a
+                // wedged level-up costs the run.
+                levelupStuckAt = now;
+                lastPoolSig = null; lastPoolRef = null;
+                log('level-up wedged — forcing a pick');
+                setStatus('level-up wedged — forced pick');
+                if (hasGame('pickUpgrade')) { callGame('pickUpgrade', 0); return true; }
+                clickCardByIndex(0) || clickText(/\+\s*\d|lv\.?\s*\d/i);
+            }
+            return true;
         },
         craft() {
             // Secret crafts are always an upgrade — accept, and pick the best option.
@@ -831,13 +855,33 @@
             // last-resort one below.
             const generic = /^(start|play|skip|continue|next|ok|confirm|got it|cheers|yes|retry|again|make it|enter|go|resume|close)\b|after\s*hours/i;
             if (!clickTextIf(generic, notNameForm)) {
-                const els = cardElements();
+                // v6.88.1 L4: cardElements()'s selectors are loose ('.cards > *',
+                // '.choice'), so on a screen that is not a level-up they can
+                // resolve to the HUD. Vetoed here too — a "card" named PAUSE is
+                // not a card.
+                const els = cardElements().filter(el => !CHROME_CTRL.test(String(el.textContent || '').trim()));
                 if (els.length) clickEl(els[Math.min(stuckTries - 1, els.length - 1)]);
                 else {
-                    // never blind-click SAVE — the logbook must stay untouched
+                    // never blind-click SAVE — the logbook must stay untouched.
+                    // v6.88.1 L4: nor the game's CHROME. The blind click walks
+                    // `stuckTries` along every visible button on the page, and
+                    // the persistent HUD controls (⚙ settings, 📖 recipe book,
+                    // ⏸ pause, 🔇 mute, and the book's own tab strip) are always
+                    // among them. Clicking those opens modals that put MORE
+                    // buttons on the page, so the breaker feeds itself: an
+                    // observed run spent 24 s cycling settings → book → STAFF →
+                    // ITEMS → CLOSE while a LEVEL UP sat unanswered behind them.
+                    // None of these controls has ever advanced a stuck state.
                     const any = [...document.querySelectorAll('button, [role="button"], .btn')]
-                        .filter(el => visible(el) && !/save/i.test(el.textContent || ''));
+                        .filter(el => {
+                            if (!visible(el)) return false;
+                            const t = String(el.textContent || '').trim();
+                            // an unlabelled icon button is chrome more often than not
+                            if (!t || t.length <= 2) return false;
+                            return !CHROME_CTRL.test(t);
+                        });
                     if (any.length) clickEl(any[Math.min(stuckTries - 1, any.length - 1)]);
+                    else log('stuck-breaker: nothing safe to click (all chrome)');
                 }
             }
             acted = true;

@@ -1080,6 +1080,22 @@
     let ownedMax = {};                  // NAME -> maxlv
     let lastPoolSig = null;
     let lastPickAt = 0;
+    // v6.88.1 L1: the pool OBJECT we last acted on. The game builds a fresh
+    // array for each level-up, so identity distinguishes "the same screen is
+    // still up (our click missed)" from "a new level-up that happens to offer
+    // the identical trio" — which a content signature cannot do. At LV 70 the
+    // stat cards (FLAME CROSS +1s / TIME STOP +2s / TEQUILA SHOT +20) carry no
+    // level, so consecutive pools are byte-identical several times a run.
+    let lastPoolRef = null;
+    const UNKNOWN_TYPES = new Set();   // v6.88.1: report an unscored card type once
+    // v6.88.1 L4: the game's persistent chrome. The stuck-breaker blind-clicks
+    // its way along every visible control, and these are always on the page:
+    // clicking them opens modals that add MORE controls, so the breaker feeds
+    // itself. An observed run spent 24 s cycling settings -> book -> STAFF ->
+    // ITEMS -> CLOSE with a LEVEL UP sitting unanswered behind them. None of
+    // these has ever advanced a stuck state.
+    const CHROME_CTRL = /^(save|settings|options|close|recipes?|mobs?|staff|items|drinks|book|index|music|sfx|sound|mute|pause|resume|quit|exit|menu|credits|help|language|한국어|english)\b|^[⚙📖⏸⏯🔇🔊🔈✕✖×☰❓]/i;
+    let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
     let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max

@@ -25,6 +25,12 @@ module.exports = function makeEnv(opts = {}) {
         state: 'title', gameTime: 0, hell: false, killCount: 0, money: 0, keys: {}, W: 540, H: 540, frame: 1
     }, opts.game || {});
     global.tryDash = () => {}; global.useUltimate = () => {};
+    // v6.88.1: the real page exposes pickUpgrade(index); handleLevelUp now
+    // refuses to record a pick that did not land, so the harness has to be able
+    // to accept one. `picks` is the receipt the level-up scenarios assert on.
+    global.picks = [];
+    if (opts.noPickUpgrade) delete global.pickUpgrade;
+    else global.pickUpgrade = i => { global.picks.push(i); };
     const src = require('fs').readFileSync(opts.script, 'utf8');
     // capture the bot's console output for the lifetime of the process
     // (autoStart fires 900 ms after boot; each scenario runs in its own process)

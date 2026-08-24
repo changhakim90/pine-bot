@@ -1787,4 +1787,138 @@ if (which === 'audit-clicks') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.88.1 — THE WEDGED LEVEL-UP. Reported live: v6.88.0 at LV 71 / TIME 69:46
+// with the LEVEL UP screen open, "picked TIME STOP +2S" on the panel, and the
+// bot clicking the settings gear, the recipe book, STAFF, ITEMS and pause in a
+// loop. Cause: AUDIT C4 turned a 900 ms window into a permanent signature latch
+// that startRun alone clears, so the first REPEAT of a pool wedged
+// handleLevelUp() to false for the rest of the run.
+if (which === 'levelup-repeat') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'levelup', gameTime: 4186 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    // the live trio. These stat cards carry NO level, so two consecutive
+    // level-ups produce a byte-identical signature.
+    // real live types (the scorer keys on these, not 'item')
+    const trio = () => [
+        { n: 'FLAME CROSS', type: 'sp_firecross', lv: 0 },
+        { n: 'TIME STOP', type: 'sp_timestop', lv: 0 },
+        { n: 'TEQUILA SHOT', type: 'sp_tequila', lv: 0 }
+    ];
+
+    global.window._pool = trio();
+    test('the first offer is taken', () => assert.strictEqual(T.handleLevelUp(), true));
+    const first = global.picks.length;
+    test('and it reached the game', () => assert.strictEqual(first, 1, 'picks=' + first));
+
+    // same screen still up, same array: a missed click must NOT re-record.
+    T.handleLevelUp();
+    test('the same pool object does not double-pick', () =>
+        assert.strictEqual(global.picks.length, 1, 'picks=' + global.picks.length));
+
+    // THE BUG: a NEW level-up offering the identical trio.
+    global.window._pool = trio();
+    test('a fresh pool with the same cards is still picked', () =>
+        assert.strictEqual(T.handleLevelUp(), true, 'latched — this is the 6.88.0 wedge'));
+    test('and it too reached the game', () =>
+        assert.strictEqual(global.picks.length, 2, 'picks=' + global.picks.length));
+
+    // ...and it must keep working, not wedge one level later.
+    for (let i = 0; i < 5; i++) { global.window._pool = trio(); T.handleLevelUp(); }
+    test('five more identical pools all resolve', () =>
+        assert.strictEqual(global.picks.length, 7, 'picks=' + global.picks.length));
+
+    // TIME STOP is what should be taken, every time.
+    // and the SCORER, not the card order, decides: TIME STOP is index 1.
+    test('every pick is TIME STOP, never card 0', () => {
+        const took = T.pickAudit().map(p => p.took);
+        assert.ok(took.length >= 7 && took.every(t => t === 'TIME STOP'), took.join(','));
+    });
+    test('and the index sent to the game is 1, not 0', () =>
+        assert.ok(global.picks.every(i => i === 1), global.picks.join(',')));
+    done();
+}
+
+
+// v6.88.1 — a pick the game never received must record NOTHING. This is the
+// real defect AUDIT C4 was aiming at, fixed by ordering instead of a latch.
+if (which === 'levelup-miss') {
+    const { pineBot } = makeEnv({
+        script: SCRIPT, game: { state: 'levelup', gameTime: 900 }, noPickUpgrade: true
+    });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    // no pickUpgrade and no clickable cards: every pick attempt misses.
+    global.window._pool = [
+        { n: 'TIME STOP', type: 'sp_timestop', lv: 0 },
+        { n: 'FLAME CROSS', type: 'sp_firecross', lv: 0 }
+    ];
+    for (let i = 0; i < 6; i++) T.handleLevelUp();
+    const audit = T.pickAudit ? T.pickAudit() : [];
+    test('six missed attempts record no picks', () =>
+        assert.strictEqual(audit.length, 0, JSON.stringify(audit)));
+    test('and ownedLevels is not inflated', () =>
+        assert.strictEqual(T.getOwned()['TIME STOP'] || 0, 0, JSON.stringify(T.getOwned())));
+    done();
+}
+
+
+// v6.88.1 — the stuck-breaker must never touch the game's chrome. The observed
+// run spent 24 s in settings -> book -> STAFF -> ITEMS -> CLOSE with a LEVEL UP
+// unanswered behind them.
+if (which === 'chrome-veto') {
+    const clicked = [];
+    const mk = text => ({
+        id: '', className: 'btn', textContent: text, style: {},
+        querySelector: () => null, querySelectorAll: () => [],
+        click() { clicked.push(text); }, dispatchEvent() { return true; },
+        appendChild() {}, remove() {}, closest: () => null,
+        getBoundingClientRect: () => ({ width: 90, height: 30, top: 40, left: 40 })
+    });
+    // exactly the controls the observed run walked through, in order
+    const chrome = ['SETTINGS', 'RECIPES', 'MOBS', 'STAFF', 'ITEMS', 'DRINKS',
+                    'MUSIC', 'SFX', 'PAUSE', 'SAVE', 'BOOK', 'INDEX'];
+    const btns = chrome.map(mk);
+    const { pineBot, logs } = makeEnv({
+        script: SCRIPT, game: { state: 'shop', gameTime: 900 }, dom: { buttons: btns }
+    });
+    global.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+    // selector-aware, so the breaker's CARD branch and its BLIND branch are
+    // exercised for what they really are: none of these are level-up cards.
+    global.document.querySelectorAll = sel =>
+        /button|role="button"|\.btn|onclick|\ba\b|div|span|li/.test(String(sel)) ? btns : [];
+    global.document.querySelector = () => null;
+    // TWO things this scenario must get right or it has no teeth:
+    //   1. the breaker is gated behind `running`, so the bot must be STARTED;
+    //   2. it only fires after 2.2 s of a stalled state, so the clock must move.
+    // The first draft of this test did neither and passed against the very
+    // code it was written to catch.
+    pineBot.start();
+    const realNow = Date.now;
+    let t = realNow();
+    Date.now = () => t;
+    for (let i = 0; i < 10; i++) { t += 3000; pineBot.test.handleScreens(); }
+
+    test('the stuck-breaker actually fired', () =>
+        assert.ok(logs.some(l => /stuck in state/.test(l)), 'it never ran — this test would prove nothing'));
+    test('no chrome control is ever clicked', () =>
+        assert.ok(!clicked.some(c => chrome.includes(c)), 'clicked: ' + clicked.join(',')));
+    test('with nothing but chrome on screen it clicks nothing at all', () =>
+        assert.strictEqual(clicked.length, 0, 'clicked: ' + clicked.join(',')));
+
+    // ...while a REAL action button on the same screen stays reachable: the
+    // veto must not turn the breaker off, only aim it.
+    // ONE continuous clock: rewinding it here left `lastStateAt` in the future
+    // and the breaker silently never fired again.
+    btns.push(mk('START RUNNING'));
+    for (let i = 0; i < 3; i++) { t += 3000; pineBot.test.handleScreens(); }
+    Date.now = realNow;
+    test('a genuine action button is still clicked', () =>
+        assert.ok(clicked.includes('START RUNNING'), 'clicked: ' + clicked.join(',')));
+    done();
+}
+
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
