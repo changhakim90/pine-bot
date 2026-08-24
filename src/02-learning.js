@@ -759,8 +759,16 @@
         // The prescribed build — the incumbent — and the fixed experiment
         // rosters are literal plans; 'auto' falls through to self-composition.
         if (activeRoster === 'user' && CONFIG.userRoadmap && Array.isArray(CONFIG.userRoadmap.cocktails)) {
-            PLAN_COCKTAILS = CONFIG.userRoadmap.cocktails.slice();
-            PLAN_INGREDIENTS = CONFIG.userRoadmap.ingredients.slice();
+            // v6.87.0: the prescribed roster is PER CHARACTER. A tank and a
+            // runner share a core (SOUTH SIDE / NEGRONI / OLIVE) and diverge
+            // on everything else; running one plan for both meant Pat built
+            // minguk's stall roster and could never reach VODKA MARTINI.
+            // computeRoadmap() is called from beginTrial, after the bartender
+            // for the run is chosen, so activeChar is already correct here.
+            const cr = (CONFIG.charRoadmap || {})[activeChar];
+            const plan = (cr && Array.isArray(cr.cocktails)) ? cr : CONFIG.userRoadmap;
+            PLAN_COCKTAILS = plan.cocktails.slice();
+            PLAN_INGREDIENTS = plan.ingredients.slice();
             return;
         }
         if (ROSTER_FIXED[activeRoster]) {

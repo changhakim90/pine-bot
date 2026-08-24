@@ -837,7 +837,11 @@
         const knocker = [...supersMade].some(n => /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(n)) ||
             (ownedLevels['VODKA CRANBERRY'] || 0) >= 6 || (ownedLevels['MOSCOW MULE'] || 0) >= 6;
         let kite = null;
-        if (chasers >= ((zoner || rainbowRecent) ? 2 : 3) && !panic) {
+        // v6.87.0: same bet, same per-character answer. Owning SOUTH SIDE (or
+        // a fresh rainbow) still buys one chaser of impatience, because the
+        // sweep is what drags the train across the burning ground.
+        const kiteAt = Math.max(2, (charOf().kiteChasers || 3) - ((zoner || rainbowRecent) ? 1 : 0));
+        if (chasers >= kiteAt && !panic) {
             const rx = p.x - cx, ry = p.y - cy;
             const rm = Math.hypot(rx, ry) || 1;
             const t1 = { x: -ry / rm, y: rx / rm }, t2 = { x: ry / rm, y: -rx / rm };
@@ -947,7 +951,14 @@
         // loosening them is not something the directive settles, and there is
         // no measurement behind 4-vs-3.
         const unkillable = toughnessAvg > 25 || (killRate < 0.8 && th.near >= 6);
-        const flight = hellDetected && !pauseActive && unkillable && th.near >= 4 && !ultInvuln;
+        // v6.87.0: the crowd that triggers flight is per character. Fleeing is
+        // a speed bet, and pat cannot win it — at 1.9 he is slower than deep
+        // hell's spawns from ~60m on, so flight for him is being chased down
+        // with his back turned instead of eating the hits his armour and his
+        // invulnerable ult window were bought for. He commits at 6; minguk,
+        // whose doctrine IS outrunning, keeps the historical 4.
+        const fleeNear = charOf().fleeNear || 4;
+        const flight = hellDetected && !pauseActive && unkillable && th.near >= fleeNear && !ultInvuln;
         flightRef.v = flight;
         // v6.85.20 (user): "the deep hell poison kill should be from the mobs
         // ... keep dashing away and ultimate until the bot can get timestop
@@ -1715,7 +1726,7 @@
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
-            contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
+            kiteAt, fleeNear, contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
             bossNear: th.enemies.some(e => e.boss && !e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 240),
             roamingBoss: th.enemies.some(e => e.boss && !e.wall && !e.stationary && Math.hypot(e.x - p.x, e.y - p.y) < 260),

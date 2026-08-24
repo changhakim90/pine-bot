@@ -154,8 +154,20 @@
         //   preferredBartender: 'pat' | 'joe' | 'minguk'  -> always that one
         //   preferredBartender: null + bartenderRotation  -> alternate per run
         //   both null/empty                               -> learned bandit
-        // v6.86.11 (user directive): ROTATE PAT / MINGUK again. The pin below
-        // is lifted — `preferredBartender: null` hands selection to
+        // v6.87.1 (user directive): PIN MINGUK. Rotation off after one release.
+        // He is the better character on every number that exists — median
+        // 21.9m against pat's 15.4m over ~4,200 runs vs 116 — and he is the
+        // one who competed for the crown, so the whole sample rate goes to
+        // him rather than being split with a profile that has never matched
+        // him. The 6.87.0 per-character work is NOT wasted by this: pat's
+        // roster and posture stay encoded and correct, and re-pinning him or
+        // restoring the rotation is a one-line change either way.
+        // What this pin means for reading the numbers: minguk's row is the
+        // only one that will move, and it starts from a store the 6.86.0
+        // repair reopened, so expect wide sampling before it settles.
+        //
+        // v6.86.11 (superseded): ROTATE PAT / MINGUK. The pin below
+        // was lifted — `preferredBartender: null` hands selection to
         // `bartenderRotation`, which alternates run by run and is persisted in
         // localStorage `pineBotRotIdx`, so it survives reloads mid-sequence.
         // Each bartender keeps its OWN CEM store (`pineBotUCB_v5_pat` /
@@ -181,9 +193,9 @@
         // pinned every run is on the weaker profile and crown odds are lower.
         // minguk still has ~600 runs of history to compare against, so the
         // control is historical rather than concurrent.
-        // To re-pin: set preferredBartender back to 'pat' (or 'minguk'), which
-        // makes the rotation list inert.
-        preferredBartender: null,
+        // To rotate again: set preferredBartender back to null. The rotation
+        // list below is inert while a bartender is pinned.
+        preferredBartender: 'minguk',
         bartenderRotation: ['pat', 'minguk'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
@@ -210,6 +222,65 @@
         userRoadmap: {
             cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE', 'COSMOPOLITAN'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR']
+        },
+
+        // v6.87.0 PER-CHARACTER ROADMAPS (user: "they should have had
+        // different characteristics encoded on them though they share some
+        // similarities on weapon and ingredients roster").
+        //
+        // Until now `userRoadmap` above was the ONE roster for whoever was
+        // playing — and it is the MINGUK STALL roster. Pat has been building
+        // minguk's plan for every run since 6.85.2, which is why the comment
+        // block above describes a Pat build that the list underneath it never
+        // contained. Most conspicuously VODKA MARTINI was absent, so the
+        // super the user named as Pat's whole DPS answer ("his DPS is low
+        // without a super cocktail like vodka martini") could never be built.
+        //
+        // SHARED CORE — both characters want these, for different reasons:
+        //   SOUTH SIDE (MINT)  zone damage; the only thing that reliably
+        //                      hurts stationary holdouts and paused bosses
+        //   NEGRONI (CAMPARI)  mitigation; the survival pair with OLIVE
+        //   OLIVE, CRANBERRY   armour, and lv6 knockback without spending a
+        //                      super slot on it
+        //
+        // THE FIVE-SUPER CAP IS DELIBERATE AND MUST HOLD FOR BOTH. The
+        // Rainbow Gun's gate is six MAXED supers; a roster that can only ever
+        // complete five can never open it, which is the structural version of
+        // the 6.86.9 ban rather than a scoring veto that a bad pool can beat.
+        // Count completable supers as cocktails whose SUPER_KEY_INGREDIENT is
+        // in that character's ingredient plan (GIN TONIC and VODKA TONIC share
+        // TONIC; LEMON and ORANGE are permanently banned; GINGER BEER unbans
+        // only in hell). Both rosters below sit at five. The `roster-cap`
+        // test asserts it, so a future addition cannot quietly open the gate.
+        charRoadmap: {
+            // PAT — tank, 180 HP, 72 dmg with 38 splash, no pierce, and a
+            // MELEE spray ult. Every pick either keeps him standing or feeds
+            // the ultimate, and each ingredient double-dips as a super key:
+            //   MINT          -> SUPER SOUTH SIDE   (holdouts, paused bosses)
+            //   CAMPARI       -> SUPER NEGRONI      (mitigation)
+            //   OLIVE         -> SUPER DRY MARTINI  (armour double-dip, and
+            //                    the slowing orbit suits a bot that plants)
+            //   TOMATO JUICE  -> SUPER BLOODY MARY  (ult cadence double-dip:
+            //                    demo 1 took it 4x and cast every 75s vs 98s)
+            //   DRY VERMOUTH  -> SUPER VODKA MARTINI (the DPS super, and it
+            //                    pairs with SWEET VERMOUTH -> BLACK VERMOUTH,
+            //                    a craft that frees an ingredient slot)
+            // Five keys, five completable supers, nothing wasted on TONIC
+            // lines a tank cannot exploit.
+            pat: {
+                cocktails: ['SOUTH SIDE', 'NEGRONI', 'VODKA MARTINI', 'DRY MARTINI', 'BLOODY MARY'],
+                ingredients: ['MINT', 'CAMPARI', 'OLIVE', 'TOMATO JUICE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'CRANBERRY']
+            },
+            // MINGUK — runner, 120 HP, 2.375 speed, and a NUKE ult that hits
+            // every enemy at any range. He does not need to reach anything,
+            // so his plan buys time instead of damage: the stall roster,
+            // unchanged from the build that competed for the crown.
+            minguk: {
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE', 'COSMOPOLITAN'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR']
+            }
+            // joe has no roster of his own — he is out of the rotation, and
+            // falls through to userRoadmap if he is ever put back in.
         },
 
         // ROSTER EXPERIMENT — CONCLUDED. The prescribed build won the bandit
@@ -528,14 +599,34 @@
         //         spikes every 14 frames at radius ~= player.r + 149 for
         //         max(dmg,72)*15.6*2.2^(lv-1) — a huge MELEE window that
         //         only pays while standing in the crowd.
+        // v6.87.0 kiteChasers / fleeNear (user: "pat and minguk's movement and
+        // anchoring and engagement of enemies should also have been different").
+        //   kiteChasers — how big the chase train must be before the bot stops
+        //     holding its ring and starts sweeping tangentially. Kiting is a
+        //     SPEED bet: it only works if you outpace what follows you.
+        //   fleeNear — crowd size that turns unkillable-hell pressure into
+        //     outright flight. Same bet, at the other end of the run.
+        // Pat is 1.9 speed — the slowest thing on the field once hell scales
+        // spawns past 25 speed. Running is not an option he has; his answer is
+        // 180 HP, maxed OLIVE/NEGRONI, and the invulnerability window on his
+        // ult. So he commits later on both counts and holds his ring instead.
         pat:    { hp: 180, speed: 1.9,   style: 'tank',   kiteMul: 1.0, anchorBias: 1, panicMul: 0.85, mitigationTilt: 10,
                   dayRing: { early: 165, mid: 90, late: 80 }, crowdPanic: false, bossFloor: 0, ultFalloff: true,
+                  kiteChasers: 4, fleeNear: 6,
                   ultKind: 'spray', ultReach: 150, ultClearsPassouts: false },
+        // Joe at 3.0 is the purest kiter of the three (and the frailest at
+        // 100 HP): he commits earliest to both.
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  kiteChasers: 2, fleeNear: 3,
                   ultKind: 'aura', ultReach: 156, ultClearsPassouts: false },
+        // Minguk's whole doctrine is "outrun everything on natural speed":
+        // 2.375 with a nuke that needs no positioning at all. Kiting and
+        // fleeing are his primary tools, not his last resorts, so he keeps the
+        // historical thresholds that competed for the crown.
         minguk: { hp: 120, speed: 2.375, style: 'runner', kiteMul: 1.0, anchorBias: 0, panicMul: 1.0,  mitigationTilt: 0,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
+                  kiteChasers: 3, fleeNear: 4,
                   ultKind: 'nuke', ultReach: Infinity, ultClearsPassouts: true }
     };
     // The bartender is chosen PER RUN (rotation or bandit), so everything

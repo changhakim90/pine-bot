@@ -660,6 +660,7 @@
                     lineCost, sampleParams, gatherThreats, gatherLoot, computeRoadmap, planMove, maybeAbilities,
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
+                    computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,
                     // test-only: age the hell-entry stamp so the 90s entry

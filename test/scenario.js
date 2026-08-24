@@ -85,10 +85,11 @@ if (which === 'hell-unban') {
 if (which === 'pat-profile') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
+    // v6.87.1: minguk is pinned, so pat has to be selected explicitly to
+    // audit his profile. The profile itself is unchanged and still correct.
+    pineBot.test.setChar('pat');
     const prof = () => global.window.pineBotStats().charProfile;
-    // v6.86.11: pat is no longer pinned — he leads the pat/minguk rotation,
-    // so a fresh boot still starts on him and this profile still applies.
-    test('pat leads the rotation, so boot starts on him', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
+    test('pat can still be selected, and carries his own profile', () => assert.strictEqual(global.window.pineBotStats().bartender, 'pat'));
     test('pat kiteMul restored to 1.0', () => assert.strictEqual(prof().kiteMul, 1));
     test('pat opts out of crowd panic', () => assert.strictEqual(prof().crowdPanic, false));
     test('pat day ring tightens 165 -> 90 -> 80', () => {
@@ -275,6 +276,7 @@ if (which === 'hell-southside') {
 if (which === 'ult-falloff') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
+    pineBot.test.setChar('pat');   // v6.87.1: minguk is pinned, so pat is selected explicitly here
     pineBot.test.setOwned({ MOJITO: 4 });
     test('pat carries the falloff ult shape', () =>
         assert.strictEqual(global.window.pineBotStats().charProfile.ultFalloff, true));
@@ -327,6 +329,7 @@ if (which === 'ult-falloff') {
 if (which === 'flame-cross') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 60 } });
     pineBot.stop();
+    pineBot.test.setChar('pat');   // v6.87.1: minguk is pinned, so pat is selected explicitly here
     pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     const po = { type: 'passout', x: 435, y: 270, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 4 };
     const run = flame => {
@@ -540,6 +543,7 @@ if (which === 'damage-audit') {
 if (which === 'focus-fire') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
     pineBot.stop();
+    pineBot.test.setChar('pat');   // v6.87.1: written against pat's profile (speed 1.9, 180 HP)
     pineBot.test.applyDefaults();   // v6.85.22: params are CEM-sampled per run; pin defaults for determinism
     global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
     // frail old passout WEST at 120px; two tougher ones EAST/NORTHEAST whose
@@ -800,6 +804,7 @@ if (which === 'gun-veto') {
 if (which === 'learned') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 650 } });
     pineBot.stop();
+    pineBot.test.setChar('pat');   // v6.87.1: written against pat's profile (speed 1.9, 180 HP)
     pineBot.test.applyDefaults();
     global.player = { x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9 };
     // --- (a) killOrderDist is live: same field, coefficient flips the target.
@@ -878,14 +883,14 @@ if (which === 'learned') {
 // 22. v6.85.23: the CEM sanitizer heals NaN-poisoned state from 6.85.22.
 if (which === 'cem-heal') {
     const poisoned = {
-        runs: 200, bartender: 'pat', rewardEpoch: 2,
+        runs: 200, bartender: 'minguk', rewardEpoch: 2,
         cem: { mean: { 'movement.standoff': 120, 'patRing.early': NaN }, sigma: { 'movement.standoff': 20, 'patRing.early': NaN },
                pc: { 'movement.standoff': NaN }, ss: NaN, batch: [{ r: 1, p: { 'movement.standoff': 118, 'patRing.mid': NaN } }] },
         hof: [{ r: 3, p: { 'movement.standoff': 115, 'movement.killOrderDist': NaN } }],
         enemyTypeMul: { mob: 2.2, bomber: 2.0 }
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
-        storage: { pineBotUCB_v5_pat: JSON.stringify(poisoned) } });
+        storage: { pineBotUCB_v5: JSON.stringify(poisoned) } });   // v6.87.1: minguk is pinned, and his store is the UNSUFFIXED key
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -922,14 +927,14 @@ if (which === 'cem-lockup') {
     mean['strategy.deepFocusLv'] = 5.63;     // outside the tightened box
     const champ = { ...mean, 'movement.standoff': 121 };
     const locked = {
-        runs: 3373, bartender: 'pat', rewardEpoch: 2,
+        runs: 3373, bartender: 'minguk', rewardEpoch: 2,
         cem: { mean, sigma, pc: {}, ss: 0.616, gen: 425, batch: [] },
         // hof[0] and hof[1] byte-identical, as measured
         hof: [{ r: 9.9, p: { ...champ } }, { r: 9.9, p: { ...champ } }, { r: 8, p: { ...champ } },
               { r: 7, p: { ...mean, 'movement.standoff': 150 } }]
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
-        storage: { pineBotUCB_v5_pat: JSON.stringify(locked) } });
+        storage: { pineBotUCB_v5: JSON.stringify(locked) } });   // v6.87.1: minguk is pinned, and his store is the UNSUFFIXED key
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -969,6 +974,7 @@ if (which === 'ult-kinds') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
     pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');   // v6.87.1: minguk is pinned; this block audits pat
     const fire = (plan, ms) => { let n = 0; global.useUltimate = () => { n++; }; pineBot.test.maybeAbilities(plan); return n; };
     const base = { hpRatio: 0.9, hpPanic: false, panic: false, danger: 0, near: 2, dx: 0, dy: 0,
                    passoutsNear: 2, poCentroidDist: 60, poNearest: 60, adjacent: 400, toughness: 1 };
@@ -1046,6 +1052,7 @@ if (which === 'ult-kinds') {
 if (which === 'tank-holdout') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
+    pineBot.test.setChar('pat');   // v6.87.1: minguk is pinned, so the tank is selected explicitly here
     pineBot.test.applyDefaults();
     // (a) a tank with no super yet puts the first one above ordinary work
     const sup = pineBot.test.scoreCard({ n: 'SUPER VODKA MARTINI', type: 'super', lv: 0, maxlv: 6 }, 0, []);
@@ -1253,21 +1260,27 @@ if (which === 'rotation') {
     const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
     const T = pineBot.test;
-    test('the pin is lifted — rotation drives selection', () =>
-        assert.strictEqual(pineBot.config.preferredBartender, null));
-    test('the rotation is pat and minguk (joe stays retired)', () =>
-        assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'minguk']));
-    test('boot lands on the head of the rotation', () =>
-        assert.strictEqual(T.activeChar(), 'pat'));
-    // The sequence as the RUN LOOP sees it. Asserting nextRotationChar()
-    // alone would be toothless — it alternates even while a pin is in force,
-    // which is exactly how 6.85.0's dead rotation passed review. chooseBartender()
-    // is the function that consults the pin.
+    // v6.87.1: minguk is PINNED. He is the better character on every number
+    // that exists (median 21.9m vs 15.4m) and the one that competed for the
+    // crown, so the whole sample rate goes to him.
+    test('minguk is pinned as the active bartender', () =>
+        assert.strictEqual(pineBot.config.preferredBartender, 'minguk'));
+    test('boot lands on him, not on the rotation head', () =>
+        assert.strictEqual(T.activeChar(), 'minguk'));
+    const pinned = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
+    test('the pin holds run after run', () =>
+        assert.deepStrictEqual(pinned, ['minguk', 'minguk', 'minguk'], pinned.join(',')));
+    // The rotation machinery must survive being switched off, or re-enabling
+    // it silently does nothing — which is exactly the 6.85.0 failure.
+    pineBot.config.preferredBartender = null;
     const seq = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
-    test('successive runs alternate instead of repeating', () =>
+    test('lifting the pin restores a rotation that actually alternates', () =>
         assert.deepStrictEqual(seq, ['pat', 'minguk', 'pat', 'minguk'], seq.join(',')));
+    test('the rotation list is still pat and minguk (joe stays retired)', () =>
+        assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'minguk']));
     test('the position is persisted, so a reload resumes mid-sequence', () =>
         assert.strictEqual(String(store.pineBotRotIdx), '0', 'idx ' + store.pineBotRotIdx));
+    pineBot.config.preferredBartender = 'minguk';
     done();
 }
 
@@ -1376,4 +1389,75 @@ if (which === 'runner-posture') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.87.0 — per-character rosters. A tank and a runner share a core and
+// diverge; and NEITHER may be able to complete six supers, because six maxed
+// supers is the Rainbow Gun's gate.
+if (which === 'roster-cap') {
+    const roster = char => {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 300 } });
+        pineBot.stop();
+        pineBot.test.setChar(char);
+        pineBot.test.computeRoadmap();
+        return pineBot.test.roadmap();
+    };
+    const pat = roster('pat'), mg = roster('minguk');
+    test('the two characters build different rosters', () =>
+        assert.notDeepStrictEqual(pat.cocktails, mg.cocktails));
+    test('but they share the core that both need', () => {
+        for (const c of ['SOUTH SIDE', 'NEGRONI'])
+            assert.ok(pat.cocktails.includes(c) && mg.cocktails.includes(c), c);
+        for (const i of ['MINT', 'OLIVE', 'CAMPARI'])
+            assert.ok(pat.ingredients.includes(i) && mg.ingredients.includes(i), i);
+    });
+    test('pat can finally reach VODKA MARTINI, his DPS super', () =>
+        assert.ok(pat.cocktails.includes('VODKA MARTINI') && pat.ingredients.includes('DRY VERMOUTH'),
+            pat.cocktails.join(',')));
+    test('minguk keeps the stall roster that competed for the crown', () =>
+        assert.ok(mg.cocktails.includes('VODKA TONIC') && mg.cocktails.includes('GIN TONIC'),
+            mg.cocktails.join(',')));
+    test('pat pays nothing for TONIC lines a tank cannot exploit', () =>
+        assert.ok(!pat.ingredients.includes('TONIC'), pat.ingredients.join(',')));
+    // THE STRUCTURAL GUN BAN: count supers this roster could ever complete.
+    // A super needs its cocktail AND its key ingredient in the plan, and the
+    // key must not be permanently banned (LEMON / ORANGE never unban;
+    // GINGER BEER unbans in hell, so it counts).
+    const NEVER = new Set(['LEMON', 'ORANGE']);
+    const completable = r => r.cocktails.filter(c => {
+        const key = pineBot.test.superKey(c);
+        return key && !NEVER.has(key) && (r.ingredients.includes(key) || key === 'GINGER BEER');
+    });
+    const patN = completable(pat), mgN = completable(mg);
+    test('pat can complete at most five supers — never the six-super gate', () =>
+        assert.ok(patN.length <= 5, patN.length + ': ' + patN.join(',')));
+    test('minguk likewise', () =>
+        assert.ok(mgN.length <= 5, mgN.length + ': ' + mgN.join(',')));
+    test('both rosters actually reach five, not fewer', () =>
+        assert.ok(patN.length === 5 && mgN.length === 5, patN.length + ' / ' + mgN.length));
+    done();
+}
+
+
+// v6.87.0 — movement, anchoring and engagement diverge by character. Kiting
+// and fleeing are both SPEED bets; pat (1.9) cannot win either, minguk (2.375)
+// builds his whole doctrine on them.
+if (which === 'char-posture') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const post = c => { pineBot.test.setChar(c); const p = pineBot.test.planMove(); return { kiteAt: p.kiteAt, fleeNear: p.fleeNear }; };
+    const pat = post('pat'), mg = post('minguk'), joe = post('joe');
+    test('the slow tank commits to kiting later than the runner', () =>
+        assert.ok(pat.kiteAt > mg.kiteAt, pat.kiteAt + ' vs ' + mg.kiteAt));
+    test('and to flight later still', () =>
+        assert.ok(pat.fleeNear > mg.fleeNear, pat.fleeNear + ' vs ' + mg.fleeNear));
+    test('the thresholds order by speed across all three', () =>
+        assert.ok(joe.kiteAt <= mg.kiteAt && mg.kiteAt <= pat.kiteAt, [joe.kiteAt, mg.kiteAt, pat.kiteAt].join(' ')));
+    test('minguk keeps the historical values that competed for the crown', () =>
+        assert.ok(mg.kiteAt === 3 && mg.fleeNear === 4, JSON.stringify(mg)));
+    test('every character still kites at some crowd size', () =>
+        assert.ok([pat, mg, joe].every(x => x.kiteAt >= 2 && isFinite(x.kiteAt))));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
