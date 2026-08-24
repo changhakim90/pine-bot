@@ -268,6 +268,46 @@
         setStatus(`run over — ${Math.round(stats.time)}s / ${stats.downs} / ${stats.sales}`);
     }
 
+
+    // =================================================================
+    // v6.87.5 SECRET CRAFTS — the fusion prompt (SOURCE-READ, live DOM)
+    // -----------------------------------------------------------------
+    // openRecipe() states it outright: "SECRET CRAFTS · COMBINATIONS
+    // (level the ingredients -> a fusion prompt appears mid-run)". The
+    // prompt is a DOM overlay with `#craftBtn` ("MAKE BLACK VERMOUTH")
+    // and `.craft-no` ("NOT NOW"). It does NOT change G.state, so the
+    // `craft()` screen handler — which only runs when state === 'craft'
+    // — never fired. And even when it did, its clickText regex was
+    // /make it|craft|confirm|yes/, which does not match "MAKE BLACK
+    // VERMOUTH". Two independent misses, and the cost was every craft
+    // in every run: a live probe found sweetver lv6 + dryver lv6, an
+    // EMPTY `player.absorbed`, and the prompt still sitting on screen.
+    //
+    // applyCraft() shows why that is expensive. The consumed materials
+    // stay in player.weapons at full level — "능력치 효과는 계속 적용되고,
+    // 슬롯 카운트에서만 빠짐 (3칸 -> 조합품 1칸)" — so the parts keep their
+    // stat effect and only stop occupying slots. A craft is pure upside:
+    // a free weapon plus slot relief on a bar the probe found holding 15.
+    //
+    // Never click NOT NOW: declining is strictly worse than any pick.
+    function takeCraftPrompt() {
+        try {
+            const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
+            if (yes && visible(yes)) { craftsThisRun++; clickEl(yes); setStatus('craft: fused'); return true; }
+            // fall back to text, allowing for the result name after MAKE
+            const btns = [...document.querySelectorAll('button, [onclick], .btn')];
+            for (const b of btns) {
+                const t = (b.textContent || '').trim();
+                if (!visible(b)) continue;
+                if (/^(not now|later|no thanks)/i.test(t)) continue;   // the decline button
+                if (/^make\b|^combine\b|^fuse\b|조합|만들기/i.test(t)) {
+                    craftsThisRun++; clickEl(b); setStatus('craft: ' + t.slice(0, 24)); return true;
+                }
+            }
+        } catch (e) { }
+        return false;
+    }
+
     // =================================================================
     // SCREEN AUTOMATION — driven by the game's own `state`
     // =================================================================
@@ -510,7 +550,10 @@
         menu() {
             return !!callFirst(['resumeGame']) || clickText(/resume|continue/i);
         },
-        playing() { return false; },   // the movement loop owns this state
+        // v6.87.5: the movement loop owns play, but the fusion prompt is a
+        // DOM overlay that leaves G.state on 'playing' — so it has to be
+        // checked here or it is never seen at all.
+        playing() { return takeCraftPrompt(); },
         levelup() {
             return handleLevelUp() || clickCardByIndex(0);
         },
@@ -530,7 +573,7 @@
             }
             if (hasGame('confirmCraft')) { craftsThisRun++; callGame('confirmCraft'); return true; }
             if (hasGame('pickCraftChoice')) { craftsThisRun++; callGame('pickCraftChoice', 0); return true; }
-            return clickText(/make it|craft|confirm|yes/i);
+            return takeCraftPrompt();
         },
         notice() {
             return !!callFirst(['closeNotice']) || clickText(/got it|ok|close|continue/i);

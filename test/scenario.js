@@ -1563,4 +1563,62 @@ if (which === 'gun-forced') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// v6.87.5 — SECRET CRAFTS. openRecipe() (read live) says the fusion arrives as
+// a mid-run PROMPT, and the live DOM had "MAKE BLACK VERMOUTH" / "NOT NOW"
+// sitting unanswered while both vermouths were at lv6 and `absorbed` was empty.
+if (which === 'craft-prompt') {
+    const clicked = [];
+    const mkBtn = (text, id) => ({
+        id: id || '', className: id === 'craftBtn' ? '' : 'btn craft-no', textContent: text,
+        style: {}, querySelector: () => null, querySelectorAll: () => [],
+        click() { clicked.push(text); }, dispatchEvent() { return true; }, appendChild() {}, remove() {},
+        getBoundingClientRect: () => ({ width: 120, height: 30, top: 100, left: 100 })
+    });
+    const yes = mkBtn('MAKE BLACK VERMOUTH', 'craftBtn');
+    const no = mkBtn('NOT NOW');
+    const { pineBot } = makeEnv({
+        script: SCRIPT, game: { state: 'playing', gameTime: 900 },
+        dom: { buttons: [yes, no] }
+    });
+    pineBot.stop();
+    // the prompt leaves G.state on 'playing', which is why it was never seen
+    global.document.querySelector = sel => /craftBtn|craft-yes|craft-ok/.test(sel) ? yes : null;
+    global.document.querySelectorAll = () => [yes, no];
+    const took = pineBot.test.takeCraftPrompt();
+    test('the fusion prompt is answered', () => assert.strictEqual(took, true));
+    test('and MAKE is what gets clicked', () =>
+        assert.deepStrictEqual(clicked, ['MAKE BLACK VERMOUTH'], clicked.join(',')));
+    test('NOT NOW is never clicked', () =>
+        assert.ok(!clicked.some(t => /not now/i.test(t)), clicked.join(',')));
+    // THE ACTUAL BUG: the prompt leaves G.state on 'playing', and the
+    // 'playing' handler used to return false unconditionally, so nothing ever
+    // looked. Assert the wiring, not just the helper.
+    clicked.length = 0;
+    test('the playing-state handler answers it (the wiring that was missing)', () =>
+        assert.strictEqual(pineBot.test.stateHandlers.playing(), true));
+    test('and it clicked MAKE', () =>
+        assert.deepStrictEqual(clicked, ['MAKE BLACK VERMOUTH'], clicked.join(',')));
+    done();
+}
+
+// v6.87.5 — the evolution trigger. openRecipe(): "base attack MAX + cocktail
+// Lv6 + key ingredient MAX -> evolve AT A BOSS TIP". The tip IS the trigger.
+if (which === 'evo-tip') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    test('nothing pending on a fresh run', () => assert.strictEqual(T.evolutionPending(), false));
+    // NEGRONI at its cap with CAMPARI maxed = a super waiting for a tip
+    T.setOwned({ NEGRONI: 6, CAMPARI: 6 });
+    test('a qualified pair is reported as pending', () => assert.strictEqual(T.evolutionPending(), true));
+    // ...and a half-built one is not
+    const { pineBot: p2 } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    p2.stop(); p2.test.applyDefaults();
+    p2.test.setOwned({ NEGRONI: 6, CAMPARI: 3 });
+    test('an unfinished key is not pending', () => assert.strictEqual(p2.test.evolutionPending(), false));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

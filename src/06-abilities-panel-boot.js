@@ -661,6 +661,7 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
+                    evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS,
                     handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,

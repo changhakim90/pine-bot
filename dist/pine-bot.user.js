@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.87.4
+// @version      6.87.5
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.87.4';
+    const SCRIPT_VERSION = '6.87.5';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -2260,6 +2260,30 @@
         return t < 360 ? 'early' : (t < 900 ? 'mid' : 'late');
     }
 
+
+    // v6.87.5: is a SUPER already qualified and just waiting for its trigger?
+    // openRecipe(): "base attack MAX + cocktail Lv6 + key ingredient MAX ->
+    // evolve at a BOSS TIP". Everything but the tip is inspectable, so this
+    // answers "is there a super lying on the floor inside the next tip?".
+    // Used by the loot valuer, which is why it lives at module scope.
+    function evolutionPending() {
+        try {
+            const sl = (G.player && G.player.superLv) || {};
+            const made = c => {
+                const k = String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
+                return Object.keys(sl).some(s2 => s2.toLowerCase().replace(/[^a-z0-9]/g, '') === k && sl[s2] > 0);
+            };
+            for (const c of COCKTAILS) {
+                if (made(c)) continue;
+                if ((ownedLevels[c] || 0) < (ownedMax[c] || 6)) continue;
+                const key = SUPER_KEY_INGREDIENT[c];
+                if (!key || (ownedLevels[key] || 0) < (ownedMax[key] || 6)) continue;
+                return true;
+            }
+        } catch (e) { }
+        return false;
+    }
+
     // NOTE (v6.87.3): this lives ABOVE scoreCard deliberately. Its
     // neighbours — opensNewSuperLine, liveSuperCount, isCraftFinish — are
     // nested INSIDE scoreCard, which is invisible until something outside
@@ -3676,6 +3700,46 @@
         setStatus(`run over — ${Math.round(stats.time)}s / ${stats.downs} / ${stats.sales}`);
     }
 
+
+    // =================================================================
+    // v6.87.5 SECRET CRAFTS — the fusion prompt (SOURCE-READ, live DOM)
+    // -----------------------------------------------------------------
+    // openRecipe() states it outright: "SECRET CRAFTS · COMBINATIONS
+    // (level the ingredients -> a fusion prompt appears mid-run)". The
+    // prompt is a DOM overlay with `#craftBtn` ("MAKE BLACK VERMOUTH")
+    // and `.craft-no` ("NOT NOW"). It does NOT change G.state, so the
+    // `craft()` screen handler — which only runs when state === 'craft'
+    // — never fired. And even when it did, its clickText regex was
+    // /make it|craft|confirm|yes/, which does not match "MAKE BLACK
+    // VERMOUTH". Two independent misses, and the cost was every craft
+    // in every run: a live probe found sweetver lv6 + dryver lv6, an
+    // EMPTY `player.absorbed`, and the prompt still sitting on screen.
+    //
+    // applyCraft() shows why that is expensive. The consumed materials
+    // stay in player.weapons at full level — "능력치 효과는 계속 적용되고,
+    // 슬롯 카운트에서만 빠짐 (3칸 -> 조합품 1칸)" — so the parts keep their
+    // stat effect and only stop occupying slots. A craft is pure upside:
+    // a free weapon plus slot relief on a bar the probe found holding 15.
+    //
+    // Never click NOT NOW: declining is strictly worse than any pick.
+    function takeCraftPrompt() {
+        try {
+            const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
+            if (yes && visible(yes)) { craftsThisRun++; clickEl(yes); setStatus('craft: fused'); return true; }
+            // fall back to text, allowing for the result name after MAKE
+            const btns = [...document.querySelectorAll('button, [onclick], .btn')];
+            for (const b of btns) {
+                const t = (b.textContent || '').trim();
+                if (!visible(b)) continue;
+                if (/^(not now|later|no thanks)/i.test(t)) continue;   // the decline button
+                if (/^make\b|^combine\b|^fuse\b|조합|만들기/i.test(t)) {
+                    craftsThisRun++; clickEl(b); setStatus('craft: ' + t.slice(0, 24)); return true;
+                }
+            }
+        } catch (e) { }
+        return false;
+    }
+
     // =================================================================
     // SCREEN AUTOMATION — driven by the game's own `state`
     // =================================================================
@@ -3918,7 +3982,10 @@
         menu() {
             return !!callFirst(['resumeGame']) || clickText(/resume|continue/i);
         },
-        playing() { return false; },   // the movement loop owns this state
+        // v6.87.5: the movement loop owns play, but the fusion prompt is a
+        // DOM overlay that leaves G.state on 'playing' — so it has to be
+        // checked here or it is never seen at all.
+        playing() { return takeCraftPrompt(); },
         levelup() {
             return handleLevelUp() || clickCardByIndex(0);
         },
@@ -3938,7 +4005,7 @@
             }
             if (hasGame('confirmCraft')) { craftsThisRun++; callGame('confirmCraft'); return true; }
             if (hasGame('pickCraftChoice')) { craftsThisRun++; callGame('pickCraftChoice', 0); return true; }
-            return clickText(/make it|craft|confirm|yes/i);
+            return takeCraftPrompt();
         },
         notice() {
             return !!callFirst(['closeNotice']) || clickText(/got it|ok|close|continue/i);
@@ -4630,6 +4697,13 @@
                 // tick exactly like a heal is.
                 const gtTip = typeof G.gameTime === 'number' ? G.gameTime : 0;
                 if (kind === 'tip' && !hellDetected && gtTip < 1200 && hpRatio > 0.45) vital = true;
+                // v6.87.5 SOURCE-READ: openRecipe() spells out the evolution
+                // rule — "base attack MAX + cocktail Lv6 + key ingredient MAX
+                // -> evolve AT A BOSS TIP". The tip is not merely where the
+                // upgrade is offered; it is the TRIGGER. So a tip on the floor
+                // with an evolution already qualified is worth more than any
+                // other loot in the game: it is a super cocktail lying there.
+                if (kind === 'tip' && evolutionPending()) { v += 60; vital = true; }
             } else if (kind === 'coin' || kind === 'bill') {
                 // Gold buys weapon upgrades — when we're losing the damage
                 // race, gold IS damage. Scale it up with the deficit.
@@ -6530,6 +6604,7 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
+                    evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS,
                     handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,

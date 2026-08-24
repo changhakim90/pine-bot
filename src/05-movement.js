@@ -500,6 +500,13 @@
                 // tick exactly like a heal is.
                 const gtTip = typeof G.gameTime === 'number' ? G.gameTime : 0;
                 if (kind === 'tip' && !hellDetected && gtTip < 1200 && hpRatio > 0.45) vital = true;
+                // v6.87.5 SOURCE-READ: openRecipe() spells out the evolution
+                // rule — "base attack MAX + cocktail Lv6 + key ingredient MAX
+                // -> evolve AT A BOSS TIP". The tip is not merely where the
+                // upgrade is offered; it is the TRIGGER. So a tip on the floor
+                // with an evolution already qualified is worth more than any
+                // other loot in the game: it is a super cocktail lying there.
+                if (kind === 'tip' && evolutionPending()) { v += 60; vital = true; }
             } else if (kind === 'coin' || kind === 'bill') {
                 // Gold buys weapon upgrades — when we're losing the damage
                 // race, gold IS damage. Scale it up with the deficit.

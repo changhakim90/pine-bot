@@ -109,6 +109,30 @@
         return t < 360 ? 'early' : (t < 900 ? 'mid' : 'late');
     }
 
+
+    // v6.87.5: is a SUPER already qualified and just waiting for its trigger?
+    // openRecipe(): "base attack MAX + cocktail Lv6 + key ingredient MAX ->
+    // evolve at a BOSS TIP". Everything but the tip is inspectable, so this
+    // answers "is there a super lying on the floor inside the next tip?".
+    // Used by the loot valuer, which is why it lives at module scope.
+    function evolutionPending() {
+        try {
+            const sl = (G.player && G.player.superLv) || {};
+            const made = c => {
+                const k = String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
+                return Object.keys(sl).some(s2 => s2.toLowerCase().replace(/[^a-z0-9]/g, '') === k && sl[s2] > 0);
+            };
+            for (const c of COCKTAILS) {
+                if (made(c)) continue;
+                if ((ownedLevels[c] || 0) < (ownedMax[c] || 6)) continue;
+                const key = SUPER_KEY_INGREDIENT[c];
+                if (!key || (ownedLevels[key] || 0) < (ownedMax[key] || 6)) continue;
+                return true;
+            }
+        } catch (e) { }
+        return false;
+    }
+
     // NOTE (v6.87.3): this lives ABOVE scoreCard deliberately. Its
     // neighbours — opensNewSuperLine, liveSuperCount, isCraftFinish — are
     // nested INSIDE scoreCard, which is invisible until something outside
