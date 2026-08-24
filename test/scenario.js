@@ -1594,10 +1594,14 @@ if (which === 'craft-prompt') {
     // THE ACTUAL BUG: the prompt leaves G.state on 'playing', and the
     // 'playing' handler used to return false unconditionally, so nothing ever
     // looked. Assert the wiring, not just the helper.
+    // THE REAL WIRING. 6.87.5 put this in STATE_HANDLERS.playing(), which
+    // handleScreens() never reaches — its `st === 'playing'` branch returns
+    // first. Drive handleScreens() itself, the way the main loop does.
     clicked.length = 0;
-    test('the playing-state handler answers it (the wiring that was missing)', () =>
-        assert.strictEqual(pineBot.test.stateHandlers.playing(), true));
-    test('and it clicked MAKE', () =>
+    global.state = 'playing';
+    test('handleScreens answers the prompt during play', () =>
+        assert.strictEqual(pineBot.test.handleScreens(), true));
+    test('and it clicked MAKE, not NOT NOW', () =>
         assert.deepStrictEqual(clicked, ['MAKE BLACK VERMOUTH'], clicked.join(',')));
     done();
 }

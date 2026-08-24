@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.87.5
+// @version      6.87.6
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.87.5';
+    const SCRIPT_VERSION = '6.87.6';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -4085,6 +4085,16 @@
         if (st === 'playing') {
             latchHellDuringPlay();   // hell is only ever detected mid-run, never from menus
 
+            // v6.87.6 (user: "always pick make black vermouth"). The fusion
+            // prompt lives HERE, not in STATE_HANDLERS. The 'playing' branch
+            // of handleScreens returns before the STATE_HANDLERS dispatch ever
+            // runs, so 6.87.5's `playing() { return takeCraftPrompt(); }` was
+            // dead code — a gate that never opens, and the unit test missed it
+            // by calling the handler directly instead of going through
+            // handleScreens(). Checked first: the prompt pauses the field, so
+            // nothing else in this branch can matter while it is up.
+            if (takeCraftPrompt()) return true;
+
             // THE REAL AFTER-HOURS FLOW (verified from the live game):
             // finale prompts appear while state is STILL 'playing', and their
             // continue buttons carry the class `fin-continue`. The chase
@@ -6604,7 +6614,7 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
-                    evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS,
+                    evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     handleLevelUp, gunPathProgress,
                     activeRoster: () => activeRoster,
                     bossRing: () => bossRingRef.v,

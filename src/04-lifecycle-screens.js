@@ -653,6 +653,16 @@
         if (st === 'playing') {
             latchHellDuringPlay();   // hell is only ever detected mid-run, never from menus
 
+            // v6.87.6 (user: "always pick make black vermouth"). The fusion
+            // prompt lives HERE, not in STATE_HANDLERS. The 'playing' branch
+            // of handleScreens returns before the STATE_HANDLERS dispatch ever
+            // runs, so 6.87.5's `playing() { return takeCraftPrompt(); }` was
+            // dead code — a gate that never opens, and the unit test missed it
+            // by calling the handler directly instead of going through
+            // handleScreens(). Checked first: the prompt pauses the field, so
+            // nothing else in this branch can matter while it is up.
+            if (takeCraftPrompt()) return true;
+
             // THE REAL AFTER-HOURS FLOW (verified from the live game):
             // finale prompts appear while state is STILL 'playing', and their
             // continue buttons carry the class `fin-continue`. The chase
