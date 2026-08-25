@@ -2176,9 +2176,20 @@ if (which === 'latent-line') {
     const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
     const why = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).why;
 
+    // v6.89.1 — THE CASE 6.89.0 MISSED, taken from a live 6.88.6 log:
+    // MANHATTAN scored 41 in a junk pool with its key still unbuilt, was taken,
+    // levelled to 126 and evolved to "★ SUPER MANHATTAN UP(super)=338". The
+    // plan MAXES SWEET VERMOUTH on its way to the BLACK VERMOUTH craft, so the
+    // line was latent from turn one. This must be refused with nothing owned.
     const before = sc('MANHATTAN', 'weapon', 0);
-    test('with the key unbuilt, MANHATTAN is merely off-plan, not vetoed', () =>
-        assert.ok(before > -400, 'MANHATTAN ' + Math.round(before)));
+    test('MANHATTAN is refused from the FIRST pool, key unbuilt, nothing owned', () =>
+        assert.ok(before < -400, 'MANHATTAN ' + Math.round(before)));
+    test('...and it loses to the junk it beat in the live log (ANGOSTURA scored 8)', () =>
+        assert.ok(sc('ANGOSTURA', 'passive', 0) > before,
+            'ANGOSTURA ' + Math.round(sc('ANGOSTURA', 'passive', 0)) + ' vs MANHATTAN ' + Math.round(before)));
+    for (const c of ['VODKA MARTINI', 'WHISKEY HIGHBALL', 'DRY MARTINI', 'BLOODY MARY', 'ESPRESSO MARTINI'])
+        test('the other plan-keyed sixth line is refused too: ' + c, () =>
+            assert.ok(sc(c, 'weapon', 0) < -400, c + ' ' + Math.round(sc(c, 'weapon', 0))));
 
     // PATH 1 — the key is simply maxed and still in the bar.
     T.setOwned({ 'SWEET VERMOUTH': 6 });
@@ -2224,4 +2235,81 @@ if (which === 'latent-line') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.1 — THE SHIELD THE BOT COULD NOT SEE, and the audit predicate that
+// was measuring from the wrong place. Both were found by probing the live tab:
+// hp EXACTLY equal to maxHp while shield sat at 125/135 and shieldFlash was the
+// current frame, and p.r = 7.2 against a contact predicate hardcoded to 6.
+if (which === 'shield-pool') {
+    const { pineBot } = makeEnv({
+        script: SCRIPT, frames: 40,
+        game: { state: 'playing', gameTime: 1500, hell: true }
+    });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+
+    const place = (hp, maxHp, shield, shieldMax) => {
+        global.gameTime = 1500;
+        global.player.x = 400; global.player.y = 400; global.player.r = 7.2;
+        global.player.hp = hp; global.player.maxHp = maxHp;
+        global.player.shield = shield; global.player.shieldMax = shieldMax;
+        global.enemies = [];
+        return T.planMove();
+    };
+
+    // FULL pool: HP full and shield full.
+    const full = place(100, 100, 100, 100);
+    test('a full HP bar behind a full shield reads as a full pool', () =>
+        assert.ok(full && Math.abs(full.hpRatio - 1) < 0.02, 'hpRatio ' + (full && full.hpRatio)));
+
+    // THE DISCRIMINATOR. HP is still EXACTLY full — this is the live reading
+    // that started the whole investigation — but the shield is gone. Before
+    // 6.89.1 both cases returned 1.0 and the bot ran its boldest posture here.
+    const stripped = place(100, 100, 0, 100);
+    test('...but a stripped shield at full HP is only HALF the pool', () =>
+        assert.ok(stripped && Math.abs(stripped.hpRatio - 0.5) < 0.02,
+            'hpRatio ' + (stripped && stripped.hpRatio) + ' — a literal hp/maxHp reads 1.0 here'));
+    test('and the two readings differ, which is the whole point', () =>
+        assert.ok(full.hpRatio - stripped.hpRatio > 0.4,
+            full.hpRatio + ' vs ' + stripped.hpRatio));
+
+    // A build with no NEGRONI has no shield at all: the ratio must be unchanged
+    // from the old behaviour rather than dividing by a phantom maximum.
+    const noShield = place(60, 100, 0, 0);
+    test('a shieldless build still reads plain hp/maxHp', () =>
+        assert.ok(Math.abs(noShield.hpRatio - 0.6) < 0.02, 'hpRatio ' + noShield.hpRatio));
+
+    // CONTACT REACH. The first draft of this test guessed the geometry and
+    // PASSED WITH THE FIX REVERTED — the gathered enemy radius is not the raw
+    // `r` handed in, so a hand-picked distance proved nothing. The property
+    // that actually separates the two versions is that the threshold is READ
+    // FROM THE PLAYER instead of hardcoded: hold the scene fixed and change
+    // only `player.r`. Under the old literal 6 both radii give the same
+    // verdict; under 6.89.1 the larger radius reaches the enemy.
+    const hitAt = (pr) => {
+        pineBot.resetDamageAudit();
+        const put = (hp) => {
+            global.gameTime = 1500;
+            global.player.x = 400; global.player.y = 400; global.player.r = pr;
+            global.player.maxHp = 100; global.player.shield = 0; global.player.shieldMax = 0;
+            global.player.hp = hp;
+            global.enemies = [{ x: 445, y: 400, r: 18, hp: 1e6, type: 'drunk' }];
+            T.planMove();
+        };
+        put(100);   // establishes lastHpSample
+        put(90);    // a real 10 HP drop
+        const a = pineBot.damageAudit();
+        return { events: a.events, unattr: a.unattributed.n, contact: (a.sole.contact || {}).n || 0 };
+    };
+    const thin = hitAt(7.2), fat = hitAt(20);
+    test('both scenes produced exactly one damage event', () =>
+        assert.ok(thin.events === 1 && fat.events === 1, JSON.stringify([thin, fat])));
+    test('a fat player reaches this enemy and the hit is ATTRIBUTED to contact', () =>
+        assert.ok(fat.unattr === 0 && fat.contact >= 1,
+            'r=20 ' + JSON.stringify(fat) + ' — a hardcoded 6 cannot see this'));
+    test('...while a thin one cannot, so the threshold tracks the PLAYER', () =>
+        assert.ok(thin.unattr === 1 && thin.contact === 0, 'r=7.2 ' + JSON.stringify(thin)));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

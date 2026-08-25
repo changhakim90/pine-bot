@@ -1153,8 +1153,33 @@
                 const k2 = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
                 const already = Object.keys(sl2).some(s3 =>
                     s3.toLowerCase().replace(/[^a-z0-9]/g, '') === k2 && sl2[s3] > 0);
-                if (lkey && !already && keyEffectivelyMaxed(lkey)) {
-                    add(lv === 0 ? -600 : -400, 'latent-line');
+                // v6.89.1 — CAUGHT LIVE, AND 6.89.0 WOULD HAVE MISSED IT.
+                // A 6.88.6 console log shows MANHATTAN taken at lv0 for a score
+                // of 41 out of a junk pool (against ANGOSTURA 8, LEMON 8,
+                // SIDECAR -22), levelled 114 -> 120 -> 126, and evolved:
+                // "★ SUPER MANHATTAN UP(super)=338". The gun guard only woke up
+                // afterwards, scoring the same card -322 once the line existed.
+                //
+                // 6.89.0 keyed the veto on the super key being ALREADY maxed.
+                // At the moment that MANHATTAN was taken it was not — so the
+                // veto stayed silent and the line opened anyway.
+                //
+                // The missing half: THE PLAN MAXES ITS OWN INGREDIENTS. SWEET
+                // VERMOUTH is a craft half; BLACK VERMOUTH cannot be made
+                // without taking it to Lv6. So MANHATTAN is a latent sixth line
+                // from turn one, not from the moment the key tops out. Six
+                // off-plan cocktails are latent by exactly this construction —
+                // MANHATTAN (sweet vermouth), VODKA MARTINI (dry vermouth),
+                // WHISKEY HIGHBALL (water), DRY MARTINI (olive), BLOODY MARY
+                // (tomato juice), ESPRESSO MARTINI (coffee beans) — and the
+                // measured rows are full of runs built on them.
+                //
+                // A cocktail keyed to an ingredient the plan intends to max is
+                // a sixth super waiting for levels. Refuse it at level zero,
+                // from the first pool, before the slot is spent.
+                const planWillMax = lkey && PLAN_INGREDIENTS.includes(lkey);
+                if (lkey && !already && (keyEffectivelyMaxed(lkey) || planWillMax)) {
+                    add(lv === 0 ? -600 : -400, planWillMax ? 'latent-line-planned' : 'latent-line');
                 }
             }
             // v6.89.0 SLOT WASTERS (user: old fashioned / corpse reviver out of

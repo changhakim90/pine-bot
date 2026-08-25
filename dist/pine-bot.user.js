@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.0
+// @version      6.89.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.0';
+    const SCRIPT_VERSION = '6.89.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -3678,8 +3678,33 @@
                 const k2 = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
                 const already = Object.keys(sl2).some(s3 =>
                     s3.toLowerCase().replace(/[^a-z0-9]/g, '') === k2 && sl2[s3] > 0);
-                if (lkey && !already && keyEffectivelyMaxed(lkey)) {
-                    add(lv === 0 ? -600 : -400, 'latent-line');
+                // v6.89.1 — CAUGHT LIVE, AND 6.89.0 WOULD HAVE MISSED IT.
+                // A 6.88.6 console log shows MANHATTAN taken at lv0 for a score
+                // of 41 out of a junk pool (against ANGOSTURA 8, LEMON 8,
+                // SIDECAR -22), levelled 114 -> 120 -> 126, and evolved:
+                // "★ SUPER MANHATTAN UP(super)=338". The gun guard only woke up
+                // afterwards, scoring the same card -322 once the line existed.
+                //
+                // 6.89.0 keyed the veto on the super key being ALREADY maxed.
+                // At the moment that MANHATTAN was taken it was not — so the
+                // veto stayed silent and the line opened anyway.
+                //
+                // The missing half: THE PLAN MAXES ITS OWN INGREDIENTS. SWEET
+                // VERMOUTH is a craft half; BLACK VERMOUTH cannot be made
+                // without taking it to Lv6. So MANHATTAN is a latent sixth line
+                // from turn one, not from the moment the key tops out. Six
+                // off-plan cocktails are latent by exactly this construction —
+                // MANHATTAN (sweet vermouth), VODKA MARTINI (dry vermouth),
+                // WHISKEY HIGHBALL (water), DRY MARTINI (olive), BLOODY MARY
+                // (tomato juice), ESPRESSO MARTINI (coffee beans) — and the
+                // measured rows are full of runs built on them.
+                //
+                // A cocktail keyed to an ingredient the plan intends to max is
+                // a sixth super waiting for levels. Refuse it at level zero,
+                // from the first pool, before the slot is spent.
+                const planWillMax = lkey && PLAN_INGREDIENTS.includes(lkey);
+                if (lkey && !already && (keyEffectivelyMaxed(lkey) || planWillMax)) {
+                    add(lv === 0 ? -600 : -400, planWillMax ? 'latent-line-planned' : 'latent-line');
                 }
             }
             // v6.89.0 SLOT WASTERS (user: old fashioned / corpse reviver out of
@@ -5626,8 +5651,29 @@
         let poTtkOut = null, poDpsOut = 0;   // v6.86.2 reporting (set by the station block)
 
         const maxHp = p.maxHp || p.maxHealth || p.hpMax || 100;
-        const hp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
-        const hpRatio = Math.max(0, Math.min(1, hp / (maxHp || 1)));
+        const rawHp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
+        // v6.89.1 THE SHIELD IS PART OF THE POOL, AND THE BOT COULD NOT SEE IT.
+        // Live probe at gt 2698: hp 287.976, maxHp 287.976 — EXACTLY full — with
+        // shield 125.2 of shieldMax 135 and `shieldFlash` equal to the current
+        // frame. It was being hit at that instant and reporting itself
+        // untouched. `p.shield` was read NOWHERE in this codebase.
+        //
+        // Two consequences, both bad, and together they are the best
+        // explanation on record for "the run was fine and then it died":
+        //   1. Every caution gate below — hpPanic, the anchor's hpRatio > 0.7,
+        //      the panic multipliers — ran the boldest posture while a third of
+        //      the effective pool was being stripped, then met the real HP bar
+        //      already at the cliff edge with no accumulated caution.
+        //   2. `hp` is what the damage telemetry samples, so EVERY absorbed hit
+        //      was invisible to dangerAccum, to the death-cause verdict, and to
+        //      the learned per-type threat multipliers. The bot was not
+        //      under-reacting to that damage; it never knew it happened.
+        // Folding the shield in fixes both at once — the ratio and the sampler
+        // are the same number.
+        const shield = (typeof p.shield === 'number' && p.shield > 0) ? p.shield : 0;
+        const shieldMax = (typeof p.shieldMax === 'number' && p.shieldMax > 0) ? p.shieldMax : 0;
+        const hp = rawHp + shield;
+        const hpRatio = Math.max(0, Math.min(1, hp / ((maxHp + shieldMax) || 1)));
 
         // FLAME CROSS — v6.86.7 UNIT FIX. The bot compared this deadline
         // against `frame`, but the game sets it in SECONDS:
@@ -5774,7 +5820,20 @@
         // classified against the hazards actually in range and weighted by
         // damage taken, so the death verdict follows the damage.
         for (const k in dangerAccum) dangerAccum[k] *= 0.96;
-        for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + 6) { dangerAccum.contact += 0.25; break; }
+        // v6.89.1 CONTACT REACH — the hardcoded 6 was the audit's own bug.
+        // Both this exposure test and the `cands` predicate below measured to
+        // the player's CENTRE and compared against a literal 6, but the player
+        // has a radius (live probe: p.r = 7.2) and the game collides
+        // centre-to-centre against e.r + p.r. Every genuine contact hit landing
+        // in the band between 6 and p.r therefore found NO candidate and was
+        // booked as `unattributed` — 16% of all events and 16% of all HP lost
+        // across 893 recorded runs, with `near` p25 0 / median 1 / p75 2 and
+        // bosses a median 210px away. That profile is ordinary contact damage,
+        // not a missing hazard class: the predicate was simply too tight.
+        // (An aura system was suspected and ruled out — updateAuras iterates
+        // player.weapons and kills enemies. It is the bot's OWN damage.)
+        const contactReach = (typeof p.r === 'number' && p.r > 0) ? p.r : 7.2;
+        for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + contactReach) { dangerAccum.contact += 0.25; break; }
         for (const q of th.projectiles) if (Math.hypot(q.x - p.x, q.y - p.y) < q.r * 2.5) { dangerAccum.proj += 0.25; break; }
         for (const m of th.marks) if (Math.hypot(m.x - p.x, m.y - p.y) < m.r) { dangerAccum.mark += 0.25; break; }
         for (const l of th.lines) if (lineCost(l, p.x, p.y)) { dangerAccum.line += 0.25; break; }
@@ -5803,7 +5862,7 @@
             if (th.lines.some(l => l.armed === true && lineCost(l, p.x, p.y) > 0.15)) cands.push('line');
             if (gProj < 22) cands.push('proj');
             if (gMark < 10) cands.push('mark');
-            if (gContact < 6) cands.push('contact');
+            if (gContact < contactReach) cands.push('contact');   // v6.89.1: was a literal 6 — see contactReach above
             dmgAudit.n++; dmgAudit.hp += loss;
             const bump = (tbl, k) => { const b = tbl[k] || (tbl[k] = { n: 0, hp: 0 }); b.n++; b.hp += loss; };
             if (!cands.length) {

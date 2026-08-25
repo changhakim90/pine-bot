@@ -560,8 +560,29 @@
         let poTtkOut = null, poDpsOut = 0;   // v6.86.2 reporting (set by the station block)
 
         const maxHp = p.maxHp || p.maxHealth || p.hpMax || 100;
-        const hp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
-        const hpRatio = Math.max(0, Math.min(1, hp / (maxHp || 1)));
+        const rawHp = p.hp != null ? p.hp : (p.health != null ? p.health : maxHp);
+        // v6.89.1 THE SHIELD IS PART OF THE POOL, AND THE BOT COULD NOT SEE IT.
+        // Live probe at gt 2698: hp 287.976, maxHp 287.976 — EXACTLY full — with
+        // shield 125.2 of shieldMax 135 and `shieldFlash` equal to the current
+        // frame. It was being hit at that instant and reporting itself
+        // untouched. `p.shield` was read NOWHERE in this codebase.
+        //
+        // Two consequences, both bad, and together they are the best
+        // explanation on record for "the run was fine and then it died":
+        //   1. Every caution gate below — hpPanic, the anchor's hpRatio > 0.7,
+        //      the panic multipliers — ran the boldest posture while a third of
+        //      the effective pool was being stripped, then met the real HP bar
+        //      already at the cliff edge with no accumulated caution.
+        //   2. `hp` is what the damage telemetry samples, so EVERY absorbed hit
+        //      was invisible to dangerAccum, to the death-cause verdict, and to
+        //      the learned per-type threat multipliers. The bot was not
+        //      under-reacting to that damage; it never knew it happened.
+        // Folding the shield in fixes both at once — the ratio and the sampler
+        // are the same number.
+        const shield = (typeof p.shield === 'number' && p.shield > 0) ? p.shield : 0;
+        const shieldMax = (typeof p.shieldMax === 'number' && p.shieldMax > 0) ? p.shieldMax : 0;
+        const hp = rawHp + shield;
+        const hpRatio = Math.max(0, Math.min(1, hp / ((maxHp + shieldMax) || 1)));
 
         // FLAME CROSS — v6.86.7 UNIT FIX. The bot compared this deadline
         // against `frame`, but the game sets it in SECONDS:
@@ -708,7 +729,20 @@
         // classified against the hazards actually in range and weighted by
         // damage taken, so the death verdict follows the damage.
         for (const k in dangerAccum) dangerAccum[k] *= 0.96;
-        for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + 6) { dangerAccum.contact += 0.25; break; }
+        // v6.89.1 CONTACT REACH — the hardcoded 6 was the audit's own bug.
+        // Both this exposure test and the `cands` predicate below measured to
+        // the player's CENTRE and compared against a literal 6, but the player
+        // has a radius (live probe: p.r = 7.2) and the game collides
+        // centre-to-centre against e.r + p.r. Every genuine contact hit landing
+        // in the band between 6 and p.r therefore found NO candidate and was
+        // booked as `unattributed` — 16% of all events and 16% of all HP lost
+        // across 893 recorded runs, with `near` p25 0 / median 1 / p75 2 and
+        // bosses a median 210px away. That profile is ordinary contact damage,
+        // not a missing hazard class: the predicate was simply too tight.
+        // (An aura system was suspected and ruled out — updateAuras iterates
+        // player.weapons and kills enemies. It is the bot's OWN damage.)
+        const contactReach = (typeof p.r === 'number' && p.r > 0) ? p.r : 7.2;
+        for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + contactReach) { dangerAccum.contact += 0.25; break; }
         for (const q of th.projectiles) if (Math.hypot(q.x - p.x, q.y - p.y) < q.r * 2.5) { dangerAccum.proj += 0.25; break; }
         for (const m of th.marks) if (Math.hypot(m.x - p.x, m.y - p.y) < m.r) { dangerAccum.mark += 0.25; break; }
         for (const l of th.lines) if (lineCost(l, p.x, p.y)) { dangerAccum.line += 0.25; break; }
@@ -737,7 +771,7 @@
             if (th.lines.some(l => l.armed === true && lineCost(l, p.x, p.y) > 0.15)) cands.push('line');
             if (gProj < 22) cands.push('proj');
             if (gMark < 10) cands.push('mark');
-            if (gContact < 6) cands.push('contact');
+            if (gContact < contactReach) cands.push('contact');   // v6.89.1: was a literal 6 — see contactReach above
             dmgAudit.n++; dmgAudit.hp += loss;
             const bump = (tbl, k) => { const b = tbl[k] || (tbl[k] = { n: 0, hp: 0 }); b.n++; b.hp += loss; };
             if (!cands.length) {
