@@ -2051,6 +2051,48 @@ if (which === 'corner-anchor') {
 }
 
 
+// v6.88.6 — SLOT LOCKOUT. The game narrows the pool toward gun lines late in
+// a run (user: "only cocktails that lead towards it, down to two choices"), so
+// refusing is not available by then. Claim every plan cocktail EARLY, while the
+// pool is wide, and the gun line is closed by occupancy instead of by scoring.
+if (which === 'slot-lockout') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 500 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
+
+    test('an unclaimed plan cocktail outranks the top-ranked ingredient', () =>
+        assert.ok(sc('SOUTH SIDE', 'weapon', 0) > sc('OLIVE', 'passive', 5),
+            'SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0)) + ' vs OLIVE ' + Math.round(sc('OLIVE', 'passive', 5))));
+    test('...even the lowest-ranked one, because the SLOT is what matters', () =>
+        assert.ok(sc('VODKA CRANBERRY', 'weapon', 0) > sc('OLIVE', 'passive', 5),
+            'VC ' + Math.round(sc('VODKA CRANBERRY', 'weapon', 0))));
+    test('and the claim is tagged so it is visible in the audit', () =>
+        assert.ok(/slot-claim/.test(T.scoreCard({ n: 'NEGRONI', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why)));
+
+    // once the slate is full the term switches off and the stated order returns
+    T.setOwned({ 'SOUTH SIDE': 1, 'VODKA TONIC': 1, 'GIN TONIC': 1, 'NEGRONI': 1,
+                 'WHISKY SOUR': 1, 'VODKA CRANBERRY': 1, 'MOJITO': 1 });
+    test('with the slate full, the stated day order governs again', () =>
+        assert.ok(sc('OLIVE', 'passive', 5) > sc('SOUTH SIDE', 'weapon', 1),
+            'OLIVE ' + Math.round(sc('OLIVE', 'passive', 5)) + ' vs SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 1))));
+    test('and no slot-claim tag remains', () =>
+        assert.ok(!/slot-claim/.test(T.scoreCard({ n: 'NEGRONI', type: 'weapon', lv: 2, maxlv: 6 }, 0, []).why)));
+
+    // THE SAFETY PROPERTY THE 200-PER-RANK ORDER BROKE: every guard must still
+    // dominate the ordering. A 3400-point rank bonus made -500 and -1000 noise.
+    test('the rainbow ban still dominates the day order', () =>
+        assert.ok(sc('RAINBOW GUN', 'rainbowup', 0) < -500,
+            'rainbowup ' + Math.round(sc('RAINBOW GUN', 'rainbowup', 0))));
+    test('and no day-order bonus can exceed a guard', () => {
+        const best = Math.max(...['OLIVE', 'DRY VERMOUTH', 'MINT', 'TONIC'].map(n => sc(n, 'passive', 0)));
+        assert.ok(best < 500, 'top day pick scored ' + Math.round(best) + ' — guards are -500');
+    });
+    done();
+}
+
+
 if (which === 'mark-escape') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1400, hell: true } });
     pineBot.stop();
@@ -2112,4 +2154,4 @@ if (which === 'underpowered-label') {
 }
 
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

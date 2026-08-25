@@ -800,7 +800,46 @@
             // ORDER to actually hold, the step between adjacent ranks must
             // exceed the whole spread of everything else. 200 does; anything
             // in the list therefore beats anything below it, always.
-            if (rank >= 0) add((DAY_ORDER.length - rank) * 200, 'day-order' + (rank + 1));
+            // v6.88.6 — 200 PER RANK WAS WRONG, AND THE RUNS SAID SO.
+            // It made the order lexicographic: nine ingredients had to reach
+            // Lv6 before a single cocktail was taken (OLIVE lv5 scored 3722
+            // against an unowned SOUTH SIDE at 1620), which is more picks than
+            // a day contains. supersPerRun fell 1.9-2.1 -> 1.1 at n=10.
+            //
+            // Worse, it broke the SAFETY layer. gun-guard is -500 and the
+            // rainbow ban is -1000; against a +3400 rank bonus both are noise,
+            // so cards that open a sixth super line stopped being refused and
+            // runs drifted toward the Rainbow Gun — which replaces the base
+            // attack with something weaker and ends the run, especially with
+            // NEGRONI's shield still unbuilt because it ranks 16th.
+            //
+            // An order has to be a strong PREFERENCE that loses to a veto, not
+            // a priority that outranks one. Capped at 200 total so every guard
+            // in the scorer still dominates it.
+            if (rank >= 0) add(200 - rank * 11, 'day-order' + (rank + 1));
+            // v6.88.6 SLOT LOCKOUT (user): "the choices become limited towards
+            // building a rainbow gun as the game was designed that way ...
+            // allowing the bot to fill the cocktail space earlier in the run
+            // when choices aren't limited may be one way to permanently lock
+            // out rainbow gun."
+            //
+            // This is the right shape of fix, and it is structural rather than
+            // a veto. Late in a run the pool narrows until every cocktail on
+            // offer walks a gun line — sometimes only two choices — so REFUSING
+            // is not available by then. But a slot that is already occupied
+            // cannot be filled by a card, so the gun line is closed by
+            // OCCUPANCY instead of by scoring. The window to do that is early,
+            // while the pool is still wide.
+            //
+            // So: until every plan cocktail is claimed (lv >= 1), an unclaimed
+            // one outranks the whole ingredient order. Levelling can wait; the
+            // slot cannot. Once all are claimed this term switches off and the
+            // stated order governs again.
+            const claimed = PLAN_COCKTAILS.filter(c => (ownedLevels[c] || 0) > 0).length;
+            const slatFull = claimed >= PLAN_COCKTAILS.length;
+            if (!slatFull && type === 'weapon' && lv === 0 && PLAN_COCKTAILS.includes(name)) {
+                add(250, 'slot-claim' + (claimed + 1) + '/' + PLAN_COCKTAILS.length);
+            }
             // TWO THINGS SIT ABOVE THE WHOLE LIST, and both are the user's own
             // doctrine rather than an exception to it:
             //   the ULTIMATE — "ultimates used to kill passouts as priority for
@@ -809,8 +848,8 @@
             //     MAX + cocktail Lv6 + key ingredient MAX". Rank the base below
             //     seventeen other cards and NO super ever evolves, which would
             //     silently delete the four-line plan the order exists to build.
-            if (type === 'ult') add((DAY_ORDER.length + 2) * 200, 'day-ult-first');
-            else if (type === 'base') add((DAY_ORDER.length + 1) * 200, 'day-base-second');
+            if (type === 'ult') add(240, 'day-ult-first');
+            else if (type === 'base') add(220, 'day-base-second');
         }
         // HELL: the plan is BUILT. The job is no longer to assemble it but to
         // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk
