@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.1
+// @version      6.89.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.1';
+    const SCRIPT_VERSION = '6.89.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -528,6 +528,36 @@
             // tagged 'ult' and is the prime suspect) before tuning anything
             // else about the ultimate.
             ultChainFromS: 9000,   // 150 min (user): the deep-deep posture threshold
+            // v6.89.2 (user): "especially in deep hell mode, before reaching
+            // anchoring stage — may need to bring anchoring forward so mobs can
+            // only attack from certain sides."
+            //
+            // THE CORNER GATE WAS A GATE THAT NEVER OPENED. cornerAnchorFromS
+            // was 9000 (150 min). The measured minguk runs on this roster end
+            // at 1438 / 2726 / 2841 / 4073 / 6124 / 7261 s — the longest is 121
+            // minutes, half an hour short of the threshold. So the clock path
+            // has NEVER fired in a recorded run; only `ringHuge` could, and it
+            // needs a boss ring at 55% of the canvas. The whole corner doctrine
+            // has effectively been dead code in the regime it was written for.
+            //
+            // The doctrine already names its own start: "deep hell once bosses
+            // don't drop tips AND the boss damage ring becomes as large as the
+            // canvas". Tips stop at tipWindowToS = 4800. Pulling the clock back
+            // to that line puts the corner in the band where runs actually die
+            // and makes the two halves of the phase model agree, instead of
+            // leaving 70 minutes where the doctrine says deep hell but the
+            // planner still says mid-game.
+            //
+            // NOT pulled earlier than 4800 on purpose: 1800-4800 is the TIP
+            // WINDOW, where the doctrine parks on frozen bosses to farm the
+            // drops that fund the build. Cornering through that phase would
+            // fight the revenue phase for the sake of a posture, and the runs
+            // that reach 100+ minutes are the ones that farmed it.
+            //
+            // The geometry is the point, as the user put it: in a corner the
+            // approach arc collapses from 360 degrees to about 90, so the crowd
+            // can only arrive from certain sides — the same reason the corner
+            // is immune to unaimed boss marks.
             ultChainGateMs: 300,   // retry cadence once deep (was 2500)
             // CORNER ANCHOR (user, deliberate strategy in demo #5). Boss
             // drop-marks spawn UNIFORMLY at random inside [52, W-52] x
@@ -543,8 +573,12 @@
             // kill at point-blank range.
             tipWindowFromS: 1800,      // 30 min
             tipWindowToS: 4800,        // 80 min
-            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters — or
-                                       // sooner if a boss ring fills the canvas
+            cornerAnchorFromS: 4800,   // v6.89.2: was 9000 (150 min) — a gate no
+                                       // recorded run ever reached. Now the tip
+                                       // window's close, which is where the
+                                       // doctrine itself starts deep hell.
+                                       // Still fires sooner if a boss ring
+                                       // fills the canvas.
             cornerPull: 2.4            // weight on closing to the nearest corner
 
         },
@@ -6944,7 +6978,12 @@
             enemies: th.enemies.length, near: th.near, boss: th.boss,
             projectiles: th.projectiles.length, marks: th.marks.length,
             lines: th.lines.length, loot: loot.length,
-            diag: `hp ${(hpRatio * 100).toFixed(0)}% | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''}`
+            // v6.89.2: the POSTURE is now on the panel. The corner doctrine sat
+            // behind a 150-minute gate no recorded run ever reached, and nothing
+            // on screen said so — the only way to notice was to read the config.
+            // A posture that cannot be observed cannot be tuned, so kite /
+            // anchor / corner are reported live alongside the numbers.
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? 'kite' : 'free'))}`
         };
     }
 

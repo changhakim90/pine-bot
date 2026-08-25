@@ -2029,8 +2029,11 @@ if (which === 'corner-anchor') {
         }));
         return T.planMove();
     };
+    // v6.89.2: the gate moved from 9000 (150 min) to 4800 (the tip window's
+    // close). 9600 must still engage, and 5000 — which the OLD gate refused —
+    // is the case that proves the threshold actually moved.
     const deep = place(9600);
-    test('past 150 min the corner anchor engages', () =>
+    test('past the deep threshold the corner anchor engages', () =>
         assert.strictEqual(deep && deep.cornerAnchor, true, JSON.stringify(deep && deep.cornerAnchor)));
     test('and it moves TOWARD the corner even though that closes on the threat', () =>
         assert.ok(deep.dx > 0 && deep.dy > 0,
@@ -2041,8 +2044,19 @@ if (which === 'corner-anchor') {
     });
     // ...and before the threshold the SAME field flees instead: the day and
     // early hell are untouched.
-    const early = place(3000);
-    test('before 150 min it does not engage', () =>
+    const justPast = place(5000);
+    test('and it now engages at 5000s, which the old 150-min gate refused', () =>
+        assert.strictEqual(justPast && justPast.cornerAnchor, true,
+            String(justPast && justPast.cornerAnchor) + ' — cornerAnchorFromS should be 4800'));
+    // ...and inside the TIP WINDOW it must still stay off: 1800-4800 is the
+    // revenue phase, and the runs that reach 100+ minutes are the ones that
+    // farmed it. Cornering there would fight the phase that funds the build.
+    const inTipWindow = place(3000);
+    test('inside the tip window it stays OFF — that phase is for farming', () =>
+        assert.strictEqual(inTipWindow && inTipWindow.cornerAnchor, false,
+            String(inTipWindow && inTipWindow.cornerAnchor)));
+    const early = place(1500);
+    test('and early hell does not engage either', () =>
         assert.strictEqual(early && early.cornerAnchor, false, String(early && early.cornerAnchor)));
     test('and the same field then produces a step AWAY from the threat', () =>
         assert.ok(early.dx < 0 || early.dy < 0,

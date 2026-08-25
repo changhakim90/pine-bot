@@ -1853,6 +1853,11 @@
             enemies: th.enemies.length, near: th.near, boss: th.boss,
             projectiles: th.projectiles.length, marks: th.marks.length,
             lines: th.lines.length, loot: loot.length,
-            diag: `hp ${(hpRatio * 100).toFixed(0)}% | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''}`
+            // v6.89.2: the POSTURE is now on the panel. The corner doctrine sat
+            // behind a 150-minute gate no recorded run ever reached, and nothing
+            // on screen said so — the only way to notice was to read the config.
+            // A posture that cannot be observed cannot be tuned, so kite /
+            // anchor / corner are reported live alongside the numbers.
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? 'kite' : 'free'))}`
         };
     }
