@@ -75,6 +75,7 @@
         primaryCocktail = null;
         ownedLevels = {};
         ownedMax = {};
+        everMaxed = new Set();
         lastPoolSig = null;
         lastPoolRef = null;
         levelupStuckAt = 0;

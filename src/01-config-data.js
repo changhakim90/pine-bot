@@ -922,6 +922,27 @@
     // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
     // the one card the roster notes call unable to damage holdouts at all.
     const LAST_RESORT_CEILING = 30;
+    // v6.89.0 (user): "maybe we need to get old fashioned and corpse reviver
+    // no.2 out of the junk pools as we know southside and timestop upgrades and
+    // negroni and olive and water are key to survival".
+    //
+    // These are not merely weak — they are the wrong KIND of card. A cocktail
+    // occupies a permanent weapon slot, and the slots are the very resource
+    // the lockout doctrine spends to shut the Rainbow Gun out. Eating one as
+    // "junk" is the opposite of eating an ingredient as junk: the ingredient
+    // costs nothing the plan wanted, the cocktail costs a slot the plan needs.
+    // Scored below the mule's ceiling so they lose to every safe junk card and
+    // to the mule itself; only a pool with literally nothing else can force
+    // one.
+    const SLOT_WASTERS = ['OLD FASHIONED', 'CORPSE REVIVER NO.2'];
+    // v6.89.0 (user): "black vermouth and tomato juice are also very important
+    // like olives". Not a re-ordering — a TIER. The day order is a preference
+    // among comparable cards; these three are the ones a run cannot survive
+    // without, and they must outrank the slot-claim rather than merely sit at
+    // the top of the same list. OLIVE is the orbit, BLACK VERMOUTH the crafted
+    // summon that carries the vermouth line's whole investment, TOMATO JUICE
+    // the ultimate uptime that funds the day.
+    const SURVIVAL_CORE = ['OLIVE', 'BLACK VERMOUTH', 'TOMATO JUICE'];
     // v6.88.3 (user): top-priority ingredients and crafts.
     const TOP_INGREDIENTS = ['OLIVE', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'BLACK VERMOUTH', 'SIMPLE SYRUP'];
     // the halves that must reach Lv6 for those two crafts to become available
@@ -1260,6 +1281,19 @@
     let primaryCocktail = null;         // the build we commit to
     let ownedLevels = {};               // NAME -> level, learned from level-up cards
     let ownedMax = {};                  // NAME -> maxlv
+    // v6.89.0 (user: "manhattan seems to be the problem as the bot doesn't seem
+    // to know black vermouth which is hidden still leads to a super cocktail").
+    // A secret craft CONSUMES its parts: SWEET VERMOUTH + DRY VERMOUTH become
+    // BLACK VERMOUTH and vanish from the ingredient bar, so ownedLevels loses
+    // them. But the game keeps honouring the maxed key for super evolution —
+    // which means the moment BLACK VERMOUTH is crafted, MANHATTAN (key SWEET
+    // VERMOUTH) and VODKA MARTINI (key DRY VERMOUTH) become one Lv6 cocktail
+    // away from a super, and SIMPLE SYRUP does the same for WHISKEY HIGHBALL
+    // (key WATER). All three are OFF the plan, so any of them is the SIXTH
+    // line = the Rainbow Gun. Every guard in the scorer read ownedLevels and
+    // therefore went blind at exactly the moment the danger became real.
+    // This set remembers what was maxed BEFORE it was absorbed.
+    let everMaxed = new Set();          // ingredient names that have ever reached max level
     let lastPoolSig = null;
     let lastPickAt = 0;
     // v6.88.1 L1: the pool OBJECT we last acted on. The game builds a fresh

@@ -2062,12 +2062,19 @@ if (which === 'slot-lockout') {
     const T = pineBot.test;
     const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
 
-    test('an unclaimed plan cocktail outranks the top-ranked ingredient', () =>
-        assert.ok(sc('SOUTH SIDE', 'weapon', 0) > sc('OLIVE', 'passive', 5),
-            'SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0)) + ' vs OLIVE ' + Math.round(sc('OLIVE', 'passive', 5))));
-    test('...even the lowest-ranked one, because the SLOT is what matters', () =>
-        assert.ok(sc('VODKA CRANBERRY', 'weapon', 0) > sc('OLIVE', 'passive', 5),
-            'VC ' + Math.round(sc('VODKA CRANBERRY', 'weapon', 0))));
+    // v6.89.0 — the claim is a PREFERENCE, not an override. At +250 it
+    // outranked the whole survival order and two 6.88.6 runs died in the day
+    // at 596s and 484s with seven level-1 weapons and no armour.
+    test('OLIVE still outranks an unclaimed plan cocktail', () =>
+        assert.ok(sc('OLIVE', 'passive', 5) > sc('SOUTH SIDE', 'weapon', 0),
+            'OLIVE ' + Math.round(sc('OLIVE', 'passive', 5)) + ' vs SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0))));
+    test('...but an unclaimed cocktail still beats levelling a claimed one', () => {
+        const T2 = pineBot.test;
+        T2.setOwned({ 'GIN TONIC': 3 });
+        assert.ok(sc('SOUTH SIDE', 'weapon', 0) > sc('GIN TONIC', 'weapon', 3),
+            'SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0)) + ' vs GT lv3 ' + Math.round(sc('GIN TONIC', 'weapon', 3)));
+        T2.setOwned({ 'GIN TONIC': 0 });
+    });
     test('and the claim is tagged so it is visible in the audit', () =>
         assert.ok(/slot-claim/.test(T.scoreCard({ n: 'NEGRONI', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why)));
 
@@ -2154,4 +2161,67 @@ if (which === 'underpowered-label') {
 }
 
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.0 — THE MANHATTAN HOLE (user: "manhattan seems to be the problem as
+// the bot doesn't seem to know black vermouth which is hidden still leads to a
+// super cocktail"). The plan deliberately maxes SWEET + DRY VERMOUTH to craft
+// BLACK VERMOUTH; the craft EATS both halves; the game keeps honouring the
+// maxed key. So the moment the craft lands, MANHATTAN (key SWEET VERMOUTH) is
+// one cocktail away from a SIXTH super = the Rainbow Gun, and every guard that
+// read ownedLevels saw a level-0 key and waved it through.
+if (which === 'latent-line') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
+    const why = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).why;
+
+    const before = sc('MANHATTAN', 'weapon', 0);
+    test('with the key unbuilt, MANHATTAN is merely off-plan, not vetoed', () =>
+        assert.ok(before > -400, 'MANHATTAN ' + Math.round(before)));
+
+    // PATH 1 — the key is simply maxed and still in the bar.
+    T.setOwned({ 'SWEET VERMOUTH': 6 });
+    test('a MAXED SWEET VERMOUTH makes MANHATTAN a latent sixth line', () =>
+        assert.ok(sc('MANHATTAN', 'weapon', 0) < -400,
+            'MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', 0))));
+    test('and the refusal is tagged', () =>
+        assert.ok(/latent-line/.test(why('MANHATTAN', 'weapon', 0))));
+
+    // PATH 2 — THE REAL ONE. The craft has fused and eaten the half, so
+    // ownedLevels no longer contains SWEET VERMOUTH at all. This is the case
+    // every previous version got wrong.
+    T.setOwned({ 'SWEET VERMOUTH': 0, 'BLACK VERMOUTH': 1 });
+    test('an ABSORBED SWEET VERMOUTH still arms the line', () =>
+        assert.ok(sc('MANHATTAN', 'weapon', 0) < -400,
+            'post-craft MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', 0))));
+    test('VODKA MARTINI — the other half of the same craft — is refused too', () =>
+        assert.ok(sc('VODKA MARTINI', 'weapon', 0) < -400,
+            'VODKA MARTINI ' + Math.round(sc('VODKA MARTINI', 'weapon', 0))));
+    test('and feeding one already owned is refused as well', () =>
+        assert.ok(sc('MANHATTAN', 'weapon', 3) < -200,
+            'MANHATTAN lv3 ' + Math.round(sc('MANHATTAN', 'weapon', 3))));
+
+    // The veto must not spill onto the roster the plan is built from.
+    test('plan cocktails are untouched by the latent-line veto', () =>
+        assert.ok(sc('SOUTH SIDE', 'weapon', 0) > 0 && !/latent-line/.test(why('SOUTH SIDE', 'weapon', 0)),
+            'SOUTH SIDE ' + Math.round(sc('SOUTH SIDE', 'weapon', 0))));
+    // ...nor onto a line the ban list makes unreachable.
+    test('a cocktail whose key is permanently banned stays available', () =>
+        assert.ok(!/latent-line/.test(why('COSMOPOLITAN', 'weapon', 0))));
+
+    // v6.89.0 SLOT WASTERS (user).
+    test('OLD FASHIONED is out of the junk pool', () =>
+        assert.ok(sc('OLD FASHIONED', 'weapon', 0) < 0,
+            'OLD FASHIONED ' + Math.round(sc('OLD FASHIONED', 'weapon', 0))));
+    test('CORPSE REVIVER No.2 is out of the junk pool', () =>
+        assert.ok(sc('CORPSE REVIVER NO.2', 'weapon', 0) < 0,
+            'CORPSE REVIVER ' + Math.round(sc('CORPSE REVIVER NO.2', 'weapon', 0))));
+    test('...and both now lose to the mule, which is the safe forced pick', () =>
+        assert.ok(sc('MOSCOW MULE', 'weapon', 0) > sc('OLD FASHIONED', 'weapon', 0) &&
+            sc('MOSCOW MULE', 'weapon', 0) > sc('CORPSE REVIVER NO.2', 'weapon', 0),
+            'mule ' + Math.round(sc('MOSCOW MULE', 'weapon', 0))));
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

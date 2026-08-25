@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.88.6
+// @version      6.89.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.88.6';
+    const SCRIPT_VERSION = '6.89.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -924,6 +924,27 @@
     // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
     // the one card the roster notes call unable to damage holdouts at all.
     const LAST_RESORT_CEILING = 30;
+    // v6.89.0 (user): "maybe we need to get old fashioned and corpse reviver
+    // no.2 out of the junk pools as we know southside and timestop upgrades and
+    // negroni and olive and water are key to survival".
+    //
+    // These are not merely weak — they are the wrong KIND of card. A cocktail
+    // occupies a permanent weapon slot, and the slots are the very resource
+    // the lockout doctrine spends to shut the Rainbow Gun out. Eating one as
+    // "junk" is the opposite of eating an ingredient as junk: the ingredient
+    // costs nothing the plan wanted, the cocktail costs a slot the plan needs.
+    // Scored below the mule's ceiling so they lose to every safe junk card and
+    // to the mule itself; only a pool with literally nothing else can force
+    // one.
+    const SLOT_WASTERS = ['OLD FASHIONED', 'CORPSE REVIVER NO.2'];
+    // v6.89.0 (user): "black vermouth and tomato juice are also very important
+    // like olives". Not a re-ordering — a TIER. The day order is a preference
+    // among comparable cards; these three are the ones a run cannot survive
+    // without, and they must outrank the slot-claim rather than merely sit at
+    // the top of the same list. OLIVE is the orbit, BLACK VERMOUTH the crafted
+    // summon that carries the vermouth line's whole investment, TOMATO JUICE
+    // the ultimate uptime that funds the day.
+    const SURVIVAL_CORE = ['OLIVE', 'BLACK VERMOUTH', 'TOMATO JUICE'];
     // v6.88.3 (user): top-priority ingredients and crafts.
     const TOP_INGREDIENTS = ['OLIVE', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'BLACK VERMOUTH', 'SIMPLE SYRUP'];
     // the halves that must reach Lv6 for those two crafts to become available
@@ -1262,6 +1283,19 @@
     let primaryCocktail = null;         // the build we commit to
     let ownedLevels = {};               // NAME -> level, learned from level-up cards
     let ownedMax = {};                  // NAME -> maxlv
+    // v6.89.0 (user: "manhattan seems to be the problem as the bot doesn't seem
+    // to know black vermouth which is hidden still leads to a super cocktail").
+    // A secret craft CONSUMES its parts: SWEET VERMOUTH + DRY VERMOUTH become
+    // BLACK VERMOUTH and vanish from the ingredient bar, so ownedLevels loses
+    // them. But the game keeps honouring the maxed key for super evolution —
+    // which means the moment BLACK VERMOUTH is crafted, MANHATTAN (key SWEET
+    // VERMOUTH) and VODKA MARTINI (key DRY VERMOUTH) become one Lv6 cocktail
+    // away from a super, and SIMPLE SYRUP does the same for WHISKEY HIGHBALL
+    // (key WATER). All three are OFF the plan, so any of them is the SIXTH
+    // line = the Rainbow Gun. Every guard in the scorer read ownedLevels and
+    // therefore went blind at exactly the moment the danger became real.
+    // This set remembers what was maxed BEFORE it was absorbed.
+    let everMaxed = new Set();          // ingredient names that have ever reached max level
     let lastPoolSig = null;
     let lastPickAt = 0;
     // v6.88.1 L1: the pool OBJECT we last acted on. The game builds a fresh
@@ -2532,6 +2566,36 @@
         return lv != null && lv >= (ownedMax[name] || 6);
     }
 
+    // v6.89.0 — THE ABSORBED-KEY BLIND SPOT.
+    // isMaxed() answers "is this ingredient at Lv6 right now". For super
+    // evolution that is the WRONG question, because a secret craft eats its
+    // parts: once SWEET VERMOUTH + DRY VERMOUTH fuse into BLACK VERMOUTH both
+    // halves leave ownedLevels, yet the game still treats their maxed keys as
+    // satisfied. Every gun guard below is built on the key's level, so all of
+    // them silently switched OFF the instant the craft the plan deliberately
+    // pursues completed — and MANHATTAN, the cocktail that key unlocks, has
+    // been showing up as a build for versions (6.85.5, 6.85.21, 6.86.1,
+    // 6.86.10, 6.88.5). This is the question the guards should have asked.
+    //
+    // Three independent sources, cheapest first: the live level, the set we
+    // record as levels land, and the craft's own result sitting in the bar.
+    // The last one covers a craft that fused without a card we scored.
+    function keyEffectivelyMaxed(key) {
+        if (!key) return false;
+        if (isMaxed(key)) return true;
+        if (everMaxed.has(key)) return true;
+        try {
+            for (const evo of EVOLUTIONS) {
+                if (!evo.parts.includes(key)) continue;
+                if ((ownedLevels[evo.result] || 0) > 0) return true;
+                const abs = G.player && G.player.absorbed;
+                if (abs && (Array.isArray(abs) ? abs : Object.keys(abs))
+                    .some(a => String(a).toUpperCase() === key)) return true;
+            }
+        } catch (e) { }
+        return false;
+    }
+
     function evolutionSynergy(name) {
         let bonus = 0;
         for (const evo of EVOLUTIONS) {
@@ -2661,7 +2725,11 @@
                 if (!key || NEVER_UNBANNED.has(key)) continue;  // unreachable line: harmless
                 const cMax = ownedMax[c] || 6, kMax = ownedMax[key] || 6;
                 const cLv = Math.min(cMax, (ownedLevels[c] || 0) + (type === 'weapon' ? 1 : 0));
-                const kLv = Math.min(kMax, (ownedLevels[key] || 0) + (type === 'passive' ? 1 : 0));
+                // v6.89.0: an ABSORBED key still counts (see keyEffectivelyMaxed).
+                // Reading ownedLevels here scored a post-craft MANHATTAN line at
+                // 0.5 risk when it was really 1 cocktail from a sixth super.
+                const kLv = keyEffectivelyMaxed(key) ? kMax
+                    : Math.min(kMax, (ownedLevels[key] || 0) + (type === 'passive' ? 1 : 0));
                 worst = Math.max(worst, (cLv / cMax + kLv / kMax) / 2);
             }
             return worst;
@@ -3329,7 +3397,19 @@
             const claimed = PLAN_COCKTAILS.filter(c => (ownedLevels[c] || 0) > 0).length;
             const slatFull = claimed >= PLAN_COCKTAILS.length;
             if (!slatFull && type === 'weapon' && lv === 0 && PLAN_COCKTAILS.includes(name)) {
-                add(250, 'slot-claim' + (claimed + 1) + '/' + PLAN_COCKTAILS.length);
+                // v6.89.0 (user, on the two 6.88.6 runs that died at 596s and
+                // 484s without reaching hell): +250 put an unclaimed cocktail
+                // above the ENTIRE survival order — OLIVE, the vermouths, WATER
+                // — so the early picks bought seven level-1 weapons and no
+                // armour. The lockout is still right; its price was being paid
+                // out of the day phase's survival budget.
+                //
+                // +60 keeps the claim ahead of levelling something already
+                // claimed and ahead of every junk card, while OLIVE (200),
+                // DRY VERMOUTH (189) and BLACK VERMOUTH (178) still outrank an
+                // unclaimed SOUTH SIDE (112 + 60 = 172). The slots still fill
+                // early — just not before the bot can survive to use them.
+                add(60, 'slot-claim' + (claimed + 1) + '/' + PLAN_COCKTAILS.length);
             }
             // TWO THINGS SIT ABOVE THE WHOLE LIST, and both are the user's own
             // doctrine rather than an exception to it:
@@ -3347,6 +3427,27 @@
         // the user named becomes a real pick rather than a last resort.
         if (hellDetected && !atCap && HELL_SAFE_JUNK.includes(name)) {
             add(26, 'hell-safe-junk');
+        }
+        // v6.89.0 SURVIVAL CORE (user: "black vermouth and tomato juice are
+        // also very important like olives", "especially when it reaches the 30
+        // to 50 minute marks").
+        //
+        // This is a TIER above the day order, not a place in it. Demoting the
+        // slot-claim to +60 was not enough on its own: an unclaimed SOUTH SIDE
+        // still scored 359 against OLIVE's 322, because a cocktail collects
+        // half a dozen other bonuses an ingredient never sees. The three cards
+        // a run cannot survive without have to be lifted, not the cocktail
+        // shaved — otherwise every future cocktail bonus quietly re-opens the
+        // same hole.
+        //
+        // The 30-50 minute window (1800-3000s) is where the user watches runs
+        // die: the tip window is closing, boss rings are widening, and a run
+        // that is short an orbit or short ult uptime has no way back. The boost
+        // roughly doubles there.
+        if (!atCap && SURVIVAL_CORE.includes(name)) {
+            const gtSc = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            const crunch = gtSc >= 1800 && gtSc <= 3000;
+            add(crunch ? 150 : 80, crunch ? 'survival-core-crunch' : 'survival-core');
         }
         // MOSCOW MULE: off the plan, never sought, but safe to eat when the
         // pool offers nothing better. Its key (GINGER BEER) is banned for good
@@ -3530,7 +3631,7 @@
             };
             if (type === 'weapon') {
                 if (!COCKTAILS.includes(name) || has(name)) return false;
-                return isMaxed(SUPER_KEY_INGREDIENT[name]);          // key already maxed: this completes it
+                return keyEffectivelyMaxed(SUPER_KEY_INGREDIENT[name]);   // key already maxed (or absorbed): this completes it
             }
             if (type === 'passive') {
                 for (const c of COCKTAILS) {
@@ -3557,6 +3658,37 @@
             // first place (user: block it when picking weapons/ingredients).
             if (nSupers >= CAP && (type === 'weapon' || type === 'passive') &&
                 opensNewSuperLine(type, name)) add(-500, 'gun-guard-source');
+            // v6.89.0 LATENT LINE — the MANHATTAN hole, closed.
+            // An off-plan cocktail whose super key is ALREADY satisfied (maxed,
+            // or maxed-then-absorbed by a craft) is not a gun risk that grows
+            // with picks: it is a sixth super line that needs nothing but
+            // levels in the cocktail itself. The guards above only fire at the
+            // cap or on the completing pick, both of which arrive too late —
+            // by then the slot is spent and the pool has narrowed. Refuse it at
+            // level ZERO, at any super count. Opening the line is the mistake;
+            // everything after it is just paying for the mistake.
+            //
+            // -600 at lv 0 sits below the rainbow ban's own -500s, so a pool
+            // offering nothing but latent lines still resolves rather than
+            // deadlocking; -400 once it is already owned keeps feeding it worse
+            // than eating junk, without pretending the slot can be un-spent.
+            if (type === 'weapon' && COCKTAILS.includes(name) && !PLAN_COCKTAILS.includes(name)) {
+                const lkey = SUPER_KEY_INGREDIENT[name];
+                const sl2 = (G.player && G.player.superLv) || {};
+                const k2 = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+                const already = Object.keys(sl2).some(s3 =>
+                    s3.toLowerCase().replace(/[^a-z0-9]/g, '') === k2 && sl2[s3] > 0);
+                if (lkey && !already && keyEffectivelyMaxed(lkey)) {
+                    add(lv === 0 ? -600 : -400, 'latent-line');
+                }
+            }
+            // v6.89.0 SLOT WASTERS (user: old fashioned / corpse reviver out of
+            // the junk pool). A cocktail slot is the lockout's currency; these
+            // two buy nothing with it.
+            if (type === 'weapon' && lv === 0 &&
+                SLOT_WASTERS.includes(name) && !PLAN_COCKTAILS.includes(name)) {
+                add(-300, 'slot-waster');
+            }
             // v6.87.2: the same refusal one step earlier and independent of the
             // count — a card that COMPLETES a line outside the planned five is
             // a sixth line by construction, because the roster only ever holds
@@ -3881,6 +4013,10 @@
         // Commit to a build the first time we take a cocktail.
         if (!primaryCocktail && COCKTAILS.includes(best.name)) primaryCocktail = best.name;
         ownedLevels[best.name] = Math.max(ownedLevels[best.name] || 0, (best.lv || 0) + 1);
+        // v6.89.0: remember a max BEFORE a craft can absorb it. This is the
+        // only moment the information exists — after fusion the half is gone
+        // from ownedLevels and every super-key guard would read it as level 0.
+        if (ownedLevels[best.name] >= (ownedMax[best.name] || best.cap || 6)) everMaxed.add(best.name);
         runPicks.push(best.name);
         runPickCounts[best.name] = (runPickCounts[best.name] || 0) + 1;
         runPickCtx.push({ name: best.name, x: pickContext() });   // LinUCB training example
@@ -4102,6 +4238,7 @@
         primaryCocktail = null;
         ownedLevels = {};
         ownedMax = {};
+        everMaxed = new Set();
         lastPoolSig = null;
         lastPoolRef = null;
         levelupStuckAt = 0;
