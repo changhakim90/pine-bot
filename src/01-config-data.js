@@ -431,6 +431,12 @@
                                   //   arena, and 0.12x would crush a sidestep that is only ever
                                   //   armed when a body is already on us. Not 1.0, because the
                                   //   corner still has to win the tie.
+            // v6.89.10: an invulnerability window may only switch off panic and
+            // flight while at least this many seconds of it remain. Below the
+            // threshold the bot is still untouchable (caution stays relaxed) but
+            // must keep the mechanisms that get it out of a crowd, so the window
+            // does not end with the bot stranded in the middle of one.
+            ultInvulnCommitS: 1.2,
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()

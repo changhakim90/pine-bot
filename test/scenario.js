@@ -2953,6 +2953,24 @@ if (which === 'minguk-invuln') {
                 'hpPanic ' + dropping.hpPanic + ' — panicking while untouchable'));
         test('...and stops fleeing during it', () =>
             assert.strictEqual(dropping.flight, false, 'flight ' + dropping.flight));
+        // v6.89.10 — A SHORT WINDOW MAY NOT SWITCH OFF THE ESCAPE MECHANISMS.
+        // 6.89.9 let any invulnerability turn hpPanic and flight off outright,
+        // and dayClearRate fell from ~0.80 to 0.41 with runs ending at 163-475 s:
+        // the bot walked into a crowd during 2.3 s of immunity and was stranded
+        // there when it lapsed. Caution still relaxes (nothing can hurt us); only
+        // a window with room left to disengage may drop the escape gates.
+        global.claseUlt = { t: 132, drop: 138, flashT: 0, dmgDone: false };   // 0.1 s left
+        const expiring = field();
+        test('an EXPIRING window is still invulnerable', () =>
+            assert.strictEqual(expiring.ultInvuln, true, String(expiring.ultInvuln)));
+        test('...but no longer suppresses panic — the escape must already be underway', () =>
+            assert.strictEqual(expiring.hpPanic, true,
+                'hpPanic ' + expiring.hpPanic + ' — 0.1s of immunity is not room to commit'));
+        test('a FRESH window still suppresses it, which is when committing is safe', () => {
+            global.claseUlt = { t: 0, drop: 138, flashT: 0, dmgDone: false };   // 2.3 s left
+            const fresh = field();
+            assert.strictEqual(fresh.hpPanic, false, 'hpPanic ' + fresh.hpPanic);
+        });
         // ...and it ends when the object goes away, not on a timestamp.
         global.claseUlt = null;
         const after = field();

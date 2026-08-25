@@ -722,10 +722,46 @@
         // so for minguk the bot played its most frightened posture — panicking,
         // fleeing, and (before 6.89.8) dashing — through the single safest
         // 2.3 seconds of the entire run, every single time.
+        // v6.89.10 INVULNERABILITY IS NOT A LICENCE TO OVER-COMMIT. 6.89.9 gave
+        // minguk his real `claseUlt` window and `dayClearRate` promptly fell
+        // from ~0.80 (n=65 and n=37 rows) to 0.41 at n=22, with runs ending at
+        // 163-475 s. A live probe ruled out the obvious cause — `claseUlt` was
+        // null 44 s after a cast, so the flag is not sticking.
+        //
+        // What is left is the shape of the relaxation. `ultInvuln` switched off
+        // `hpPanic` and `flight` outright, and those are the two mechanisms that
+        // get the bot OUT of a crowd. Through a 2.3 s window the bot therefore
+        // walks in, and when the window closes it is standing in the middle of
+        // the field with no escape underway. In the day, before OLIVE reaches
+        // the 4 levels that floor contact damage, that is fatal in about four
+        // seconds.
+        //
+        // Note this was never minguk-specific: pat's 2.83 s spiral had exactly
+        // the same problem. 6.89.9 did not introduce the behaviour, it extended
+        // it to the character actually being run, which is what made it visible.
+        //
+        // So: any invulnerability still relaxes CAUTION — nothing can hurt us,
+        // and playing scared inside the window wastes it. But only a window with
+        // room left to disengage may switch off panic and flight. Joe's 12 s
+        // qualifies for almost its whole duration; pat's and minguk's ~2.3-2.8 s
+        // qualify only at the start, which is exactly when committing is safe.
         const gtInv = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
-            (safe(() => player.ultSpiralUntil, 0) > gtInv) ||
-            !!safe(() => claseUlt, null);
+        const claseNow = safe(() => claseUlt, null);
+        let ultInvulnLeft = 0;
+        const uuInv = safe(() => player.ultUntil, 0), usInv = safe(() => player.ultSpiralUntil, 0);
+        if (uuInv > gtInv) ultInvulnLeft = Math.max(ultInvulnLeft, uuInv - gtInv);
+        if (usInv > gtInv) ultInvulnLeft = Math.max(ultInvulnLeft, usInv - gtInv);
+        if (claseNow) {
+            // claseUlt carries frames, not a timestamp: { t, drop, flashT }.
+            // Past the drop it is in the white-flash phase, whose length we have
+            // not read — assume little is left rather than much.
+            const dropLeft = (typeof claseNow.drop === 'number' && typeof claseNow.t === 'number')
+                ? Math.max(0, (claseNow.drop - claseNow.t) / 60) : 0.3;
+            ultInvulnLeft = Math.max(ultInvulnLeft, dropLeft);
+        }
+        const ultInvuln = ultInvulnLeft > 0 || !!claseNow;
+        const ultInvulnSafe = ultInvulnLeft >=
+            (M.ultInvulnCommitS != null ? M.ultInvulnCommitS : 1.2);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';
         // v6.86.4: how close the ultimate is — the whole passout economy keys
         // off this (see CONFIG.movement.ultHarvestLeadS).
@@ -880,7 +916,7 @@
         // runner it delays the one reflex that keeps him alive, so the
         // softening now follows anchorBias with the rest of the tank posture.
         const panicArmor = charOf().anchorBias > 0 ? (1 - 0.5 * armorConf) : 1;
-        const hpPanic = !ultInvuln && hpRatio < M.panicHp * charOf().panicMul * panicArmor * (1 + 0.25 * late);
+        const hpPanic = !ultInvulnSafe && hpRatio < M.panicHp * charOf().panicMul * panicArmor * (1 + 0.25 * late);
         // USER: NEGRONI + OLIVE make mob rushes survivable — every 3 combined
         // defense levels raise the crowd threshold by 1, so an armored bot
         // keeps farming bosses/passouts/walls through a rush instead of
@@ -1182,7 +1218,7 @@
         // invulnerable ult window were bought for. He commits at 6; minguk,
         // whose doctrine IS outrunning, keeps the historical 4.
         const fleeNear = charOf().fleeNear || 4;
-        const flight = hellDetected && !pauseActive && unkillable && th.near >= fleeNear && !ultInvuln;
+        const flight = hellDetected && !pauseActive && unkillable && th.near >= fleeNear && !ultInvulnSafe;
         flightRef.v = flight;
         // v6.85.20 (user): "the deep hell poison kill should be from the mobs
         // ... keep dashing away and ultimate until the bot can get timestop
