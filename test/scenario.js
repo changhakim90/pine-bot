@@ -1401,23 +1401,35 @@ if (which === 'roster-cap') {
         pineBot.test.computeRoadmap();
         return pineBot.test.roadmap();
     };
-    const pat = roster('pat'), mg = roster('minguk');
-    test('the two characters build different rosters', () =>
-        assert.notDeepStrictEqual(pat.cocktails, mg.cocktails));
-    test('but they share the core that both need', () => {
-        for (const c of ['SOUTH SIDE', 'NEGRONI'])
-            assert.ok(pat.cocktails.includes(c) && mg.cocktails.includes(c), c);
-        for (const i of ['MINT', 'OLIVE', 'CAMPARI'])
-            assert.ok(pat.ingredients.includes(i) && mg.ingredients.includes(i), i);
+    // v6.88.2 (user): "joe and pat have the items from this run and have the
+    // same setup running into deep hell mode". 6.87.0 split the roster per
+    // character; this test used to ASSERT that split. The split was about the
+    // day, but the deep game all three are trying to reach is identical — and
+    // it is the deep game the crown lives in. What converges is the BUILD;
+    // posture (kiteMul / anchorBias / panicMul / ultKind) stays per character
+    // and is guarded by `char-posture`.
+    const pat = roster('pat'), mg = roster('minguk'), joe = roster('joe');
+    test('all three characters build the SAME roster', () => {
+        assert.deepStrictEqual(pat.cocktails, mg.cocktails, 'pat vs minguk');
+        assert.deepStrictEqual(joe.cocktails, mg.cocktails, 'joe vs minguk');
+        assert.deepStrictEqual(pat.ingredients, mg.ingredients, 'pat vs minguk ingredients');
+        assert.deepStrictEqual(joe.ingredients, mg.ingredients, 'joe vs minguk ingredients');
     });
-    test('pat can finally reach VODKA MARTINI, his DPS super', () =>
-        assert.ok(pat.cocktails.includes('VODKA MARTINI') && pat.ingredients.includes('DRY VERMOUTH'),
-            pat.cocktails.join(',')));
-    test('minguk keeps the stall roster that competed for the crown', () =>
-        assert.ok(mg.cocktails.includes('VODKA TONIC') && mg.cocktails.includes('GIN TONIC'),
-            mg.cocktails.join(',')));
-    test('pat pays nothing for TONIC lines a tank cannot exploit', () =>
-        assert.ok(!pat.ingredients.includes('TONIC'), pat.ingredients.join(',')));
+    test('it is the stall roster that competed for the crown', () => {
+        for (const c of ['SOUTH SIDE', 'NEGRONI', 'VODKA TONIC', 'GIN TONIC'])
+            assert.ok(pat.cocktails.includes(c), c + ' missing: ' + pat.cocktails.join(','));
+    });
+    test('VODKA CRANBERRY replaces MOSCOW MULE', () => {
+        assert.ok(pat.cocktails.includes('VODKA CRANBERRY'), pat.cocktails.join(','));
+        assert.ok(!pat.cocktails.includes('MOSCOW MULE'), pat.cocktails.join(','));
+    });
+    test('and its super key rides in the plan, where the mule\'s did not', () => {
+        assert.ok(pat.ingredients.includes('CRANBERRY'), pat.ingredients.join(','));
+        assert.ok(!pat.ingredients.includes('GINGER BEER'), pat.ingredients.join(','));
+    });
+    test('WATER is planned — regen, and half of SIMPLE SYRUP', () =>
+        assert.ok(pat.ingredients.includes('WATER') && pat.ingredients.includes('SUGAR'),
+            pat.ingredients.join(',')));
     // THE STRUCTURAL GUN BAN: count supers this roster could ever complete.
     // A super needs its cocktail AND its key ingredient in the plan, and the
     // key must not be permanently banned (LEMON / ORANGE never unban;
@@ -1427,13 +1439,16 @@ if (which === 'roster-cap') {
         const key = pineBot.test.superKey(c);
         return key && !NEVER.has(key) && (r.ingredients.includes(key) || key === 'GINGER BEER');
     });
-    const patN = completable(pat), mgN = completable(mg);
-    test('pat can complete at most five supers — never the six-super gate', () =>
+    const patN = completable(pat), mgN = completable(mg), joeN = completable(joe);
+    test('the shared roster completes at most five supers — never the six-super gate', () =>
         assert.ok(patN.length <= 5, patN.length + ': ' + patN.join(',')));
-    test('minguk likewise', () =>
-        assert.ok(mgN.length <= 5, mgN.length + ': ' + mgN.join(',')));
-    test('both rosters actually reach five, not fewer', () =>
-        assert.ok(patN.length === 5 && mgN.length === 5, patN.length + ' / ' + mgN.length));
+    test('adding WATER and SUGAR opened no new super line', () => {
+        // WHISKEY HIGHBALL (WATER) and MOJITO (SUGAR) are both off-roster
+        assert.ok(!patN.includes('WHISKEY HIGHBALL') && !patN.includes('MOJITO'), patN.join(','));
+    });
+    test('and it still reaches five, not fewer', () =>
+        assert.ok(patN.length === 5 && mgN.length === 5 && joeN.length === 5,
+            patN.length + ' / ' + mgN.length + ' / ' + joeN.length));
     done();
 }
 
@@ -1921,4 +1936,117 @@ if (which === 'chrome-veto') {
 }
 
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.88.2 — DEEP-DEEP POSTURE (user: apply past ~150 min, all characters).
+// Boss drop-marks spawn uniformly in [52,W-52]x[62,H-62] and are never aimed;
+// the true corner is 80.9 px from the nearest possible centre against a ~70 px
+// reach. Marks are 21-47% of deaths and hit for 35-40% of MAX HP.
+if (which === 'corner-anchor') {
+    const { pineBot } = makeEnv({
+        script: SCRIPT, frames: 40,
+        game: { state: 'playing', gameTime: 9600, hell: true }
+    });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    // THE DISCRIMINATOR. The first draft of this test put the player at the
+    // centre with one enemy at (320,320) and asserted "moves cornerward" —
+    // which FLEEING that enemy also produces, so it passed with the corner
+    // pull deleted. Place the player near the BOTTOM-RIGHT corner with the
+    // threat BEYOND it, so fleeing and cornering point in opposite directions:
+    // only the corner pull can produce a down-right step.
+    const place = (gt) => {
+        global.gameTime = gt;
+        global.player.x = 400; global.player.y = 400;
+        global.player.hp = 120; global.player.maxHp = 120;
+        // bombers, not drunks: the planner FLEES these, so the baseline step
+        // from this position is away from the corner
+        global.enemies = Array.from({ length: 6 }, (_, i) => ({
+            x: 498 + (i % 3) * 14, y: 498 + Math.floor(i / 3) * 14,
+            r: 18, hp: 1e6, type: 'bomber'
+        }));
+        return T.planMove();
+    };
+    const deep = place(9600);
+    test('past 150 min the corner anchor engages', () =>
+        assert.strictEqual(deep && deep.cornerAnchor, true, JSON.stringify(deep && deep.cornerAnchor)));
+    test('and it moves TOWARD the corner even though that closes on the threat', () =>
+        assert.ok(deep.dx > 0 && deep.dy > 0,
+            'dx ' + deep.dx.toFixed(2) + ' dy ' + deep.dy.toFixed(2) + ' — fleeing would be negative'));
+    test('so the step shortens the distance to the corner', () => {
+        const cd = (x, y) => Math.hypot(Math.min(x, 540 - x), Math.min(y, 540 - y));
+        assert.ok(cd(400 + deep.dx * 40, 400 + deep.dy * 40) < cd(400, 400));
+    });
+    // ...and before the threshold the SAME field flees instead: the day and
+    // early hell are untouched.
+    const early = place(3000);
+    test('before 150 min it does not engage', () =>
+        assert.strictEqual(early && early.cornerAnchor, false, String(early && early.cornerAnchor)));
+    test('and the same field then produces a step AWAY from the threat', () =>
+        assert.ok(early.dx < 0 || early.dy < 0,
+            'dx ' + early.dx.toFixed(2) + ' dy ' + early.dy.toFixed(2)));
+    done();
+}
+
+
+if (which === 'mark-escape') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1400, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const mintScore = ch => {
+        T.setChar(ch);
+        return T.scoreCard({ n: 'MINT', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+    };
+    const pat = mintScore('pat'), minguk = mintScore('minguk'), joe = mintScore('joe');
+    const tax = r => { const m = /mark-escape\+?(\d+)/.exec(r.why); return m ? +m[1] : 0; };
+    test('pat gets a mark-escape bonus on MINT', () =>
+        assert.ok(tax(pat) > 0, pat.why));
+    test('minguk does not — 85.5 px already clears 70', () =>
+        assert.strictEqual(tax(minguk), 0, minguk.why));
+    test('joe does not either — 108 px', () =>
+        assert.strictEqual(tax(joe), 0, joe.why));
+    test('so MINT scores strictly higher for pat than for the runners', () =>
+        assert.ok(pat.score > minguk.score && pat.score > joe.score,
+            'pat ' + pat.score + ' minguk ' + minguk.score + ' joe ' + joe.score));
+    done();
+}
+
+
+// v6.88.2 — the compare() verdict must name WHICH side is thin. A row with
+// n=47 was printing "UNDERPOWERED (n<20)" because its BASELINE had n=8.
+if (which === 'underpowered-label') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    // times must VARY or sd is 0, seTimeS is 0, and z is never computed at all
+    const row = (n, t) => {
+        const times = Array.from({ length: n }, (_, i) => t + (i % 7) * 40 - 120);
+        return { n, sumT: times.reduce((a, b) => a + b, 0),
+            sumT2: times.reduce((a, b) => a + b * b, 0), bestT: Math.max(...times),
+            sumR: n, sumD: 0, sumS: 0, hell: n, day: n, sumSupers: n,
+            deaths: {}, times, over60: 0, over120: 0 };
+    };
+    const L = pineBot.learn();
+    L.snapshots = [];
+    // baseline is THIN (n=8); the row under test is WELL SUPPORTED (n=47)
+    L.versions = { 'A+crown': row(8, 1000), 'B+crown': row(47, 1200) };
+    const rows = T.versionRows();
+    const fat = rows.find(r => r.version === 'B+crown');
+    test('the well-supported row is not blamed for the thin sample', () =>
+        assert.ok(!/this row/.test(fat.vsPrev.verdict), fat.vsPrev.verdict));
+    test('the verdict names the thin BASELINE instead', () =>
+        assert.ok(/BASELINE A\+crown/.test(fat.vsPrev.verdict), fat.vsPrev.verdict));
+    test('and it reports the real n, not a bare threshold', () =>
+        assert.ok(/n=8/.test(fat.vsPrev.verdict), fat.vsPrev.verdict));
+    test('it still refuses to call the z evidence', () =>
+        assert.ok(/not evidence/.test(fat.vsPrev.verdict), fat.vsPrev.verdict));
+    // and when the row ITSELF is thin, it says so
+    L.versions = { 'A+crown': row(47, 1000), 'B+crown': row(8, 1200) };
+    const thin = T.versionRows().find(r => r.version === 'B+crown');
+    test('a genuinely thin row is labelled as this row', () =>
+        assert.ok(/this row, n=8/.test(thin.vsPrev.verdict), thin.vsPrev.verdict));
+    done();
+}
+
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

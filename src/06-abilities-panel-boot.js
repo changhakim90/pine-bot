@@ -136,9 +136,36 @@
         const gtU = typeof G.gameTime === 'number' ? G.gameTime : 0;
         let ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
         if (poClose) ultGate = Math.min(ultGate, 900);
+        // v6.88.2 ULT CHAIN — the deep-hell engine, measured off manual demo #5
+        // (178:19 -> 244:04, 9001 samples): hpMedian 100 with 234 enemies inside
+        // 90 px, held by 2174 casts / 3945 s = one every 1.81 s against pat's
+        // 2.834 s invulnerability window. The windows overlap and never lapse.
+        //
+        // The trigger for this already existed (`ultSpam`, past 80 min). The
+        // limiter is this RETRY GATE: asking every 2500 ms is LONGER than the
+        // window itself, and each time the retry misses the edge of the game's
+        // real cooldown the chain opens for another 2.5 s. `callGame` is a
+        // no-op while the real cooldown runs, so a tight retry costs nothing.
+        // Only the two invulnerability ults qualify — minguk's nuke grants no
+        // invulnerability at all, and its damage (1e7*2.5^(lv-1) = 9.8e8 at
+        // Lv6) falls behind enemy HP (x1.4/180 s) at about 100 minutes, so
+        // chaining it would burn the retry budget for nothing.
+        // v6.88.2 (user): applied to ALL characters past the deep-deep
+        // threshold, not only the two invulnerability ults. For spray/aura it
+        // is load-bearing — the window is the only thing that stops the
+        // contact loop. For minguk's nuke it is close to a no-op down here
+        // (1e7*2.5^5 = 9.8e8 against enemy HP that passes it around 100 min,
+        // and no invulnerability at all), but callGame is a no-op while the
+        // real cooldown runs, so a tight retry costs nothing and keeps the
+        // rule uniform.
+        const invulnUlt = CH.ultKind === 'spray' || CH.ultKind === 'aura';
+        const DH = CONFIG.deepHell;
+        const ultChain = hellDetected && gtU > (DH.ultChainFromS || 9000);
+        if (ultChain) ultGate = Math.min(ultGate, DH.ultChainGateMs || 300);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
-                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt)) {
+                defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
+                ultChain)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
             lastUlt = now;
             callGame('useUltimate');
             poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
@@ -590,6 +617,17 @@
             },
             posture: {
                 flameShare: +(S.reduce((n, s) => n + (s.fx || 0), 0) / S.length).toFixed(3),
+                // v6.88.2 — the two numbers that would have prevented this
+                // session's two wrong conclusions. invulnShare is measured
+                // invulnerability, not `useUltimate` call count. cornerDist is
+                // distance to the nearest arena corner: p25/median/p75, so the
+                // corner posture can be read off a demo instead of a screenshot.
+                invulnShare: +(S.reduce((n, s) => n + (s.inv || 0), 0) / S.length).toFixed(3),
+                cornerDist: {
+                    p25: pct(S.map(s => s.cnr).filter(v => v != null), 0.25),
+                    median: pct(S.map(s => s.cnr).filter(v => v != null), 0.5),
+                    p75: pct(S.map(s => s.cnr).filter(v => v != null), 0.75)
+                },
                 hpP10: pct(S.map(s => s.hp), 0.1), hpMedian: pct(S.map(s => s.hp), 0.5),
                 hpMedianWhenCrowded: pct(hurt, 0.5), crowdedSamples: hurt.length,
                 crowdP75: pct(S.map(s => s.near), 0.75), crowdMax: Math.max(...S.map(s => s.near || 0)),
@@ -632,7 +670,21 @@
             if (typeof e.hp === 'number' && ty !== 'boss' && ty !== 'passout') { hpSum += e.hp; hpN++; }
             if (dd < 90) near++;
         }
+        // v6.88.2: two measurements the digest could never make. `cnr` is the
+        // distance to the nearest arena corner — the corner hypothesis was
+        // argued from geometry and a screenshot because x/y were recorded but
+        // never summarised. `inv` is real invulnerability, which is how we
+        // learned that 2174 logged `ults` were CALLS (most rejected) against a
+        // 53.3 s cooldown, not casts.
+        const fW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+        const fH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
+        const gtD = safe(() => gameTime, 0) || 0;
+        const cnr = Math.round(Math.hypot(Math.min(p.x, fW - p.x), Math.min(p.y, fH - p.y)));
+        const inv = ((typeof p.ultSpiralUntil === 'number' && p.ultSpiralUntil > gtD) ||
+                     (typeof p.ultUntil === 'number' && p.ultUntil > gtD) ||
+                     (typeof p.invuln === 'number' && p.invuln > 0)) ? 1 : 0;
         demoRec.samples.push({
+            cnr, inv,
             t: Date.now() - demoRec.at, gt: Math.round(safe(() => gameTime, 0) || 0),
             x: Math.round(p.x), y: Math.round(p.y),
             hp: Math.round(100 * (p.hp / (p.maxHp || 1))),

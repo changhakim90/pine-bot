@@ -752,6 +752,16 @@
         if (!atCap && /SOUTH\s*SIDE/i.test(name)) add(40, 'absolute-priority');
         if (!atCap && name === 'MINT') {
             add(24, 'absolute-priority');
+            // v6.88.2 MARK ESCAPE (see MARK_CLEAR_PX in 01): a character whose
+            // base speed cannot clear a 0.6 s / 70 px mark is buying survival
+            // here, not mobility. Pat is 1.6 px short per frame; the runners
+            // already clear it and get nothing. Scaled by how short they are,
+            // so the rule stays honest if the character table ever changes.
+            const spd = charOf().speed || 2.4;
+            const shortfall = Math.max(0, MARK_CLEAR_PX - spd * MARK_TELE_FRAMES);
+            if (shortfall > 0) {
+                add(Math.min(30, Math.round(shortfall * 1.6)) + (hellDetected ? 8 : 0), 'mark-escape');
+            }
             // CROWN RULES (6.74): SOUTH SIDE finished and only MINT stands
             // between us and its super — the single most valuable ingredient
             // state in the build.

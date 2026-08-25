@@ -220,8 +220,8 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE', 'COSMOPOLITAN'],
-            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR']
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
+            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
         },
 
         // v6.87.0 PER-CHARACTER ROADMAPS (user: "they should have had
@@ -252,35 +252,45 @@
         // TONIC; LEMON and ORANGE are permanently banned; GINGER BEER unbans
         // only in hell). Both rosters below sit at five. The `roster-cap`
         // test asserts it, so a future addition cannot quietly open the gate.
+        // v6.88.2 (user): "fix the day phase so joe and pat have the items
+        // from this run and have the same setup running into deep hell mode".
+        //
+        // 6.87.0 split the roster per character on the reasoning that a tank
+        // and a runner want different builds. That reasoning was about the DAY,
+        // where the characters really do play differently — but the deep game
+        // they are all trying to reach is identical, and it is the deep game
+        // the crown lives in. Splitting the roster meant pat and joe arrived at
+        // minute 150 holding a different build from the one the deep posture
+        // was designed around, and from the one the human's 244-minute run was
+        // actually holding.
+        //
+        // So: ONE roster for all three. Posture stays per character (kiteMul,
+        // anchorBias, panicMul, ultKind and the kite/flee counts are separately
+        // justified and unchanged) — what converges is the BUILD.
+        //
+        // WATER is added for two reasons that compound: it is the regen
+        // ingredient (regenBonus, measured at 2.22 HP/s live — worth 81 levels
+        // of pat's character scaling), and it is half of WATER + SUGAR ->
+        // SIMPLE SYRUP. applyCraft keeps materials at full level with their
+        // stats still applying and only frees the slot count, so WATER ends up
+        // costing nothing at all.
+        //
+        // Super-line count is unchanged: WATER's cocktail is WHISKEY HIGHBALL
+        // and SUGAR's is MOJITO, neither of which is on the roster, so neither
+        // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
-            // PAT — tank, 180 HP, 72 dmg with 38 splash, no pierce, and a
-            // MELEE spray ult. Every pick either keeps him standing or feeds
-            // the ultimate, and each ingredient double-dips as a super key:
-            //   MINT          -> SUPER SOUTH SIDE   (holdouts, paused bosses)
-            //   CAMPARI       -> SUPER NEGRONI      (mitigation)
-            //   OLIVE         -> SUPER DRY MARTINI  (armour double-dip, and
-            //                    the slowing orbit suits a bot that plants)
-            //   TOMATO JUICE  -> SUPER BLOODY MARY  (ult cadence double-dip:
-            //                    demo 1 took it 4x and cast every 75s vs 98s)
-            //   DRY VERMOUTH  -> SUPER VODKA MARTINI (the DPS super, and it
-            //                    pairs with SWEET VERMOUTH -> BLACK VERMOUTH,
-            //                    a craft that frees an ingredient slot)
-            // Five keys, five completable supers, nothing wasted on TONIC
-            // lines a tank cannot exploit.
             pat: {
-                cocktails: ['SOUTH SIDE', 'NEGRONI', 'VODKA MARTINI', 'DRY MARTINI', 'BLOODY MARY'],
-                ingredients: ['MINT', 'CAMPARI', 'OLIVE', 'TOMATO JUICE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'CRANBERRY']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
             },
-            // MINGUK — runner, 120 HP, 2.375 speed, and a NUKE ult that hits
-            // every enemy at any range. He does not need to reach anything,
-            // so his plan buys time instead of damage: the stall roster,
-            // unchanged from the build that competed for the crown.
+            joe: {
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+            },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
             }
-            // joe has no roster of his own — he is out of the rotation, and
-            // falls through to userRoadmap if he is ever put back in.
         },
 
         // ROSTER EXPERIMENT — CONCLUDED. The prescribed build won the bandit
@@ -438,7 +448,42 @@
             dashGateMs: 420,       // dash rate limit at depth (base 650 in hell)
             ultOnContact: true,    // contact imminent + ult ready = fire (invincibility eats the hit)
             markPadMul: 1.5,       // v6.84.0: telegraphed-blast avoidance radius at depth
-            markWeightMul: 1.4     // v6.84.0: and how hard those blasts are weighted
+            markWeightMul: 1.4,    // v6.84.0: and how hard those blasts are weighted
+            // v6.88.2 ULT RETRY (corrected). Manual demo #5 logged 2174
+            // `useUltimate` calls in 3945 s and I read that as a cast every
+            // 1.81 s — i.e. continuous invulnerability. It is not. Read live
+            // from the page: ULT_CD is 80 s ("필살기: 80초 쿨타임"), scaled by
+            // player.ultCdMul (0.6667 observed) = a real 53.3 s cooldown, and
+            // ultReadyAt - ultSpiralUntil measured 50.5 s. The recorder wraps
+            // useUltimate and logs REJECTED calls too, so 2174 is button
+            // presses; roughly 74 casts actually landed. Invuln uptime is
+            // ~5.3%, not 100%, and it is NOT what keeps the human alive.
+            //
+            // What remains true: the retry gate should not add latency on top
+            // of a 53 s cooldown. At 2500 ms the bot casts on average 1.25 s
+            // late every cycle; at 300 ms, 0.15 s. That is a ~2% gain in casts,
+            // not a strategy. Kept because it is free and correct, not because
+            // it is the lever.
+            //
+            // THE ACTUAL LEVER is ultCdMul. It is the only term that changes
+            // how often the window is available at all, and it is already at
+            // 0.6667 in a live deep run — find what drives it (TOMATO JUICE is
+            // tagged 'ult' and is the prime suspect) before tuning anything
+            // else about the ultimate.
+            ultChainFromS: 9000,   // 150 min (user): the deep-deep posture threshold
+            ultChainGateMs: 300,   // retry cadence once deep (was 2500)
+            // CORNER ANCHOR (user, deliberate strategy in demo #5). Boss
+            // drop-marks spawn UNIFORMLY at random inside [52, W-52] x
+            // [62, H-62] and are never aimed; damage is player.maxHp*0.40
+            // ('again', r58, 0.6 s telegraph) and *0.35 ('selfie', r52). Being
+            // a % of max HP, no amount of HP or armour defends against them —
+            // only position does. At the true arena corner the nearest possible
+            // mark CENTRE is 80.9 px away against a ~70 px reach: geometrically
+            // immune, versus ~8.5% per mark in open field. Marks are 21-31% of
+            // all deaths.
+            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters
+            cornerPull: 2.4            // weight on closing to the nearest corner
+
         },
 
         abilities: {
@@ -723,8 +768,24 @@
     // RE-DERIVED every run by computeRoadmap() from live build statistics:
     // measured win-rate first, shared super-keys and cheap craft pairs as
     // tiebreakers. The plan itself keeps learning.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE', 'COSMOPOLITAN'];
-    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR'];
+    // v6.88.2 ROSTER (user): VODKA CRANBERRY replaces MOSCOW MULE. Both are
+    // the same lipstick-whip archetype and share the lifesteal line verbatim
+    // (steal = 1.356 * min(0.5, 0.2+(lv-1)*0.06), healBudget 2.71/projectile),
+    // but read side by side in fireCocktail the cranberry wins every axis:
+    //   damage    110*P  vs  66*P
+    //   knockback 1.0    vs  0.7   ("★넉백 -30%" in the mule's own comment)
+    //   control   cFreeze 45  vs  cSlow 40
+    // The mule's only edge is projectile speed (outSp 9 vs 8). It also fits the
+    // plan better: the cranberry's super key is CRANBERRY, already in the
+    // ingredient list, where the mule's is GINGER BEER, which is not.
+    // CAVEAT, recorded honestly: the 4400-run table does NOT show this. MOSCOW
+    // MULE is primary in more deep runs (15210, 14940, 14040) than VODKA
+    // CRANBERRY (15348, 5753). That is confounded — knockback-to-6 boosts the
+    // mule, so the bot picks it more often — but the source numbers are the
+    // only evidence on the cranberry's side. Judge on mark/contact death share
+    // and p60, and be ready to revert.
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'];
+    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
     // from the priority roadmap ("ignore ... unless no other ingredients in
@@ -1094,6 +1155,19 @@
     // itself. An observed run spent 24 s cycling settings -> book -> STAFF ->
     // ITEMS -> CLOSE with a LEVEL UP sitting unanswered behind them. None of
     // these has ever advanced a stuck state.
+    // v6.88.2 MARK ESCAPE. The 'again' drop-mark telegraphs for 0.6 s = 36
+    // frames and lands with r 58; clearing it from dead centre needs about
+    // 58 + player.r ~= 70 px of travel. That is a pure speed check, and it is
+    // the reason the death tables split by character: PAT covers 1.9 * 36 =
+    // 68.4 px and MISSES BY TWO PIXELS, while minguk makes 85.5 and joe 108.
+    // Marks are 32-47% of pat's deaths across four rows (and his #1 cause in
+    // three of them) versus 18-22% for minguk. MINT takes pat to 2.73 * 36 =
+    // 98 px, i.e. it converts an undodgeable hit worth 40% of MAX HP into a
+    // dodgeable one. For pat MINT is a survival stat, not a mobility perk;
+    // for the two runners it is already redundant on this axis, so the bonus
+    // is computed from the character's own speed rather than granted flat.
+    const MARK_TELE_FRAMES = 36;   // 0.6 s at 60 fps ('again' is the tightest)
+    const MARK_CLEAR_PX = 70;      // r 58 + player radius ~12
     const CHROME_CTRL = /^(save|settings|options|close|recipes?|mobs?|staff|items|drinks|book|index|music|sfx|sound|mute|pause|resume|quit|exit|menu|credits|help|language|한국어|english)\b|^[⚙📖⏸⏯🔇🔊🔈✕✖×☰❓]/i;
     let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never

@@ -1040,6 +1040,28 @@
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
             ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
+        // v6.88.2 CORNER ANCHOR — deliberate user strategy in deep hell, and
+        // the source says why it works. Boss drop-marks spawn UNIFORMLY at
+        // random inside [52, W-52] x [62, H-62] and are never aimed at the
+        // player; their damage is player.maxHp*0.40 ('again') / *0.35
+        // ('selfie'), so being a PERCENTAGE of max HP no amount of HP, armour
+        // or regen defends against them — only standing somewhere they cannot
+        // spawn does. At the true arena corner the nearest possible mark CENTRE
+        // is 80.9 px away against a ~70 px reach: geometrically immune, versus
+        // ~8.5% per mark in open field. Marks are 21-31% of all deaths.
+        // Danger terms (marks, lanes, contact) still outrank this pull, so the
+        // bot leaves the corner when something is actually landing on it.
+        const gtCorner = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        // NOTE: deliberately NOT gated on hellDetected. 150 minutes can only
+        // be hell, and if the latch was missed (a stray results-screen click,
+        // a reload mid-run) the posture that matters most must still engage.
+        const cornerOn = !hpPanic && !markHere && !flight &&
+            gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000);
+        const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+        const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
+        const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
+        const cnrX = (p.x < fieldW / 2) ? pr : fieldW - pr;
+        const cnrY = (p.y < fieldH / 2) ? pr : fieldH - pr;
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
         // no-booking walls — a CR-only build farms both at base-attack speed,
         // so the detour incentive is cut for each. (Hoisted out of the
@@ -1618,7 +1640,17 @@
             if (th.enemies.length && !panic) {
                 const errNow = Math.abs(Math.hypot(p.x - cx, p.y - cy) - standoffAdj);
                 const errNew = Math.abs(Math.hypot(nx - cx, ny - cy) - standoffAdj);
-                gain += M.standoffPull * (errNow - errNew) * 0.28 * (anchor ? 0.4 : 1);   // anchored: the ring wins
+                // v6.88.2: past the corner-anchor threshold the standoff ring
+                // is the thing being overridden — holding a mark-proof corner
+                // beats holding a firing distance from a crowd that cannot be
+                // outrun anyway (mobs pass the player's speed at ~11 minutes).
+                gain += M.standoffPull * (errNow - errNew) * 0.28 * (anchor ? 0.4 : 1) * (cornerOn ? 0.25 : 1);
+            }
+            // v6.88.2 CORNER ANCHOR pull (see the derivation above).
+            if (cornerOn) {
+                const cNow = Math.hypot(p.x - cnrX, p.y - cnrY);
+                const cNew = Math.hypot(nx - cnrX, ny - cnrY);
+                gain += (CONFIG.deepHell.cornerPull || 2.4) * (cNow - cNew) * 0.5;
             }
 
             // TIME-STOP STACKING — DEMO-CORRECTED (81-min manual stall run:
@@ -1740,7 +1772,7 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

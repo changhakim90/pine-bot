@@ -323,8 +323,18 @@
                     hellRate: (fin(r.hellRate) && fin(prev.hellRate)) ? +(r.hellRate - prev.hellRate).toFixed(2) : null,
                     p60: (fin(r.p60) && fin(prev.p60)) ? +(r.p60 - prev.p60).toFixed(2) : null,
                     z, verdict: z == null ? 'insufficient data'
+                        // v6.88.2: name WHICH side is thin. The old label said
+                        // "n<20" on rows with n=47 because the row they were
+                        // being compared against was the underpowered one, so
+                        // the table reported a well-supported row as weak.
                         : (r.underpowered || prev.underpowered)
-                            ? 'UNDERPOWERED (n<' + CONFIG.learning.minMeaningfulRuns + ') — z is not evidence'
+                            ? 'UNDERPOWERED (' +
+                              (r.underpowered && prev.underpowered
+                                  ? 'both rows, n=' + r.runs + ' vs ' + prev.runs
+                                  : r.underpowered
+                                      ? 'this row, n=' + r.runs
+                                      : 'BASELINE ' + prev.version + ', n=' + prev.runs) +
+                              ' < ' + CONFIG.learning.minMeaningfulRuns + ') — z is not evidence'
                             : (Math.abs(z) < 2 ? 'noise (|z|<2)' : (z > 0 ? 'better (z>=2)' : 'worse (z<=-2)'))
                 };
             }
