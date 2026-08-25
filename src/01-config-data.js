@@ -220,8 +220,8 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
         // v6.87.0 PER-CHARACTER ROADMAPS (user: "they should have had
@@ -252,7 +252,54 @@
         // TONIC; LEMON and ORANGE are permanently banned; GINGER BEER unbans
         // only in hell). Both rosters below sit at five. The `roster-cap`
         // test asserts it, so a future addition cannot quietly open the gate.
-        // v6.88.2 (user): "fix the day phase so joe and pat have the items
+        // v6.88.3b (user): "the build roster can now have 4 super cocktails
+    // assuming southside is still on it". FOUR lines, and they are exactly the
+    // four the 373-minute run finished with:
+    //   SOUTH SIDE->MINT   VODKA TONIC->TONIC   GIN TONIC->TONIC   MOJITO->SUGAR
+    // Three keys cover four lines because TONIC is shared.
+    //
+    // "whisky sour, negroni, vodka cranberry should be massively boosted
+    // despite not having super key" — these three ride at Lv6 as plain
+    // cocktails and earn their slot on raw effect, so CRANBERRY leaves the
+    // ingredient plan deliberately: keeping it would make VODKA CRANBERRY a
+    // FIFTH super line and re-open the gun gate. NEGRONI has no CAMPARI and
+    // WHISKY SOUR's LEMON never unbans, so both are already keyless by
+    // construction; the cranberry now joins them on purpose.
+    //
+    // COSMOPOLITAN dropped: its key is ORANGE (permanently banned), it never
+    // appeared in the 373-minute build, and a cocktail that can neither super
+    // nor earn a boost is just a spent slot.
+    // v6.88.3 ROSTER — corrected against a LIVE 373-MINUTE PAT RUN (gt 22402,
+    // 121 minutes past the 252:30 crown, 441/441 HP). Read straight off the
+    // player object rather than argued from source:
+    //   weapons  gintonic:6 mojito:6 moscowmule:6 negroni:6 southside:6
+    //            vodkatonic:6 whiskysour:6 + coffee lime soda sugar water
+    //            mint olive tomato tonic cranberry dryver sweetver, all Lv6
+    //   supers   vodkatonic:6 gintonic:6 mojito:6 southside:6   (FOUR, not five)
+    //   crafts   syrup + blackver, both absorbed
+    //   NO CAMPARI at all — which is why that run's NEGRONI sat at Lv6 and
+    //   never supered, and it did not matter.
+    //
+    // Three corrections follow, at the user's direction:
+    //   +MOJITO       — the config excluded it ("SUGAR = pure luck stat") while
+    //                   the deepest run in the project's history is carrying
+    //                   SUPER MOJITO. SUGAR is also its super key, and SUGAR is
+    //                   already planned for SIMPLE SYRUP.
+    //   +COFFEE BEANS — `reviveCharges: 1` in that run. An extra life. It was
+    //                   sitting in AVOID_INGREDIENTS_BASE while the roster
+    //                   comment two hundred lines away valued it at 26.
+    //   -CAMPARI      — absent from the winning build; NEGRONI stays for the
+    //                   dodge/shield and is simply not a super line any more.
+    //
+    // VODKA CRANBERRY is KEPT over MOSCOW MULE (user), against that run's own
+    // evidence. Recorded plainly: the 373-minute build carries the mule.
+    //
+    // Super-line count is unchanged at exactly five, so the six-super Rainbow
+    // Gun gate still cannot open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
+    // GIN TONIC(TONIC) VODKA CRANBERRY(CRANBERRY) MOJITO(SUGAR). NEGRONI loses
+    // CAMPARI, WHISKY SOUR's LEMON and COSMOPOLITAN's ORANGE never unban, and
+    // COFFEE BEANS' cocktail (ESPRESSO MARTINI) is off-roster.
+    // v6.88.2 (user): "fix the day phase so joe and pat have the items
         // from this run and have the same setup running into deep hell mode".
         //
         // 6.87.0 split the roster per character on the reasoning that a tank
@@ -280,16 +327,16 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
 
@@ -323,7 +370,15 @@
         // HELL UNBAN (v6.83.0): ingredients that leave the avoid list and
         // join the plan the moment a run is in hell. GINGER BEER = MOSCOW
         // MULE's super key (knockback whip) = the fifth super line.
-        hellUnbanIngredients: ['GINGER BEER'],
+        // v6.88.5 (user): "mule out unless it's the only option that doesn't
+        // make a 6th cocktail". GINGER BEER was unbanned in hell for exactly
+        // one reason — it is MOSCOW MULE's super key — and the mule is no
+        // longer a plan cocktail. Leaving it unbanned is the ONLY way the mule
+        // could ever complete a sixth super and open the Rainbow Gun gate, so
+        // keeping it banned is what makes the mule permanently safe to take as
+        // a last resort. Empty list, not a removed field: the unban machinery
+        // stays wired for whatever needs it next.
+        hellUnbanIngredients: [],
 
         // SCORING PROFILE (v6.80.0) — which level-up rulebook to play:
         //   'crown-6.74'  the rules of the release that WON the hell crown
@@ -481,7 +536,13 @@
             // mark CENTRE is 80.9 px away against a ~70 px reach: geometrically
             // immune, versus ~8.5% per mark in open field. Marks are 21-31% of
             // all deaths.
-            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters
+            // v6.88.4 (user): the tip window — bosses still drop tips, so
+            // super evolution is still reachable and a frozen boss is a free
+            // kill at point-blank range.
+            tipWindowFromS: 1800,      // 30 min
+            tipWindowToS: 4800,        // 80 min
+            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters — or
+                                       // sooner if a boss ring fills the canvas
             cornerPull: 2.4            // weight on closing to the nearest corner
 
         },
@@ -784,8 +845,8 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'];
-    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'];
+    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
     // from the priority roadmap ("ignore ... unless no other ingredients in
@@ -804,7 +865,67 @@
     // passouts and NO BOOKING walls — that the day phase is spent clearing.
     // They are the bottom of the junk tier, below ordinary filler.
     const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER NO.2', 'ABSINTHE']);
-    const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
+    const AVOID_INGREDIENTS_BASE = ['COINTREAU', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER'];
+    // v6.88.3 (user): "lime, soda water can be junk pool picks". They are not
+    // plan ingredients and never will be, but when the pool is all junk they
+    // are a better answer than CORPSE REVIVER No.2 or ABSINTHE, which cannot
+    // damage holdouts at all. Ranked ABOVE true junk, below anything planned.
+    const JUNK_ACCEPTABLE = ['LIME', 'SODA WATER'];
+    // v6.88.3 (user): Lv6 cocktails that earn their slot WITHOUT a super key.
+    const KEYLESS_BOOST = ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'];
+    // ...and the four that DO carry a key must still outrank them, or the
+    // keyless boost quietly demotes the super plan it was meant to sit beneath.
+    // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
+
+    // =================================================================
+    // v6.88.4 PHASE DOCTRINE (user, stated as a strict ordering)
+    // =================================================================
+    // "The ordering of everything matters." Given verbatim, ingredients first
+    // then cocktails. Index 0 is taken first; the bonus is large enough to
+    // dominate every other term in the day, because an ORDER that competes
+    // with the old weights is not an order.
+    const DAY_ORDER = [
+        'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
+        'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC',
+        'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY'
+    ];
+    // THREE ADDITIONS TO THE USER'S LIST, each flagged rather than assumed:
+    //   SWEET VERMOUTH — BLACK VERMOUTH is sweetver + dryver. The list names
+    //     the craft and one half; without the other half the craft is
+    //     unreachable, so it sits beside DRY VERMOUTH.
+    //   SIMPLE SYRUP   — same reasoning for the WATER + SUGAR craft, placed
+    //     immediately after both halves.
+    //   TONIC / GIN TONIC — the list has VODKA TONIC but not TONIC (its super
+    //     key, shared with GIN TONIC). Two of the four super lines die without
+    //     it. Placed last among ingredients and GIN TONIC beside VODKA TONIC.
+    // If any of those three is wrong, they are the lines to delete.
+
+    // "hell phase - junk pool but lime, soda water, and coffee beans and other
+    // items that don't make a 6th super cocktail forcing a rainbow upgrade":
+    // once hell latches the plan is BUILT, and the job changes from assembling
+    // to not opening the gun gate.
+    const HELL_SAFE_JUNK = ['LIME', 'SODA WATER', 'COFFEE BEANS'];
+    // v6.88.5 (user): "mule out unless it's the only option that doesn't make a
+    // 6th cocktail". Off the roster entirely, but not refused — with GINGER
+    // BEER banned for good it can never complete a super, which makes it the
+    // safest thing on a forced pool. Scored beneath every planned card and
+    // beneath the hell-safe junk, above true junk (CORPSE REVIVER No.2 and
+    // ABSINTHE, which cannot damage holdouts at all).
+    const LAST_RESORT = ['MOSCOW MULE'];
+    // Measured band, not a guess. It must sit BELOW the hell-safe junk
+    // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
+    // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE
+    // -14) so that when the pool is nothing but junk the mule — which cannot
+    // open a sixth super now that GINGER BEER is permanently banned — is what
+    // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
+    // the one card the roster notes call unable to damage holdouts at all.
+    const LAST_RESORT_CEILING = 30;
+    // v6.88.3 (user): top-priority ingredients and crafts.
+    const TOP_INGREDIENTS = ['OLIVE', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'BLACK VERMOUTH', 'SIMPLE SYRUP'];
+    // the halves that must reach Lv6 for those two crafts to become available
+    const CRAFT_HALVES = ['SWEET VERMOUTH', 'DRY VERMOUTH', 'WATER', 'SUGAR'];   // v6.88.3: COFFEE BEANS unbanned — it is the REVIVE (reviveCharges 1 in the 373-minute run)   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
     let hellUnbanApplied = false;

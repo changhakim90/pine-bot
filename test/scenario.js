@@ -73,8 +73,35 @@ if (which === 'hell-unban') {
         const pool = [{ n: 'GINGER BEER', type: 'passive', lv: 0, maxlv: 6 }, { n: 'OLIVE', type: 'passive', lv: 3, maxlv: 6 }];
         const gb = pineBot.test.scoreCard(pool[0], 0, pool);
         test('hell latched from lexical flag', () => assert.ok(logs.some(l => /HELL run latched/.test(l)), logs.slice(-5).join(' | ')));
-        test('GINGER BEER unbanned in hell', () => assert.ok(gb.score > 0 && /roadmap/.test(gb.why), gb.why));
-        test('roadmap reports unban', () => assert.strictEqual(global.window.pineBotStats().currentRoadmap.hellUnbanApplied, true));
+        // v6.88.5 (user): "mule out unless it's the only option that doesn't
+        // make a 6th cocktail". GINGER BEER was unbanned in hell for exactly
+        // one reason — it is MOSCOW MULE's super key — and the mule is off the
+        // roster now. Keeping it banned is what makes the mule permanently safe
+        // to eat on a forced pool, because it can then never complete a sixth
+        // super and open the gun gate. This test asserted the OLD behaviour.
+        test('GINGER BEER stays banned even in hell', () =>
+            assert.ok(gb.score < 0 && /user-avoid/.test(gb.why), gb.why));
+        test('so MOSCOW MULE can never complete a super', () => {
+            const mule = pineBot.test.scoreCard({ n: 'MOSCOW MULE', type: 'weapon', lv: 5, maxlv: 6 }, 0, []);
+            assert.ok(mule.score > 0, 'refused outright: ' + mule.why);
+            assert.ok(/last-resort/.test(mule.why), mule.why);
+        });
+        // the whole point of the band: never sought, always preferred to junk
+        const sc = (n, t) => pineBot.test.scoreCard({ n, type: t, lv: 1, maxlv: 6 }, 0, []).score;
+        test('the mule loses to every hell-safe junk pick', () => {
+            const mule = sc('MOSCOW MULE', 'weapon');
+            for (const [n, t] of [['COFFEE BEANS', 'passive'], ['LIME', 'passive'], ['SODA WATER', 'passive']])
+                assert.ok(sc(n, t) > mule, n + ' ' + Math.round(sc(n, t)) + ' vs mule ' + Math.round(mule));
+        });
+        test('...and beats true junk, so a junk-only pool eats the mule', () => {
+            const mule = sc('MOSCOW MULE', 'weapon');
+            for (const [n, t] of [['CORPSE REVIVER NO.2', 'weapon'], ['ABSINTHE', 'passive'], ['GINGER BEER', 'passive']])
+                assert.ok(mule > sc(n, t), n + ' ' + Math.round(sc(n, t)) + ' beat the mule ' + Math.round(mule));
+        });
+        // the unban MACHINERY must still be wired even with an empty list —
+        // emptying the config must not be the same as deleting the mechanism.
+        test('the unban pass still runs', () =>
+            assert.strictEqual(global.window.pineBotStats().currentRoadmap.hellUnbanApplied, true));
         done();
     }, 2000);
 }
@@ -243,10 +270,29 @@ if (which === 'time-stop') {
         });
         // station = max(150, r+90) = 150; guard at 120. From 60px out the
         // planner must open the gap, never close it.
-        test('parked inside the station, the planner backs off the paused boss', () => {
+        // v6.88.4 (user): "30-80 minutes hell - fast kill of frozen bosses ...
+        // by sitting on top of their damage circle while the bosses still drop
+        // tips". This scenario runs at gt 3000 (50 min) with a permanent
+        // freeze, i.e. inside the window — so the OLD assertion (back off to
+        // 150) is now the wrong doctrine and the bot should CLOSE.
+        test('inside the tip window the planner closes onto the frozen boss', () => {
             const dNow = Math.hypot(330 - 270, 0);
             const dNew = Math.hypot(330 - (270 + plan.dx * 6), 270 - (270 + plan.dy * 6));
-            assert.ok(dNew > dNow, 'dNow ' + dNow.toFixed(1) + ' dNew ' + dNew.toFixed(1));
+            assert.ok(dNew < dNow, 'dNow ' + dNow.toFixed(1) + ' dNew ' + dNew.toFixed(1));
+        });
+        test('and the station is on the hitbox, not the 150px ring', () =>
+            assert.ok(plan.stackStation < 60, 'station ' + plan.stackStation));
+        // ...but PAST the window the old standoff returns: deep hell is corner
+        // work, not boss-hugging, and a boss whose ring fills the canvas is not
+        // something to stand on.
+        test('past the tip window the safe station comes back', () => {
+            global.gameTime = 6000;
+            const late = pineBot.test.planMove();
+            global.gameTime = 3000;
+            // r+40 = 96 is the PRE-EXISTING long-freeze station; 150 is the
+            // short-freeze fallback. Either is fine — what matters is that the
+            // point-blank hitbox station (~28) is gone once the window closes.
+            assert.ok(late.stackStation >= 90, 'station ' + late.stackStation);
         });
         done();
     }, 2000);
@@ -1415,21 +1461,25 @@ if (which === 'roster-cap') {
         assert.deepStrictEqual(pat.ingredients, mg.ingredients, 'pat vs minguk ingredients');
         assert.deepStrictEqual(joe.ingredients, mg.ingredients, 'joe vs minguk ingredients');
     });
-    test('it is the stall roster that competed for the crown', () => {
-        for (const c of ['SOUTH SIDE', 'NEGRONI', 'VODKA TONIC', 'GIN TONIC'])
+    test('the four super lines are the ones the 373-minute run finished with', () => {
+        for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'])
             assert.ok(pat.cocktails.includes(c), c + ' missing: ' + pat.cocktails.join(','));
+        for (const k of ['MINT', 'TONIC', 'SUGAR'])
+            assert.ok(pat.ingredients.includes(k), k + ' missing');
     });
-    test('VODKA CRANBERRY replaces MOSCOW MULE', () => {
-        assert.ok(pat.cocktails.includes('VODKA CRANBERRY'), pat.cocktails.join(','));
-        assert.ok(!pat.cocktails.includes('MOSCOW MULE'), pat.cocktails.join(','));
+    test('the three keyless cocktails are carried', () => {
+        for (const c of ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'])
+            assert.ok(pat.cocktails.includes(c), c + ' missing');
     });
-    test('and its super key rides in the plan, where the mule\'s did not', () => {
-        assert.ok(pat.ingredients.includes('CRANBERRY'), pat.ingredients.join(','));
-        assert.ok(!pat.ingredients.includes('GINGER BEER'), pat.ingredients.join(','));
+    test('CAMPARI and COSMOPOLITAN are out', () => {
+        assert.ok(!pat.ingredients.includes('CAMPARI'), pat.ingredients.join(','));
+        assert.ok(!pat.cocktails.includes('COSMOPOLITAN'), pat.cocktails.join(','));
     });
-    test('WATER is planned — regen, and half of SIMPLE SYRUP', () =>
-        assert.ok(pat.ingredients.includes('WATER') && pat.ingredients.includes('SUGAR'),
-            pat.ingredients.join(',')));
+    test('the top-priority ingredients are all planned', () => {
+        for (const i of ['OLIVE', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'WATER', 'SUGAR',
+                         'SWEET VERMOUTH', 'DRY VERMOUTH', 'COFFEE BEANS'])
+            assert.ok(pat.ingredients.includes(i), i + ' missing: ' + pat.ingredients.join(','));
+    });
     // THE STRUCTURAL GUN BAN: count supers this roster could ever complete.
     // A super needs its cocktail AND its key ingredient in the plan, and the
     // key must not be permanently banned (LEMON / ORANGE never unban;
@@ -1442,13 +1492,20 @@ if (which === 'roster-cap') {
     const patN = completable(pat), mgN = completable(mg), joeN = completable(joe);
     test('the shared roster completes at most five supers — never the six-super gate', () =>
         assert.ok(patN.length <= 5, patN.length + ': ' + patN.join(',')));
-    test('adding WATER and SUGAR opened no new super line', () => {
-        // WHISKEY HIGHBALL (WATER) and MOJITO (SUGAR) are both off-roster
-        assert.ok(!patN.includes('WHISKEY HIGHBALL') && !patN.includes('MOJITO'), patN.join(','));
+    test('WATER and COFFEE BEANS opened no super line — their cocktails are off-roster', () => {
+        assert.ok(!patN.includes('WHISKEY HIGHBALL') && !patN.includes('ESPRESSO MARTINI'), patN.join(','));
     });
-    test('and it still reaches five, not fewer', () =>
-        assert.ok(patN.length === 5 && mgN.length === 5 && joeN.length === 5,
+    // NOTE (v6.88.3): the user asked for FOUR super lines, then asked for
+    // CRANBERRY as a top-priority ingredient. CRANBERRY is VODKA CRANBERRY's
+    // super key, so the roster can now complete FIVE. That is still safely
+    // under the six-maxed-super Rainbow Gun gate, which is the invariant that
+    // actually matters, so the cap is asserted at 5 and the tension is flagged
+    // rather than silently resolved either way.
+    test('all three characters agree on the line count', () =>
+        assert.ok(patN.length === mgN.length && mgN.length === joeN.length,
             patN.length + ' / ' + mgN.length + ' / ' + joeN.length));
+    test('and it stays under the six-super gun gate', () =>
+        assert.ok(patN.length <= 5, patN.length + ': ' + patN.join(',')));
     done();
 }
 
@@ -1483,6 +1540,12 @@ if (which === 'gun-path') {
     pineBot.stop();
     pineBot.test.applyDefaults();
     const T = pineBot.test;
+    // v6.88.3 (user): "the build roster can now have 4 super cocktails
+    // assuming southside is still on it" — tightened 5 -> 4. The gun gate is
+    // SIX maxed supers, so four closes it with a full line of margin.
+    // v6.88.5 (user): "vodka cranberry and cranberry is important" — both stay,
+    // and CRANBERRY is VODKA CRANBERRY's key, so the roster completes FIVE.
+    // Five is still a full line under the six-maxed-super gun gate.
     test('the cap is five super lines', () =>
         assert.strictEqual(pineBot.config.maxSuperLines, 5));
     // OLD FASHIONED is off-plan and keyed by ANGOSTURA (junk). Hold the

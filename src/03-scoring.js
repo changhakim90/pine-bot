@@ -177,7 +177,28 @@
         } catch (e) { return 0; }
     }
 
+    // v6.88.5 LAST-RESORT CLAMP (user: "mule out unless it's the only option
+    // that doesn't make a 6th cocktail"). A small positive bonus could not do
+    // this: MOSCOW MULE still collected the generic cocktail credit
+    // (progress+70, knockback-to-6+36 ...) and scored 111 against COFFEE BEANS'
+    // 75 — the bot would have SOUGHT it. A last resort is defined by its
+    // CEILING, not by a nudge.
+    //
+    // It has to be a wrapper rather than a line before the return, because
+    // scoreCard has several exit points: clamping at one of them let the later
+    // add() calls re-inflate the score right past it. Clamping outside catches
+    // every path by construction.
     function scoreCard(card, index, poolArr) {
+        const r = scoreCardInner(card, index, poolArr);
+        if (!r || !LAST_RESORT.includes(r.name)) return r;
+        const maxed = r.lv > 0 && r.cap && r.lv >= r.cap;
+        if (!maxed && r.score > LAST_RESORT_CEILING) {
+            r.why += 'last-resort-clamp' + Math.round(LAST_RESORT_CEILING - r.score) + ' ';
+            r.score = LAST_RESORT_CEILING;
+        }
+        return r;
+    }
+    function scoreCardInner(card, index, poolArr) {
         const type = String((card && card.type) || '').toLowerCase();
         const name = baseNameOf(card);
         // Does THIS pool offer a prescribed cocktail? Fallback substitutes
@@ -302,11 +323,26 @@
                 break;
             case 'sp_firecross': add(70 + (hellDetected ? 15 : 0), 'firecross'); break;
             case 'sp_timestop': {
-                // MINGUK DOCTRINE: time-pause extensions are the endgame
-                // engine — every extra second is another window to melt a
-                // paused boss with SOUTH SIDE. Maximize the count of these.
+                // v6.88.3 — MEASURED, not doctrinal. The live 373-minute Pat
+                // run (gt 22402, 121 minutes past the crown, 441/441 HP) reads
+                // `timestopBonus: 162`. That is +162 SECONDS on every TIME STOP
+                // pickup, roughly 81 stacked `+2s` picks, and it is the largest
+                // number in the entire player object — larger than every damage
+                // multiplier, every mitigation term, and every sustain source
+                // combined. It also matches manual demo #3: 22 of 31 picks
+                // after 26:00 were TIME STOP +2S.
+                //
+                // The corner and the ult chain keep you alive BETWEEN stops;
+                // the stops are what make a 234-enemy field irrelevant. So this
+                // is not one card type among several, it is the endgame engine,
+                // and its value COMPOUNDS with depth rather than saturating.
                 const gtT = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                add(130 + (hellDetected ? 45 : (gtT > 1000 ? 25 : 0)), 'timestop');
+                let v = 130 + (hellDetected ? 45 : (gtT > 1000 ? 25 : 0));
+                // past the deep-deep threshold nothing else on a card is worth
+                // more; below it the old weighting stands unchanged.
+                if (gtT > (CONFIG.deepHell.cornerAnchorFromS || 9000)) v += 90;
+                else if (hellDetected && gtT > 2400) v += 40;
+                add(v, 'timestop');
                 break;
             }
             case 'sp_tequila': add(65, 'tequila'); break;
@@ -745,11 +781,112 @@
             (enemyMix.boss > 0.5 || hellDetected || (lastPlan && lastPlan.boss)))
             add(12, 'boss-freeze');
 
+        // =============================================================
+        // v6.88.4 PHASE ORDER (user: "the ordering of everything matters")
+        // =============================================================
+        // DAY: take the plan in the stated order, ingredients before cocktails.
+        // The bonus is deliberately large — an ordering that has to argue with
+        // the old weights is not an ordering. It decays 7 per rank so the list
+        // is strictly monotonic, and it applies only while the plan is still
+        // being assembled.
+        const gtOrd = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const dayBuild = !hellDetected && gtOrd < 1200;
+        if (dayBuild && !atCap) {
+            const rank = DAY_ORDER.indexOf(name);
+            // FIRST ATTEMPT USED 130 - rank*7 AND DID NOT WORK: the residual
+            // terms (super-line 54, boss-killer 50, progress 46, survival-kit
+            // 30 ...) span ~150 points, so a 7-point step per rank was noise
+            // against them and SOUTH SIDE came out 3rd instead of 12th. For an
+            // ORDER to actually hold, the step between adjacent ranks must
+            // exceed the whole spread of everything else. 200 does; anything
+            // in the list therefore beats anything below it, always.
+            if (rank >= 0) add((DAY_ORDER.length - rank) * 200, 'day-order' + (rank + 1));
+            // TWO THINGS SIT ABOVE THE WHOLE LIST, and both are the user's own
+            // doctrine rather than an exception to it:
+            //   the ULTIMATE — "ultimates used to kill passouts as priority for
+            //     early loot and reward upgrades". The day IS the funding phase.
+            //   SHAKING UP (base attack) — super evolution requires "base attack
+            //     MAX + cocktail Lv6 + key ingredient MAX". Rank the base below
+            //     seventeen other cards and NO super ever evolves, which would
+            //     silently delete the four-line plan the order exists to build.
+            if (type === 'ult') add((DAY_ORDER.length + 2) * 200, 'day-ult-first');
+            else if (type === 'base') add((DAY_ORDER.length + 1) * 200, 'day-base-second');
+        }
+        // HELL: the plan is BUILT. The job is no longer to assemble it but to
+        // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk
+        // the user named becomes a real pick rather than a last resort.
+        if (hellDetected && !atCap && HELL_SAFE_JUNK.includes(name)) {
+            add(26, 'hell-safe-junk');
+        }
+        // MOSCOW MULE: off the plan, never sought, but safe to eat when the
+        // pool offers nothing better. Its key (GINGER BEER) is banned for good
+        // as of v6.88.5, so it cannot open a sixth super line no matter when it
+        // is taken. Small and positive: it must lose to every planned card and
+        // to the hell-safe junk, and beat only true junk.
+
+        // =============================================================
+        // v6.88.3 USER DOCTRINE, from the live 373-minute Pat run
+        // =============================================================
+        // Four super lines only (SOUTH SIDE / VODKA TONIC / GIN TONIC /
+        // MOJITO). Everything below earns its slot on raw effect instead.
+        //
+        // "whisky sour, negroni, vodka cranberry should be massively boosted
+        // despite not having super key" — all three sat at Lv6 in that run and
+        // none of them supered. WHISKY SOUR's LEMON and NEGRONI's CAMPARI are
+        // off-plan; VODKA CRANBERRY's key is planned as a STAT (pickup radius),
+        // not as a super path.
+        if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
+            add(46 + (hellDetected ? 20 : 0), 'keyless-core');
+        }
+        // the four keyed lines sit ABOVE the keyless three by construction
+        if (!atCap && type === 'weapon' && SUPER_LINE_COCKTAILS.includes(name)) {
+            add(54 + (hellDetected ? 20 : 0), 'super-line');
+        }
+        // "olive, black vermouth, and simple syrup is now a top priority",
+        // "along with tomato juice", "cranberry as well", "mint as well".
+        // OLIVE is armour; TOMATO JUICE is ult throughput (demo 1: taken 4x,
+        // cast every 75 s vs 98 s without); CRANBERRY is the pickup radius that
+        // makes drops reachable while anchored; MINT is move speed AND the
+        // mark-escape margin. The two crafts are pure upside — applyCraft keeps
+        // the materials at full level with their stats still applying and only
+        // frees the slot count.
+        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name)) {
+            add(38 + (hellDetected ? 14 : 0), 'top-ingredient');
+        }
+        // ...and the four halves that BECOME those crafts inherit the priority,
+        // since a craft is only reachable if both materials reach Lv6.
+        if (!atCap && type === 'passive' && CRAFT_HALVES.includes(name)) {
+            add(34, 'craft-half');
+        }
+        // "lime, soda water can be junk pool picks": above true junk, below
+        // anything planned. Only pays when the pool has nothing better.
+        if (!atCap && JUNK_ACCEPTABLE.includes(name)) add(6, 'junk-acceptable');
+        // "tonic can be priority if it helps in day phase" (user). It does, and
+        // more than the phrasing suggests: TONIC is the SHARED key for two of
+        // the four super lines (VODKA TONIC and GIN TONIC), so one ingredient
+        // buys half the super plan. The boost is day-weighted because that is
+        // when the lines are being assembled; in hell it reverts to its normal
+        // plan value.
+        if (!atCap && name === 'TONIC') {
+            const gtTon = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            add((!hellDetected && gtTon < 1200) ? 32 : 12, 'tonic-two-lines');
+        }
+
         // ABSOLUTE PRIORITY (user): SOUTH SIDE and MINT lead everything below
         // the ultimate and SHAKING UP — the burn engine and its super key.
         // USER: SOUTH SIDE is THE weapon — nothing but the ultimate and the
         // base attack outranks it (MINT rides with it as its super key).
-        if (!atCap && /SOUTH\s*SIDE/i.test(name)) add(40, 'absolute-priority');
+        if (!atCap && /SOUTH\s*SIDE/i.test(name)) {
+            add(40, 'absolute-priority');
+            // v6.88.3 (user): "southside is essential to killing bosses". It is
+            // the only body-centred burn zone in the plan, and the zone damage
+            // predicate (hypot(e.x-z.x, e.y-z.y) < z.r + e.r) means it lands on
+            // a boss's HITBOX circle rather than needing the centre — which is
+            // why it works on paused bosses at a 150 px station where nothing
+            // else reaches. Its lead over the keyless three must not be
+            // marginal: the first measurement had it at 151 vs NEGRONI's 136.
+            add(28 + (enemyMix.boss > 0.3 || (lastPlan && lastPlan.boss) ? 22 : 0), 'boss-killer');
+        }
         if (!atCap && name === 'MINT') {
             add(24, 'absolute-priority');
             // v6.88.2 MARK ESCAPE (see MARK_CLEAR_PX in 01): a character whose

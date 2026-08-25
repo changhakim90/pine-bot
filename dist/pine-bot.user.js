@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.88.2
+// @version      6.88.5
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.88.2';
+    const SCRIPT_VERSION = '6.88.5';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -222,8 +222,8 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+            ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
         // v6.87.0 PER-CHARACTER ROADMAPS (user: "they should have had
@@ -254,7 +254,54 @@
         // TONIC; LEMON and ORANGE are permanently banned; GINGER BEER unbans
         // only in hell). Both rosters below sit at five. The `roster-cap`
         // test asserts it, so a future addition cannot quietly open the gate.
-        // v6.88.2 (user): "fix the day phase so joe and pat have the items
+        // v6.88.3b (user): "the build roster can now have 4 super cocktails
+    // assuming southside is still on it". FOUR lines, and they are exactly the
+    // four the 373-minute run finished with:
+    //   SOUTH SIDE->MINT   VODKA TONIC->TONIC   GIN TONIC->TONIC   MOJITO->SUGAR
+    // Three keys cover four lines because TONIC is shared.
+    //
+    // "whisky sour, negroni, vodka cranberry should be massively boosted
+    // despite not having super key" — these three ride at Lv6 as plain
+    // cocktails and earn their slot on raw effect, so CRANBERRY leaves the
+    // ingredient plan deliberately: keeping it would make VODKA CRANBERRY a
+    // FIFTH super line and re-open the gun gate. NEGRONI has no CAMPARI and
+    // WHISKY SOUR's LEMON never unbans, so both are already keyless by
+    // construction; the cranberry now joins them on purpose.
+    //
+    // COSMOPOLITAN dropped: its key is ORANGE (permanently banned), it never
+    // appeared in the 373-minute build, and a cocktail that can neither super
+    // nor earn a boost is just a spent slot.
+    // v6.88.3 ROSTER — corrected against a LIVE 373-MINUTE PAT RUN (gt 22402,
+    // 121 minutes past the 252:30 crown, 441/441 HP). Read straight off the
+    // player object rather than argued from source:
+    //   weapons  gintonic:6 mojito:6 moscowmule:6 negroni:6 southside:6
+    //            vodkatonic:6 whiskysour:6 + coffee lime soda sugar water
+    //            mint olive tomato tonic cranberry dryver sweetver, all Lv6
+    //   supers   vodkatonic:6 gintonic:6 mojito:6 southside:6   (FOUR, not five)
+    //   crafts   syrup + blackver, both absorbed
+    //   NO CAMPARI at all — which is why that run's NEGRONI sat at Lv6 and
+    //   never supered, and it did not matter.
+    //
+    // Three corrections follow, at the user's direction:
+    //   +MOJITO       — the config excluded it ("SUGAR = pure luck stat") while
+    //                   the deepest run in the project's history is carrying
+    //                   SUPER MOJITO. SUGAR is also its super key, and SUGAR is
+    //                   already planned for SIMPLE SYRUP.
+    //   +COFFEE BEANS — `reviveCharges: 1` in that run. An extra life. It was
+    //                   sitting in AVOID_INGREDIENTS_BASE while the roster
+    //                   comment two hundred lines away valued it at 26.
+    //   -CAMPARI      — absent from the winning build; NEGRONI stays for the
+    //                   dodge/shield and is simply not a super line any more.
+    //
+    // VODKA CRANBERRY is KEPT over MOSCOW MULE (user), against that run's own
+    // evidence. Recorded plainly: the 373-minute build carries the mule.
+    //
+    // Super-line count is unchanged at exactly five, so the six-super Rainbow
+    // Gun gate still cannot open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
+    // GIN TONIC(TONIC) VODKA CRANBERRY(CRANBERRY) MOJITO(SUGAR). NEGRONI loses
+    // CAMPARI, WHISKY SOUR's LEMON and COSMOPOLITAN's ORANGE never unban, and
+    // COFFEE BEANS' cocktail (ESPRESSO MARTINI) is off-roster.
+    // v6.88.2 (user): "fix the day phase so joe and pat have the items
         // from this run and have the same setup running into deep hell mode".
         //
         // 6.87.0 split the roster per character on the reasoning that a tank
@@ -282,16 +329,16 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'],
-                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER']
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
 
@@ -325,7 +372,15 @@
         // HELL UNBAN (v6.83.0): ingredients that leave the avoid list and
         // join the plan the moment a run is in hell. GINGER BEER = MOSCOW
         // MULE's super key (knockback whip) = the fifth super line.
-        hellUnbanIngredients: ['GINGER BEER'],
+        // v6.88.5 (user): "mule out unless it's the only option that doesn't
+        // make a 6th cocktail". GINGER BEER was unbanned in hell for exactly
+        // one reason — it is MOSCOW MULE's super key — and the mule is no
+        // longer a plan cocktail. Leaving it unbanned is the ONLY way the mule
+        // could ever complete a sixth super and open the Rainbow Gun gate, so
+        // keeping it banned is what makes the mule permanently safe to take as
+        // a last resort. Empty list, not a removed field: the unban machinery
+        // stays wired for whatever needs it next.
+        hellUnbanIngredients: [],
 
         // SCORING PROFILE (v6.80.0) — which level-up rulebook to play:
         //   'crown-6.74'  the rules of the release that WON the hell crown
@@ -483,7 +538,13 @@
             // mark CENTRE is 80.9 px away against a ~70 px reach: geometrically
             // immune, versus ~8.5% per mark in open field. Marks are 21-31% of
             // all deaths.
-            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters
+            // v6.88.4 (user): the tip window — bosses still drop tips, so
+            // super evolution is still reachable and a frozen boss is a free
+            // kill at point-blank range.
+            tipWindowFromS: 1800,      // 30 min
+            tipWindowToS: 4800,        // 80 min
+            cornerAnchorFromS: 9000,   // 150 min (user), ALL characters — or
+                                       // sooner if a boss ring fills the canvas
             cornerPull: 2.4            // weight on closing to the nearest corner
 
         },
@@ -786,8 +847,8 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'COSMOPOLITAN'];
-    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CAMPARI', 'CRANBERRY', 'SUGAR', 'WATER'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'];
+    let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
     // from the priority roadmap ("ignore ... unless no other ingredients in
@@ -806,7 +867,67 @@
     // passouts and NO BOOKING walls — that the day phase is spent clearing.
     // They are the bottom of the junk tier, below ordinary filler.
     const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER NO.2', 'ABSINTHE']);
-    const AVOID_INGREDIENTS_BASE = ['LIME', 'COINTREAU', 'SODA WATER', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER', 'COFFEE BEANS'];   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
+    const AVOID_INGREDIENTS_BASE = ['COINTREAU', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER'];
+    // v6.88.3 (user): "lime, soda water can be junk pool picks". They are not
+    // plan ingredients and never will be, but when the pool is all junk they
+    // are a better answer than CORPSE REVIVER No.2 or ABSINTHE, which cannot
+    // damage holdouts at all. Ranked ABOVE true junk, below anything planned.
+    const JUNK_ACCEPTABLE = ['LIME', 'SODA WATER'];
+    // v6.88.3 (user): Lv6 cocktails that earn their slot WITHOUT a super key.
+    const KEYLESS_BOOST = ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'];
+    // ...and the four that DO carry a key must still outrank them, or the
+    // keyless boost quietly demotes the super plan it was meant to sit beneath.
+    // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
+
+    // =================================================================
+    // v6.88.4 PHASE DOCTRINE (user, stated as a strict ordering)
+    // =================================================================
+    // "The ordering of everything matters." Given verbatim, ingredients first
+    // then cocktails. Index 0 is taken first; the bonus is large enough to
+    // dominate every other term in the day, because an ORDER that competes
+    // with the old weights is not an order.
+    const DAY_ORDER = [
+        'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
+        'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC',
+        'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY'
+    ];
+    // THREE ADDITIONS TO THE USER'S LIST, each flagged rather than assumed:
+    //   SWEET VERMOUTH — BLACK VERMOUTH is sweetver + dryver. The list names
+    //     the craft and one half; without the other half the craft is
+    //     unreachable, so it sits beside DRY VERMOUTH.
+    //   SIMPLE SYRUP   — same reasoning for the WATER + SUGAR craft, placed
+    //     immediately after both halves.
+    //   TONIC / GIN TONIC — the list has VODKA TONIC but not TONIC (its super
+    //     key, shared with GIN TONIC). Two of the four super lines die without
+    //     it. Placed last among ingredients and GIN TONIC beside VODKA TONIC.
+    // If any of those three is wrong, they are the lines to delete.
+
+    // "hell phase - junk pool but lime, soda water, and coffee beans and other
+    // items that don't make a 6th super cocktail forcing a rainbow upgrade":
+    // once hell latches the plan is BUILT, and the job changes from assembling
+    // to not opening the gun gate.
+    const HELL_SAFE_JUNK = ['LIME', 'SODA WATER', 'COFFEE BEANS'];
+    // v6.88.5 (user): "mule out unless it's the only option that doesn't make a
+    // 6th cocktail". Off the roster entirely, but not refused — with GINGER
+    // BEER banned for good it can never complete a super, which makes it the
+    // safest thing on a forced pool. Scored beneath every planned card and
+    // beneath the hell-safe junk, above true junk (CORPSE REVIVER No.2 and
+    // ABSINTHE, which cannot damage holdouts at all).
+    const LAST_RESORT = ['MOSCOW MULE'];
+    // Measured band, not a guess. It must sit BELOW the hell-safe junk
+    // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
+    // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE
+    // -14) so that when the pool is nothing but junk the mule — which cannot
+    // open a sixth super now that GINGER BEER is permanently banned — is what
+    // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
+    // the one card the roster notes call unable to damage holdouts at all.
+    const LAST_RESORT_CEILING = 30;
+    // v6.88.3 (user): top-priority ingredients and crafts.
+    const TOP_INGREDIENTS = ['OLIVE', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'BLACK VERMOUTH', 'SIMPLE SYRUP'];
+    // the halves that must reach Lv6 for those two crafts to become available
+    const CRAFT_HALVES = ['SWEET VERMOUTH', 'DRY VERMOUTH', 'WATER', 'SUGAR'];   // v6.88.3: COFFEE BEANS unbanned — it is the REVIVE (reviveCharges 1 in the 373-minute run)   // LEMON stays banned (blocks SUPER WHISKY SOUR = the 6th super); TONIC is now the shared key
     // live copy: rebuilt every run, trimmed by applyHellUnban() once in hell
     let AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);
     let hellUnbanApplied = false;
@@ -2547,7 +2668,28 @@
         } catch (e) { return 0; }
     }
 
+    // v6.88.5 LAST-RESORT CLAMP (user: "mule out unless it's the only option
+    // that doesn't make a 6th cocktail"). A small positive bonus could not do
+    // this: MOSCOW MULE still collected the generic cocktail credit
+    // (progress+70, knockback-to-6+36 ...) and scored 111 against COFFEE BEANS'
+    // 75 — the bot would have SOUGHT it. A last resort is defined by its
+    // CEILING, not by a nudge.
+    //
+    // It has to be a wrapper rather than a line before the return, because
+    // scoreCard has several exit points: clamping at one of them let the later
+    // add() calls re-inflate the score right past it. Clamping outside catches
+    // every path by construction.
     function scoreCard(card, index, poolArr) {
+        const r = scoreCardInner(card, index, poolArr);
+        if (!r || !LAST_RESORT.includes(r.name)) return r;
+        const maxed = r.lv > 0 && r.cap && r.lv >= r.cap;
+        if (!maxed && r.score > LAST_RESORT_CEILING) {
+            r.why += 'last-resort-clamp' + Math.round(LAST_RESORT_CEILING - r.score) + ' ';
+            r.score = LAST_RESORT_CEILING;
+        }
+        return r;
+    }
+    function scoreCardInner(card, index, poolArr) {
         const type = String((card && card.type) || '').toLowerCase();
         const name = baseNameOf(card);
         // Does THIS pool offer a prescribed cocktail? Fallback substitutes
@@ -2672,11 +2814,26 @@
                 break;
             case 'sp_firecross': add(70 + (hellDetected ? 15 : 0), 'firecross'); break;
             case 'sp_timestop': {
-                // MINGUK DOCTRINE: time-pause extensions are the endgame
-                // engine — every extra second is another window to melt a
-                // paused boss with SOUTH SIDE. Maximize the count of these.
+                // v6.88.3 — MEASURED, not doctrinal. The live 373-minute Pat
+                // run (gt 22402, 121 minutes past the crown, 441/441 HP) reads
+                // `timestopBonus: 162`. That is +162 SECONDS on every TIME STOP
+                // pickup, roughly 81 stacked `+2s` picks, and it is the largest
+                // number in the entire player object — larger than every damage
+                // multiplier, every mitigation term, and every sustain source
+                // combined. It also matches manual demo #3: 22 of 31 picks
+                // after 26:00 were TIME STOP +2S.
+                //
+                // The corner and the ult chain keep you alive BETWEEN stops;
+                // the stops are what make a 234-enemy field irrelevant. So this
+                // is not one card type among several, it is the endgame engine,
+                // and its value COMPOUNDS with depth rather than saturating.
                 const gtT = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                add(130 + (hellDetected ? 45 : (gtT > 1000 ? 25 : 0)), 'timestop');
+                let v = 130 + (hellDetected ? 45 : (gtT > 1000 ? 25 : 0));
+                // past the deep-deep threshold nothing else on a card is worth
+                // more; below it the old weighting stands unchanged.
+                if (gtT > (CONFIG.deepHell.cornerAnchorFromS || 9000)) v += 90;
+                else if (hellDetected && gtT > 2400) v += 40;
+                add(v, 'timestop');
                 break;
             }
             case 'sp_tequila': add(65, 'tequila'); break;
@@ -3115,11 +3272,112 @@
             (enemyMix.boss > 0.5 || hellDetected || (lastPlan && lastPlan.boss)))
             add(12, 'boss-freeze');
 
+        // =============================================================
+        // v6.88.4 PHASE ORDER (user: "the ordering of everything matters")
+        // =============================================================
+        // DAY: take the plan in the stated order, ingredients before cocktails.
+        // The bonus is deliberately large — an ordering that has to argue with
+        // the old weights is not an ordering. It decays 7 per rank so the list
+        // is strictly monotonic, and it applies only while the plan is still
+        // being assembled.
+        const gtOrd = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const dayBuild = !hellDetected && gtOrd < 1200;
+        if (dayBuild && !atCap) {
+            const rank = DAY_ORDER.indexOf(name);
+            // FIRST ATTEMPT USED 130 - rank*7 AND DID NOT WORK: the residual
+            // terms (super-line 54, boss-killer 50, progress 46, survival-kit
+            // 30 ...) span ~150 points, so a 7-point step per rank was noise
+            // against them and SOUTH SIDE came out 3rd instead of 12th. For an
+            // ORDER to actually hold, the step between adjacent ranks must
+            // exceed the whole spread of everything else. 200 does; anything
+            // in the list therefore beats anything below it, always.
+            if (rank >= 0) add((DAY_ORDER.length - rank) * 200, 'day-order' + (rank + 1));
+            // TWO THINGS SIT ABOVE THE WHOLE LIST, and both are the user's own
+            // doctrine rather than an exception to it:
+            //   the ULTIMATE — "ultimates used to kill passouts as priority for
+            //     early loot and reward upgrades". The day IS the funding phase.
+            //   SHAKING UP (base attack) — super evolution requires "base attack
+            //     MAX + cocktail Lv6 + key ingredient MAX". Rank the base below
+            //     seventeen other cards and NO super ever evolves, which would
+            //     silently delete the four-line plan the order exists to build.
+            if (type === 'ult') add((DAY_ORDER.length + 2) * 200, 'day-ult-first');
+            else if (type === 'base') add((DAY_ORDER.length + 1) * 200, 'day-base-second');
+        }
+        // HELL: the plan is BUILT. The job is no longer to assemble it but to
+        // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk
+        // the user named becomes a real pick rather than a last resort.
+        if (hellDetected && !atCap && HELL_SAFE_JUNK.includes(name)) {
+            add(26, 'hell-safe-junk');
+        }
+        // MOSCOW MULE: off the plan, never sought, but safe to eat when the
+        // pool offers nothing better. Its key (GINGER BEER) is banned for good
+        // as of v6.88.5, so it cannot open a sixth super line no matter when it
+        // is taken. Small and positive: it must lose to every planned card and
+        // to the hell-safe junk, and beat only true junk.
+
+        // =============================================================
+        // v6.88.3 USER DOCTRINE, from the live 373-minute Pat run
+        // =============================================================
+        // Four super lines only (SOUTH SIDE / VODKA TONIC / GIN TONIC /
+        // MOJITO). Everything below earns its slot on raw effect instead.
+        //
+        // "whisky sour, negroni, vodka cranberry should be massively boosted
+        // despite not having super key" — all three sat at Lv6 in that run and
+        // none of them supered. WHISKY SOUR's LEMON and NEGRONI's CAMPARI are
+        // off-plan; VODKA CRANBERRY's key is planned as a STAT (pickup radius),
+        // not as a super path.
+        if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
+            add(46 + (hellDetected ? 20 : 0), 'keyless-core');
+        }
+        // the four keyed lines sit ABOVE the keyless three by construction
+        if (!atCap && type === 'weapon' && SUPER_LINE_COCKTAILS.includes(name)) {
+            add(54 + (hellDetected ? 20 : 0), 'super-line');
+        }
+        // "olive, black vermouth, and simple syrup is now a top priority",
+        // "along with tomato juice", "cranberry as well", "mint as well".
+        // OLIVE is armour; TOMATO JUICE is ult throughput (demo 1: taken 4x,
+        // cast every 75 s vs 98 s without); CRANBERRY is the pickup radius that
+        // makes drops reachable while anchored; MINT is move speed AND the
+        // mark-escape margin. The two crafts are pure upside — applyCraft keeps
+        // the materials at full level with their stats still applying and only
+        // frees the slot count.
+        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name)) {
+            add(38 + (hellDetected ? 14 : 0), 'top-ingredient');
+        }
+        // ...and the four halves that BECOME those crafts inherit the priority,
+        // since a craft is only reachable if both materials reach Lv6.
+        if (!atCap && type === 'passive' && CRAFT_HALVES.includes(name)) {
+            add(34, 'craft-half');
+        }
+        // "lime, soda water can be junk pool picks": above true junk, below
+        // anything planned. Only pays when the pool has nothing better.
+        if (!atCap && JUNK_ACCEPTABLE.includes(name)) add(6, 'junk-acceptable');
+        // "tonic can be priority if it helps in day phase" (user). It does, and
+        // more than the phrasing suggests: TONIC is the SHARED key for two of
+        // the four super lines (VODKA TONIC and GIN TONIC), so one ingredient
+        // buys half the super plan. The boost is day-weighted because that is
+        // when the lines are being assembled; in hell it reverts to its normal
+        // plan value.
+        if (!atCap && name === 'TONIC') {
+            const gtTon = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            add((!hellDetected && gtTon < 1200) ? 32 : 12, 'tonic-two-lines');
+        }
+
         // ABSOLUTE PRIORITY (user): SOUTH SIDE and MINT lead everything below
         // the ultimate and SHAKING UP — the burn engine and its super key.
         // USER: SOUTH SIDE is THE weapon — nothing but the ultimate and the
         // base attack outranks it (MINT rides with it as its super key).
-        if (!atCap && /SOUTH\s*SIDE/i.test(name)) add(40, 'absolute-priority');
+        if (!atCap && /SOUTH\s*SIDE/i.test(name)) {
+            add(40, 'absolute-priority');
+            // v6.88.3 (user): "southside is essential to killing bosses". It is
+            // the only body-centred burn zone in the plan, and the zone damage
+            // predicate (hypot(e.x-z.x, e.y-z.y) < z.r + e.r) means it lands on
+            // a boss's HITBOX circle rather than needing the centre — which is
+            // why it works on paused bosses at a 150 px station where nothing
+            // else reaches. Its lead over the keyless three must not be
+            // marginal: the first measurement had it at 151 vs NEGRONI's 136.
+            add(28 + (enemyMix.boss > 0.3 || (lastPlan && lastPlan.boss) ? 22 : 0), 'boss-killer');
+        }
         if (!atCap && name === 'MINT') {
             add(24, 'absolute-priority');
             // v6.88.2 MARK ESCAPE (see MARK_CLEAR_PX in 01): a character whose
@@ -5687,8 +5945,14 @@
         // NOTE: deliberately NOT gated on hellDetected. 150 minutes can only
         // be hell, and if the latch was missed (a stray results-screen click,
         // a reload mid-run) the posture that matters most must still engage.
+        // v6.88.4 (user): "deep hell once bosses don't drop tips and the boss
+        // damage ring becomes as large as the canvas — anchor towards corner
+        // and spam ultimate". The RING is the observable signal; the clock is
+        // only a fallback for when no boss is on screen. Either fires it.
+        const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+        const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
         const cornerOn = !hpPanic && !markHere && !flight &&
-            gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000);
+            (ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
         const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
@@ -5800,8 +6064,27 @@
         // Hoisted so the reported diagnostic is literally the number the
         // planner steers to — a separately-computed label can drift from the
         // behaviour and then "tests" the label instead of the bot.
+        // v6.88.4 (user): "30-80 minutes hell - fast kill of frozen bosses via
+        // timestop or whisky sour by sitting ON TOP of their damage circle
+        // while the bosses still drop tips". Tips are the SUPER EVOLUTION
+        // TRIGGER (openRecipe: "base attack MAX + cocktail Lv6 + key MAX ->
+        // evolve at a BOSS TIP"), so this window is where the four-line plan
+        // actually cashes in — and a frozen boss cannot punish contact. The
+        // zone-damage predicate is `hypot(e.x-z.x, e.y-z.y) < z.r + e.r`, i.e.
+        // SOUTH SIDE's burn lands on the hitbox circle, so standing on it is
+        // where the damage is. Outside that window the old standoff stands.
+        const gtStop = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const tipWindow = hellDetected &&
+            gtStop >= (CONFIG.deepHell.tipWindowFromS || 1800) &&
+            gtStop <= (CONFIG.deepHell.tipWindowToS || 4800);
         const stopStation = stopBoss
-            ? ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90))
+            // ...but ONLY while the freeze is actually holding. The first cut
+            // dropped the station to point-blank for the whole window and the
+            // existing time-stop tests caught it: parked on the hitbox with the
+            // pause running out is exactly where the wake-up burst lands. The
+            // >120-frame guard is the same one the old close-station used.
+            ? ((tipWindow && (stopBoss.left || 0) > 120) ? Math.max(20, (stopBoss.r || 40) * 0.5)
+                : ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90)))
             : null;
 
         // v6.86.7 FLAME AIM. While the cross burns, the damage goes where the

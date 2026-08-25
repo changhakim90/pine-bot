@@ -1055,8 +1055,14 @@
         // NOTE: deliberately NOT gated on hellDetected. 150 minutes can only
         // be hell, and if the latch was missed (a stray results-screen click,
         // a reload mid-run) the posture that matters most must still engage.
+        // v6.88.4 (user): "deep hell once bosses don't drop tips and the boss
+        // damage ring becomes as large as the canvas — anchor towards corner
+        // and spam ultimate". The RING is the observable signal; the clock is
+        // only a fallback for when no boss is on screen. Either fires it.
+        const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+        const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
         const cornerOn = !hpPanic && !markHere && !flight &&
-            gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000);
+            (ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
         const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
@@ -1168,8 +1174,27 @@
         // Hoisted so the reported diagnostic is literally the number the
         // planner steers to — a separately-computed label can drift from the
         // behaviour and then "tests" the label instead of the bot.
+        // v6.88.4 (user): "30-80 minutes hell - fast kill of frozen bosses via
+        // timestop or whisky sour by sitting ON TOP of their damage circle
+        // while the bosses still drop tips". Tips are the SUPER EVOLUTION
+        // TRIGGER (openRecipe: "base attack MAX + cocktail Lv6 + key MAX ->
+        // evolve at a BOSS TIP"), so this window is where the four-line plan
+        // actually cashes in — and a frozen boss cannot punish contact. The
+        // zone-damage predicate is `hypot(e.x-z.x, e.y-z.y) < z.r + e.r`, i.e.
+        // SOUTH SIDE's burn lands on the hitbox circle, so standing on it is
+        // where the damage is. Outside that window the old standoff stands.
+        const gtStop = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const tipWindow = hellDetected &&
+            gtStop >= (CONFIG.deepHell.tipWindowFromS || 1800) &&
+            gtStop <= (CONFIG.deepHell.tipWindowToS || 4800);
         const stopStation = stopBoss
-            ? ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90))
+            // ...but ONLY while the freeze is actually holding. The first cut
+            // dropped the station to point-blank for the whole window and the
+            // existing time-stop tests caught it: parked on the hitbox with the
+            // pause running out is exactly where the wake-up burst lands. The
+            // >120-frame guard is the same one the old close-station used.
+            ? ((tipWindow && (stopBoss.left || 0) > 120) ? Math.max(20, (stopBoss.r || 40) * 0.5)
+                : ((stopBoss.left || 0) > 120 ? (stopBoss.r || 40) + 40 : Math.max(150, (stopBoss.r || 40) + 90)))
             : null;
 
         // v6.86.7 FLAME AIM. While the cross burns, the damage goes where the
