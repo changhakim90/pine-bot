@@ -1262,7 +1262,19 @@
         if (type === 'rbstat' && rainbowThisRun) add(80, 'rainbow-evolve');
 
         if (card && card.isNew) add(6, 'new');
-        if (atCap) add(-40, 'maxed');
+        // v6.89.3 — A STACKING BONUS HAS NO CAP, so the cap penalty must not
+        // reach it. A live pick audit from a deep run shows TIME STOP +2S
+        // carrying `maxed-40` from gt 3783 onward:
+        //     gt 3783  took TIME STOP +2S  247  timestop+215 ... maxed-40 ...
+        // It kept winning only because the deep-hell pool had collapsed to three
+        // cards; in any richer pool it was handing back 40 points it never owed.
+        // These three are CONSUMABLE STACKS, not levelled items — the crown run
+        // finished with timestopBonus 162, against a live sample of 8 at level
+        // 64, so the stat climbs far past anything a 6-level cap could mean.
+        // Whatever lv/maxlv the card reports, `atCap` is the wrong question for
+        // them.
+        const STACKING = (type === 'sp_timestop' || type === 'sp_firecross' || type === 'sp_tequila');
+        if (atCap && !STACKING) add(-40, 'maxed');
         // audit fix: measured means used to count TWICE (priority tables AND
         // ucb both scale with the same mean) — that double vote is what kept
         // dragging picks toward off-plan measured favorites. Once an item has

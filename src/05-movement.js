@@ -887,6 +887,12 @@
         // bosses off us, which is what makes a ring holdable at all.
         const knocker = [...supersMade].some(n => /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(n)) ||
             (ownedLevels['VODKA CRANBERRY'] || 0) >= 6 || (ownedLevels['MOSCOW MULE'] || 0) >= 6;
+        // v6.89.4 BUILD COMPLETENESS damps the kite in hell (user). Anything
+        // owned at any level counts — the point is whether the tools EXIST, not
+        // whether they are maxed.
+        let kiteBuiltN = 0;
+        for (const nm of KITE_DAMP_BUILD) if ((ownedLevels[nm] || 0) > 0) kiteBuiltN++;
+        const kiteBuildShare = KITE_DAMP_BUILD.length ? kiteBuiltN / KITE_DAMP_BUILD.length : 0;
         let kite = null;
         // v6.87.0: same bet, same per-character answer. Owning SOUTH SIDE (or
         // a fresh rainbow) still buys one chaser of impatience, because the
@@ -989,6 +995,24 @@
             if (e.frozen) frozenNear++; else movingNear++;
         }
         const pauseActive = frozenNear > 0 && movingNear <= Math.max(1, Math.round(frozenNear * 0.25));
+        // v6.89.4 KITE DAMPING (user), computed here because it reads the pause.
+        // The day is untouched: the funding phase still wants the pack dragged
+        // through burn zones, and a thin early build has nothing else to do.
+        //
+        //   "make kiting lower in hell mode if bot has [the build]"
+        //   "kiting lower especially with time stop ... in hell mode"
+        //   "just enough distance for no contact damage deaths — which should be
+        //    rare with negroni's dodge and shield"
+        //
+        // Under a time stop the field is not moving. There is nothing to sweep
+        // around and nothing chasing; the kite is pure wasted travel that walks
+        // the bot off its own burn. That case is damped hardest.
+        const kiteDampBuild = hellDetected
+            ? 1 - (1 - (M.kiteDampFull != null ? M.kiteDampFull : 0.25)) * kiteBuildShare
+            : 1;
+        const kiteDamp = (hellDetected && pauseActive)
+            ? kiteDampBuild * (M.kiteDampPaused != null ? M.kiteDampPaused : 0.15)
+            : kiteDampBuild;
 
         // FLIGHT MODE: in hell, with no pause holding the field and the
         // bodies scaled past killable, fighting is not an option — run,
@@ -1095,8 +1119,39 @@
         // only a fallback for when no boss is on screen. Either fires it.
         const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
-        const cornerOn = !hpPanic && !markHere && !flight &&
-            (ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
+        // v6.89.3 (user): "kiting for unkillable mobs is useless, and anchoring
+        // in corner with southside to theoretically be able to kill the contact
+        // mobs is better in order to land a timestop ... so anchoring might be
+        // able to be employed much earlier ... except to hunt down bosses."
+        //
+        // That is a complete doctrine, and it inverts the old gate. Kiting only
+        // pays while the pack can be outrun and killed; past the point where mob
+        // HP has scaled beyond the build, dragging a conga line achieves nothing
+        // except covering ground. The corner does two things kiting cannot: it
+        // collapses the approach arc from 360 degrees to about 90, and it parks
+        // the SOUTH SIDE burn — which is BODY-CENTRED — exactly where the funnel
+        // delivers bodies. Kills are how a TIME STOP drops, and the time stop is
+        // what the whole deep build runs on.
+        //
+        // So the corner no longer waits for a clock at all when the burn exists:
+        // hell + SOUTH SIDE owned is the condition. The clock and the huge ring
+        // stay as fallbacks for a build that never got the zoner.
+        //
+        // THE EXCEPTION IS THE USER'S OWN: a boss on the field is worth breaking
+        // the corner for. That also keeps the 1800-4800 tip window intact, since
+        // farming frozen bosses IS boss hunting — the phase that funds the run
+        // is protected by the same clause that names it.
+        // ...and the exception is SCOPED to the phase that makes it true. In
+        // deep hell there is essentially always a boss on the field, so a bare
+        // "any boss breaks the corner" would switch the corner off forever —
+        // the same dead-gate mistake in reverse. Bosses are worth hunting while
+        // they still DROP TIPS; the doctrine's own definition of deep hell is
+        // the moment they stop. So the hunt exception expires with the window.
+        const tipOpen = gtCorner < (CONFIG.deepHell.tipWindowToS || 4800);
+        const bossHunt = (th.boss === true && tipOpen) || !!th.rival;
+        const zonerCorner = CONFIG.deepHell.cornerWithZoner !== false && hellDetected && zoner;
+        const cornerOn = !hpPanic && !markHere && !flight && !bossHunt &&
+            (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
         const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
@@ -1793,7 +1848,7 @@
                     if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
                 }
             }
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);   // v6.89.3: cornered means STOP kiting — the two pulls fight, and the corner is the one that kills
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
@@ -1831,7 +1886,7 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

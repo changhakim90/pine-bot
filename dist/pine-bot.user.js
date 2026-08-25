@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.2
+// @version      6.89.4
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.2';
+    const SCRIPT_VERSION = '6.89.4';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -222,7 +222,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -329,15 +329,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -409,6 +409,9 @@
             stopBossPull: 44,      // frozen-boss station weight (6.85.6/11)
             grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
+            kiteDampFull: 0.25,   // v6.89.4: kite pull at a COMPLETE build in hell (1 = off)
+            kiteDampPaused: 0.15, // v6.89.4: and under a TIME STOP, on top of that — a frozen
+                                  //          field has nothing to sweep around (1 = off)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
@@ -579,6 +582,16 @@
                                        // doctrine itself starts deep hell.
                                        // Still fires sooner if a boss ring
                                        // fills the canvas.
+            // v6.89.3 (user): "still trying to find the right time on when to
+            // kite and then switch to corner anchoring — seems like it can be
+            // much earlier than the previous 150 minute mark estimate."
+            // Since the right moment is still an open question, it is a LIVE
+            // SWITCH rather than a rebuild:
+            //   pineBot.config.deepHell.cornerWithZoner = false   // clock only
+            //   pineBot.config.deepHell.cornerAnchorFromS = 3000  // move the clock
+            // true = corner as soon as hell is latched and SOUTH SIDE is owned,
+            // which is the earliest the burn-in-the-funnel plan can work at all.
+            cornerWithZoner: true,
             cornerPull: 2.4            // weight on closing to the nearest corner
 
         },
@@ -881,7 +894,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -908,11 +921,49 @@
     // damage holdouts at all. Ranked ABOVE true junk, below anything planned.
     const JUNK_ACCEPTABLE = ['LIME', 'SODA WATER'];
     // v6.88.3 (user): Lv6 cocktails that earn their slot WITHOUT a super key.
-    const KEYLESS_BOOST = ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'];
+    // v6.89.3 (user): "for non super cocktails negroni is the only essential."
+    // WHISKY SOUR and VODKA CRANBERRY are off the roster now, so boosting them
+    // would be boosting cards the plan no longer wants a slot spent on.
+    const KEYLESS_BOOST = ['NEGRONI'];
     // ...and the four that DO carry a key must still outrank them, or the
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
-    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
+    // v6.89.3 (user, from watching the runs): "these are the only essential
+    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC is out.
+    // Note the SELF-ENFORCING consequence: TONIC and SUGAR and MINT stay in the
+    // ingredient plan, so under the 6.89.1 latent-line rule every off-plan
+    // cocktail keyed to them — GIN TONIC, VODKA CRANBERRY, ESPRESSO MARTINI —
+    // is now hard-refused at level zero. The roster shrink enforces itself.
+    // Three super lines against a six-super gate is the widest safety margin
+    // this build has ever had.
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO'];
+
+    // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
+    // VODKA TONIC / MOJITO / NEGRONI / GIN TONIC and the black vermouth and
+    // water and sugar and olives" — "can keep tomato juice and cranberry as
+    // well."
+    //
+    // This is a COMPLETENESS measure, not a roster. Kiting is what a thin build
+    // does because it has nothing else: drag the pack and hope. Once the burn,
+    // the shield, the armour and the ult economy are all standing, the same
+    // motion is pure cost — it walks the bot out of its own burn zones and
+    // stops the base attack ever pointing at anything for long.
+    //
+    // Scored as a SHARE rather than an all-or-nothing gate, deliberately: GIN
+    // TONIC is off the roster as of 6.89.3 and is hard-refused by the
+    // latent-line rule, so a list that required every name would never fire.
+    // A share degrades gracefully as the roster changes.
+    const KITE_DAMP_BUILD = [
+        'SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'GIN TONIC',
+        'BLACK VERMOUTH', 'WATER', 'SUGAR', 'OLIVE', 'TOMATO JUICE', 'CRANBERRY'
+    ];
+    // At a full build the kite runs at this fraction of its normal pull.
+    // Lives in CONFIG.movement rather than as a module const so the strength is
+    // a LIVE dial — pineBot.config.movement.kiteDampFull = 1 disables it — and
+    // so a test can vary it in isolation. That second reason is not incidental:
+    // two attempts to prove this change behaviourally by varying the BUILD both
+    // passed with the damping deleted, because owning those items moves other
+    // planner terms too. Varying the constant is the only clean isolation.
 
     // =================================================================
     // v6.88.4 PHASE DOCTRINE (user, stated as a strict ordering)
@@ -924,9 +975,10 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC',
-        'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY'
-    ];
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI'
+    ];   // v6.89.3: GIN TONIC / WHISKY SOUR / VODKA CRANBERRY dropped — the
+         // ingredient order above is UNCHANGED, per the user: "for ingredients
+         // the roster should stay with the priorities."
     // THREE ADDITIONS TO THE USER'S LIST, each flagged rather than assumed:
     //   SWEET VERMOUTH — BLACK VERMOUTH is sweetver + dryver. The list names
     //     the craft and one half; without the other half the craft is
@@ -3821,7 +3873,19 @@
         if (type === 'rbstat' && rainbowThisRun) add(80, 'rainbow-evolve');
 
         if (card && card.isNew) add(6, 'new');
-        if (atCap) add(-40, 'maxed');
+        // v6.89.3 — A STACKING BONUS HAS NO CAP, so the cap penalty must not
+        // reach it. A live pick audit from a deep run shows TIME STOP +2S
+        // carrying `maxed-40` from gt 3783 onward:
+        //     gt 3783  took TIME STOP +2S  247  timestop+215 ... maxed-40 ...
+        // It kept winning only because the deep-hell pool had collapsed to three
+        // cards; in any richer pool it was handing back 40 points it never owed.
+        // These three are CONSUMABLE STACKS, not levelled items — the crown run
+        // finished with timestopBonus 162, against a live sample of 8 at level
+        // 64, so the stat climbs far past anything a 6-level cap could mean.
+        // Whatever lv/maxlv the card reports, `atCap` is the wrong question for
+        // them.
+        const STACKING = (type === 'sp_timestop' || type === 'sp_firecross' || type === 'sp_tequila');
+        if (atCap && !STACKING) add(-40, 'maxed');
         // audit fix: measured means used to count TWICE (priority tables AND
         // ucb both scale with the same mean) — that double vote is what kept
         // dragging picks toward off-plan measured favorites. Once an item has
@@ -6012,6 +6076,12 @@
         // bosses off us, which is what makes a ring holdable at all.
         const knocker = [...supersMade].some(n => /VODKA\s*CRANBERRY|MOSCOW\s*MULE/i.test(n)) ||
             (ownedLevels['VODKA CRANBERRY'] || 0) >= 6 || (ownedLevels['MOSCOW MULE'] || 0) >= 6;
+        // v6.89.4 BUILD COMPLETENESS damps the kite in hell (user). Anything
+        // owned at any level counts — the point is whether the tools EXIST, not
+        // whether they are maxed.
+        let kiteBuiltN = 0;
+        for (const nm of KITE_DAMP_BUILD) if ((ownedLevels[nm] || 0) > 0) kiteBuiltN++;
+        const kiteBuildShare = KITE_DAMP_BUILD.length ? kiteBuiltN / KITE_DAMP_BUILD.length : 0;
         let kite = null;
         // v6.87.0: same bet, same per-character answer. Owning SOUTH SIDE (or
         // a fresh rainbow) still buys one chaser of impatience, because the
@@ -6114,6 +6184,24 @@
             if (e.frozen) frozenNear++; else movingNear++;
         }
         const pauseActive = frozenNear > 0 && movingNear <= Math.max(1, Math.round(frozenNear * 0.25));
+        // v6.89.4 KITE DAMPING (user), computed here because it reads the pause.
+        // The day is untouched: the funding phase still wants the pack dragged
+        // through burn zones, and a thin early build has nothing else to do.
+        //
+        //   "make kiting lower in hell mode if bot has [the build]"
+        //   "kiting lower especially with time stop ... in hell mode"
+        //   "just enough distance for no contact damage deaths — which should be
+        //    rare with negroni's dodge and shield"
+        //
+        // Under a time stop the field is not moving. There is nothing to sweep
+        // around and nothing chasing; the kite is pure wasted travel that walks
+        // the bot off its own burn. That case is damped hardest.
+        const kiteDampBuild = hellDetected
+            ? 1 - (1 - (M.kiteDampFull != null ? M.kiteDampFull : 0.25)) * kiteBuildShare
+            : 1;
+        const kiteDamp = (hellDetected && pauseActive)
+            ? kiteDampBuild * (M.kiteDampPaused != null ? M.kiteDampPaused : 0.15)
+            : kiteDampBuild;
 
         // FLIGHT MODE: in hell, with no pause holding the field and the
         // bodies scaled past killable, fighting is not an option — run,
@@ -6220,8 +6308,39 @@
         // only a fallback for when no boss is on screen. Either fires it.
         const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
-        const cornerOn = !hpPanic && !markHere && !flight &&
-            (ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
+        // v6.89.3 (user): "kiting for unkillable mobs is useless, and anchoring
+        // in corner with southside to theoretically be able to kill the contact
+        // mobs is better in order to land a timestop ... so anchoring might be
+        // able to be employed much earlier ... except to hunt down bosses."
+        //
+        // That is a complete doctrine, and it inverts the old gate. Kiting only
+        // pays while the pack can be outrun and killed; past the point where mob
+        // HP has scaled beyond the build, dragging a conga line achieves nothing
+        // except covering ground. The corner does two things kiting cannot: it
+        // collapses the approach arc from 360 degrees to about 90, and it parks
+        // the SOUTH SIDE burn — which is BODY-CENTRED — exactly where the funnel
+        // delivers bodies. Kills are how a TIME STOP drops, and the time stop is
+        // what the whole deep build runs on.
+        //
+        // So the corner no longer waits for a clock at all when the burn exists:
+        // hell + SOUTH SIDE owned is the condition. The clock and the huge ring
+        // stay as fallbacks for a build that never got the zoner.
+        //
+        // THE EXCEPTION IS THE USER'S OWN: a boss on the field is worth breaking
+        // the corner for. That also keeps the 1800-4800 tip window intact, since
+        // farming frozen bosses IS boss hunting — the phase that funds the run
+        // is protected by the same clause that names it.
+        // ...and the exception is SCOPED to the phase that makes it true. In
+        // deep hell there is essentially always a boss on the field, so a bare
+        // "any boss breaks the corner" would switch the corner off forever —
+        // the same dead-gate mistake in reverse. Bosses are worth hunting while
+        // they still DROP TIPS; the doctrine's own definition of deep hell is
+        // the moment they stop. So the hunt exception expires with the window.
+        const tipOpen = gtCorner < (CONFIG.deepHell.tipWindowToS || 4800);
+        const bossHunt = (th.boss === true && tipOpen) || !!th.rival;
+        const zonerCorner = CONFIG.deepHell.cornerWithZoner !== false && hellDetected && zoner;
+        const cornerOn = !hpPanic && !markHere && !flight && !bossHunt &&
+            (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
         const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
@@ -6918,7 +7037,7 @@
                     if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
                 }
             }
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);   // v6.89.3: cornered means STOP kiting — the two pulls fight, and the corner is the one that kills
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
@@ -6956,7 +7075,7 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

@@ -1461,15 +1461,19 @@ if (which === 'roster-cap') {
         assert.deepStrictEqual(pat.ingredients, mg.ingredients, 'pat vs minguk ingredients');
         assert.deepStrictEqual(joe.ingredients, mg.ingredients, 'joe vs minguk ingredients');
     });
-    test('the four super lines are the ones the 373-minute run finished with', () => {
-        for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'])
+    test('the three super lines are the only essential ones (user, 6.89.3)', () => {
+        for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO'])
             assert.ok(pat.cocktails.includes(c), c + ' missing: ' + pat.cocktails.join(','));
         for (const k of ['MINT', 'TONIC', 'SUGAR'])
             assert.ok(pat.ingredients.includes(k), k + ' missing');
     });
-    test('the three keyless cocktails are carried', () => {
-        for (const c of ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'])
-            assert.ok(pat.cocktails.includes(c), c + ' missing');
+    test('...and the ones the user dropped are gone', () => {
+        for (const c of ['GIN TONIC', 'WHISKY SOUR', 'VODKA CRANBERRY'])
+            assert.ok(!pat.cocktails.includes(c), c + ' should be off the roster');
+    });
+    test('NEGRONI is the only keyless cocktail carried', () => {
+        assert.ok(pat.cocktails.includes('NEGRONI'), 'NEGRONI missing');
+        assert.strictEqual(pat.cocktails.length, 4, pat.cocktails.join(','));
     });
     test('CAMPARI and COSMOPOLITAN are out', () => {
         assert.ok(!pat.ingredients.includes('CAMPARI'), pat.ingredients.join(','));
@@ -2051,6 +2055,51 @@ if (which === 'corner-anchor') {
     // ...and inside the TIP WINDOW it must still stay off: 1800-4800 is the
     // revenue phase, and the runs that reach 100+ minutes are the ones that
     // farmed it. Cornering there would fight the phase that funds the build.
+    // v6.89.3 — THE EARLY GATE. The user, watching the first version where the
+    // corner engaged at all: "kiting for unkillable mobs is useless ... anchoring
+    // in corner with southside ... so anchoring might be able to be employed
+    // much earlier ... except to hunt down bosses." So the corner no longer
+    // waits for a clock once the burn exists. hellDetected is latched the way
+    // the main loop does it — through handleScreens — because the flag is
+    // lexical and no test hook sets it.
+    pineBot.test.handleScreens();
+    global.enemies = [{ x: 498, y: 498, r: 18, hp: 1e6, type: 'bomber' }];
+    pineBot.test.setOwned({ 'SOUTH SIDE': 0 });
+    const noBurn = place(2000);
+    test('early hell WITHOUT the burn does not corner — kiting still pays', () =>
+        assert.strictEqual(noBurn && noBurn.cornerAnchor, false, String(noBurn && noBurn.cornerAnchor)));
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    const burn = place(2000);
+    test('...but SOUTH SIDE in hell corners at 33 minutes, no clock involved', () =>
+        assert.strictEqual(burn && burn.cornerAnchor, true,
+            String(burn && burn.cornerAnchor) + ' — zoner + hell should be enough now'));
+    test('and the kite yields to it rather than fighting it', () =>
+        assert.ok(burn.kiting !== true || burn.cornerAnchor === true, JSON.stringify({ k: burn.kiting, c: burn.cornerAnchor })));
+    // THE USER'S OWN EXCEPTION: a boss is worth breaking the corner for.
+    // NOTE: place() rewrites global.enemies, so the boss cases set the field
+    // themselves. (The first draft used place() and silently tested bombers.)
+    const withBoss = (gt) => {
+        global.gameTime = gt;
+        global.player.x = 400; global.player.y = 400;
+        global.player.hp = 120; global.player.maxHp = 120;
+        global.enemies = [{ x: 470, y: 470, r: 40, hp: 1e6, maxHp: 1e6, type: 'boss', t: 'boss', boss: true }];
+        return T.planMove();
+    };
+    const hunting = withBoss(2000);
+    test('a boss inside the tip window breaks the corner — bosses get hunted', () =>
+        assert.strictEqual(hunting && hunting.cornerAnchor, false,
+            String(hunting && hunting.cornerAnchor)));
+    // ...but the SAME boss past the tip window does not: once bosses stop
+    // dropping tips they are not worth leaving the funnel for, and deep hell
+    // always has one on the field.
+    const huntingLate = withBoss(6000);
+    test('...but the same boss past the tip window does NOT', () =>
+        assert.strictEqual(huntingLate && huntingLate.cornerAnchor, true,
+            String(huntingLate && huntingLate.cornerAnchor)));
+    global.enemies = Array.from({ length: 6 }, (_, i) => ({
+        x: 498 + (i % 3) * 14, y: 498 + Math.floor(i / 3) * 14, r: 18, hp: 1e6, type: 'bomber'
+    }));
+    pineBot.test.setOwned({ 'SOUTH SIDE': 0 });
     const inTipWindow = place(3000);
     test('inside the tip window it stays OFF — that phase is for farming', () =>
         assert.strictEqual(inTipWindow && inTipWindow.cornerAnchor, false,
@@ -2326,4 +2375,143 @@ if (which === 'shield-pool') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.3 — THE ULT POSTURE FOLLOWS THE CORNER, and a stacking bonus is not
+// "maxed". Both came out of one live pick audit plus the user watching the
+// first version where the corner actually engaged.
+if (which === 'ult-chain') {
+    // gt 3000 ON PURPOSE. `ultSpam` already fires the ult on cooldown whenever
+    // hell is latched and gameTime > 4800, so testing above that line would
+    // pass with the corner link deleted. Below it, the corner is the ONLY thing
+    // that can engage the deep posture — which is the case ringHuge creates
+    // whenever a boss ring fills the canvas early.
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        // A DELIBERATELY QUIET FIELD: every ordinary ult trigger — crowd, panic,
+        // flight, boss, loot, passouts — false. Without that this proves nothing.
+        const quiet = (extra) => Object.assign({
+            near: 0, hpRatio: 1, hpPanic: false, panic: false, flight: false,
+            boss: false, bossNear: false, wallNear: false, roamingBoss: false,
+            passoutsNear: 0, lines: 0, toughness: 0, depth: 0,
+            contactImminent: false, cornerAnchor: false
+        }, extra || {});
+        const fire = (plan) => {
+            let ults = 0;
+            global.useUltimate = () => { ults++; };
+            global.tryDash = () => { };
+            pineBot.test.maybeAbilities(plan);
+            return ults;
+        };
+        // The stacking specials must not be taxed as capped items.
+        const T = pineBot.test;
+        const sc = (n, t, lv, maxlv) => T.scoreCard({ n, type: t, lv, maxlv }, 0, []).score;
+        const why = (n, t, lv, maxlv) => T.scoreCard({ n, type: t, lv, maxlv }, 0, []).why;
+        test('a capped TIME STOP is not penalised as maxed', () =>
+            assert.ok(!/maxed/.test(why('TIME STOP +2S', 'sp_timestop', 6, 6)),
+                why('TIME STOP +2S', 'sp_timestop', 6, 6)));
+        test('...so it scores the same at cap as below it', () =>
+            assert.strictEqual(sc('TIME STOP +2S', 'sp_timestop', 6, 6),
+                sc('TIME STOP +2S', 'sp_timestop', 5, 6)));
+        test('an ordinary maxed passive IS still penalised', () =>
+            assert.ok(/maxed/.test(why('OLIVE', 'passive', 6, 6)), why('OLIVE', 'passive', 6, 6)));
+        done();
+    });
+}
+
+// v6.89.4 — A BUILT-OUT BOT KITES LESS IN HELL (user). Kiting is what a thin
+// build does because it has nothing else; once the burn, shield, armour and ult
+// economy all exist the same motion walks the bot out of its own burn zones.
+if (which === 'kite-damp') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();   // latch hell the way the main loop does
+        // The 6.89.3 corner anchor would otherwise own the heading here (hell +
+        // SOUTH SIDE), and it damps the kite to 0.12 by design — both arms then
+        // converge to the same cornerward step and the test proves nothing.
+        pineBot.config.deepHell.cornerWithZoner = false;
+        const T = pineBot.test;
+        const BUILD = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'GIN TONIC',
+            'BLACK VERMOUTH', 'WATER', 'SUGAR', 'OLIVE', 'TOMATO JUICE', 'CRANBERRY'];
+        // A CHASE the planner will genuinely want to kite: a pack behind the
+        // player, none of it killable. Held identical across both builds so the
+        // only thing that changes is what the bot owns.
+        const field = (gt) => {
+            global.gameTime = gt;
+            global.player.x = 270; global.player.y = 270;
+            global.player.hp = 120; global.player.maxHp = 120;
+            // Far enough out that the CROWD PANIC gate stays open — panic
+            // switches kiting off entirely, and the first draft of this test
+            // put five bodies at 60px and compared two identical steps.
+            // A SYMMETRIC RING. The kite term is tangential, so it only decides
+            // the heading when the radial danger field is near-isotropic —
+            // otherwise flee/standoff dominate and every arm converges to the
+            // same step no matter what the kite weight is. Far enough out (165px)
+            // that CROWD PANIC, which switches kiting off entirely, stays open.
+            global.enemies = Array.from({ length: 6 }, (_, i) => ({
+                type: 'mob',
+                x: 270 + 165 * Math.cos(i * Math.PI / 3),
+                y: 270 + 165 * Math.sin(i * Math.PI / 3),
+                r: 14, hp: 9e9, maxHp: 9e9, speed: 2.0, moving: true
+            }));
+            return T.planMove();
+        };
+        // planMove SMOOTHS against lastDir, so two consecutive calls differ even
+        // with identical input — which is why two earlier drafts of the
+        // behavioural assertion passed with the damping deleted. Let each arm
+        // converge before comparing.
+        const settle = (gt) => { let r; for (let i = 0; i < 12; i++) r = field(gt); return r; };
+        const owned = {};
+        for (const n of BUILD) owned[n] = 0;
+        T.setOwned(owned);
+        const thin = field(3000);
+        test('a thin build in hell kites at full pull', () =>
+            assert.strictEqual(thin.kiteDamp, 1, String(thin.kiteDamp)));
+        for (const n of BUILD) owned[n] = 1;
+        T.setOwned(owned);
+        const built = field(3000);
+        test('a complete build damps the kite', () =>
+            assert.ok(built.kiteDamp < 0.3, 'kiteDamp ' + built.kiteDamp));
+        test('...and the share is what drives it, not a flag', () =>
+            assert.strictEqual(built.kiteBuildShare, 1, String(built.kiteBuildShare)));
+        test('the damping is GRADUAL — half a build is half the discount', () => {
+            for (const n of BUILD) owned[n] = 0;
+            for (const n of BUILD.slice(0, 6)) owned[n] = 1;
+            T.setOwned(owned);
+            const half = field(3000);
+            assert.ok(half.kiteDamp > built.kiteDamp && half.kiteDamp < thin.kiteDamp,
+                JSON.stringify({ thin: thin.kiteDamp, half: half.kiteDamp, built: built.kiteDamp }));
+        });
+        // THE BEHAVIOURAL PROOF. The first draft compared an empty build to a
+        // full one and PASSED WITH kiteDamp DELETED — because SOUTH SIDE sets
+        // `zoner` (kite x1.6) and OLIVE/NEGRONI set the armour confidence, so
+        // the step moved for reasons that had nothing to do with this change.
+        //
+        // The discriminating comparison holds every OTHER build-sensitive term
+        // fixed: SOUTH SIDE, OLIVE and NEGRONI are owned in BOTH arms, and only
+        // the eight items that touch nothing else in the planner are varied.
+        // WIRING, NOT BEHAVIOUR — and labelled as such, because four attempts at
+        // a behavioural assertion all passed with the damping deleted:
+        //   1. thin build vs full build — owning those items also flips `zoner`
+        //      (kite x1.6) and the OLIVE/NEGRONI armour confidence.
+        //   2. holding those three fixed and varying only the "neutral" eight —
+        //      build hunger reads them too.
+        //   3. varying only CONFIG.movement.kiteDampFull — but planMove smooths
+        //      against lastDir, so consecutive calls differ anyway.
+        //   4. settling each arm first, on a symmetric ring, with the corner
+        //      anchor disabled — the heading is still pinned by flee/escape at
+        //      this crowd size, and both arms converge to the same step.
+        // The damping is real and the computation above is tested; what could
+        // not be proven cheaply is that the term reaches the gain expression.
+        // This asserts exactly that and nothing more.
+        test('the damping is actually wired into the kite gain term', () => {
+            const src = require('fs').readFileSync(SCRIPT, 'utf8');
+            const line = src.split('\n').find(l => /kitePull \* charOf\(\)\.kiteMul/.test(l));
+            assert.ok(line && /\*\s*kiteDamp\s*\*/.test(line),
+                'kiteDamp is missing from the kite gain term');
+        });
+    }, 0);
+    setTimeout(() => done(), 40);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

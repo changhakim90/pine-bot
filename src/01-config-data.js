@@ -220,7 +220,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -327,15 +327,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -407,6 +407,9 @@
             stopBossPull: 44,      // frozen-boss station weight (6.85.6/11)
             grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
+            kiteDampFull: 0.25,   // v6.89.4: kite pull at a COMPLETE build in hell (1 = off)
+            kiteDampPaused: 0.15, // v6.89.4: and under a TIME STOP, on top of that — a frozen
+                                  //          field has nothing to sweep around (1 = off)
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
@@ -577,6 +580,16 @@
                                        // doctrine itself starts deep hell.
                                        // Still fires sooner if a boss ring
                                        // fills the canvas.
+            // v6.89.3 (user): "still trying to find the right time on when to
+            // kite and then switch to corner anchoring — seems like it can be
+            // much earlier than the previous 150 minute mark estimate."
+            // Since the right moment is still an open question, it is a LIVE
+            // SWITCH rather than a rebuild:
+            //   pineBot.config.deepHell.cornerWithZoner = false   // clock only
+            //   pineBot.config.deepHell.cornerAnchorFromS = 3000  // move the clock
+            // true = corner as soon as hell is latched and SOUTH SIDE is owned,
+            // which is the earliest the burn-in-the-funnel plan can work at all.
+            cornerWithZoner: true,
             cornerPull: 2.4            // weight on closing to the nearest corner
 
         },
@@ -879,7 +892,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY', 'MOJITO'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -906,11 +919,49 @@
     // damage holdouts at all. Ranked ABOVE true junk, below anything planned.
     const JUNK_ACCEPTABLE = ['LIME', 'SODA WATER'];
     // v6.88.3 (user): Lv6 cocktails that earn their slot WITHOUT a super key.
-    const KEYLESS_BOOST = ['WHISKY SOUR', 'NEGRONI', 'VODKA CRANBERRY'];
+    // v6.89.3 (user): "for non super cocktails negroni is the only essential."
+    // WHISKY SOUR and VODKA CRANBERRY are off the roster now, so boosting them
+    // would be boosting cards the plan no longer wants a slot spent on.
+    const KEYLESS_BOOST = ['NEGRONI'];
     // ...and the four that DO carry a key must still outrank them, or the
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
-    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
+    // v6.89.3 (user, from watching the runs): "these are the only essential
+    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC is out.
+    // Note the SELF-ENFORCING consequence: TONIC and SUGAR and MINT stay in the
+    // ingredient plan, so under the 6.89.1 latent-line rule every off-plan
+    // cocktail keyed to them — GIN TONIC, VODKA CRANBERRY, ESPRESSO MARTINI —
+    // is now hard-refused at level zero. The roster shrink enforces itself.
+    // Three super lines against a six-super gate is the widest safety margin
+    // this build has ever had.
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO'];
+
+    // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
+    // VODKA TONIC / MOJITO / NEGRONI / GIN TONIC and the black vermouth and
+    // water and sugar and olives" — "can keep tomato juice and cranberry as
+    // well."
+    //
+    // This is a COMPLETENESS measure, not a roster. Kiting is what a thin build
+    // does because it has nothing else: drag the pack and hope. Once the burn,
+    // the shield, the armour and the ult economy are all standing, the same
+    // motion is pure cost — it walks the bot out of its own burn zones and
+    // stops the base attack ever pointing at anything for long.
+    //
+    // Scored as a SHARE rather than an all-or-nothing gate, deliberately: GIN
+    // TONIC is off the roster as of 6.89.3 and is hard-refused by the
+    // latent-line rule, so a list that required every name would never fire.
+    // A share degrades gracefully as the roster changes.
+    const KITE_DAMP_BUILD = [
+        'SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'GIN TONIC',
+        'BLACK VERMOUTH', 'WATER', 'SUGAR', 'OLIVE', 'TOMATO JUICE', 'CRANBERRY'
+    ];
+    // At a full build the kite runs at this fraction of its normal pull.
+    // Lives in CONFIG.movement rather than as a module const so the strength is
+    // a LIVE dial — pineBot.config.movement.kiteDampFull = 1 disables it — and
+    // so a test can vary it in isolation. That second reason is not incidental:
+    // two attempts to prove this change behaviourally by varying the BUILD both
+    // passed with the damping deleted, because owning those items moves other
+    // planner terms too. Varying the constant is the only clean isolation.
 
     // =================================================================
     // v6.88.4 PHASE DOCTRINE (user, stated as a strict ordering)
@@ -922,9 +973,10 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC',
-        'NEGRONI', 'WHISKY SOUR', 'VODKA CRANBERRY'
-    ];
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI'
+    ];   // v6.89.3: GIN TONIC / WHISKY SOUR / VODKA CRANBERRY dropped — the
+         // ingredient order above is UNCHANGED, per the user: "for ingredients
+         // the roster should stay with the priorities."
     // THREE ADDITIONS TO THE USER'S LIST, each flagged rather than assumed:
     //   SWEET VERMOUTH — BLACK VERMOUTH is sweetver + dryver. The list names
     //     the craft and one half; without the other half the craft is
