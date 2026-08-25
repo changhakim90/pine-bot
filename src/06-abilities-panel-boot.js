@@ -194,7 +194,13 @@
         // and no invulnerability at all), but callGame is a no-op while the
         // real cooldown runs, so a tight retry costs nothing and keeps the
         // rule uniform.
-        const invulnUlt = CH.ultKind === 'spray' || CH.ultKind === 'aura';
+        // v6.89.9: ALL THREE ults grant invulnerability — isInvuln() returns true
+        // for ultUntil (joe), ultSpiralUntil (pat) AND the bare `claseUlt` object
+        // (minguk). The old spray/aura test encoded a distinction that does not
+        // exist in the source. Kept as a constant so the ultKind semantics stay
+        // documented, but it no longer gates anything.
+        const invulnUlt = true;   // was: CH.ultKind === 'spray' || CH.ultKind === 'aura'
+        void invulnUlt;
         const DH = CONFIG.deepHell;
         const ultChain = hellDetected && gtU > (DH.ultChainFromS || 9000);
         if (ultChain) ultGate = Math.min(ultGate, DH.ultChainGateMs || 300);

@@ -696,9 +696,36 @@
         // game's contact loop is gated on `!isInvuln()`. Nothing can hurt us
         // in that window, so caution is wasted there, and for joe RETREATING
         // wastes the ult outright: the spikes only reach player.r + ~149.
+        // v6.89.9 MINGUK IS INVULNERABLE DURING THE CLASE AZUL DROP, and this
+        // bot could not see it. Read whole from source:
+        //
+        //   function isInvuln(){ return player.invuln>0 ||
+        //     gameTime < (player.ultUntil||0) ||
+        //     gameTime < (player.ultSpiralUntil||0) || !!claseUlt; }
+        //
+        // The last clause is the one that was missed. `useUltimate` for minguk
+        // sets `claseUlt = { t:0, drop:max(60, round(dropSec*60)), ... }` — a
+        // bare module-scope object, not a timestamp on `player` — and the
+        // contact loop's gate returns true for as long as it EXISTS. dropSec
+        // comes from the bomb-drop sound (2.3 s fallback), so the window is
+        // ~2.3 s of drop plus the white-flash phase: comparable to pat's 2.834 s
+        // and utterly unlike the "no invulnerability at all" this project has
+        // assumed for minguk since 6.86.1. The user called it: "minguk's
+        // ultimate does have an invincibility frame, the game just doesn't seem
+        // to label it correctly."
+        //
+        // The cost of missing it was not cosmetic. `ultInvuln` feeds three
+        // gates directly:
+        //     caution  = ... * (ultInvuln ? 0.35 : 1)
+        //     hpPanic  = !ultInvuln && hpRatio < ...
+        //     flight   = ... && !ultInvuln
+        // so for minguk the bot played its most frightened posture — panicking,
+        // fleeing, and (before 6.89.8) dashing — through the single safest
+        // 2.3 seconds of the entire run, every single time.
         const gtInv = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const ultInvuln = (safe(() => player.ultUntil, 0) > gtInv) ||
-            (safe(() => player.ultSpiralUntil, 0) > gtInv);
+            (safe(() => player.ultSpiralUntil, 0) > gtInv) ||
+            !!safe(() => claseUlt, null);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';
         // v6.86.4: how close the ultimate is — the whole passout economy keys
         // off this (see CONFIG.movement.ultHarvestLeadS).

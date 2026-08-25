@@ -2916,4 +2916,59 @@ if (which === 'panic-anchor') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.9 — MINGUK'S ULT DOES GRANT INVULNERABILITY, via a clause this bot never
+// read. isInvuln() ends in `|| !!claseUlt`, and useUltimate sets that bare object
+// for minguk. `ultInvuln` only tested player.ultUntil / player.ultSpiralUntil, so
+// for minguk it was permanently false — and it gates caution, hpPanic and flight.
+if (which === 'minguk-invuln') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 6000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();
+        const T = pineBot.test;
+        // A field that WOULD panic and flee: hurt, surrounded, nothing killable.
+        // Held identical; the only thing that changes is whether the drop is up.
+        const field = () => {
+            global.gameTime = 6000;
+            global.player = { x: 270, y: 270, r: 7.2, hp: 60, maxHp: 180, speed: 2.375 };
+            global.enemies = Array.from({ length: 8 }, (_, i) => ({
+                type: 'mob', hp: 9e9, maxHp: 9e9, r: 14, speed: 5, moving: true,
+                x: 270 + 70 * Math.cos(i * Math.PI / 4), y: 270 + 70 * Math.sin(i * Math.PI / 4)
+            }));
+            return T.planMove();
+        };
+        global.claseUlt = null;
+        const exposed = field();
+        test('with no ult up the bot panics and flees, as before', () =>
+            assert.ok(exposed.hpPanic === true && exposed.ultInvuln === false,
+                JSON.stringify({ hpPanic: exposed.hpPanic, ultInvuln: exposed.ultInvuln })));
+        // THE DISCRIMINATOR. Same scene; minguk's Clase Azul drop is in flight.
+        // The game's contact loop cannot touch us for its whole duration.
+        global.claseUlt = { t: 0, drop: 138, flashT: 0, dmgDone: false };
+        const dropping = field();
+        test('the Clase Azul drop registers as invulnerability', () =>
+            assert.strictEqual(dropping.ultInvuln, true, String(dropping.ultInvuln)));
+        test('...so the bot stops panicking during it', () =>
+            assert.strictEqual(dropping.hpPanic, false,
+                'hpPanic ' + dropping.hpPanic + ' — panicking while untouchable'));
+        test('...and stops fleeing during it', () =>
+            assert.strictEqual(dropping.flight, false, 'flight ' + dropping.flight));
+        // ...and it ends when the object goes away, not on a timestamp.
+        global.claseUlt = null;
+        const after = field();
+        test('and it ends when claseUlt is cleared', () =>
+            assert.strictEqual(after.ultInvuln, false, String(after.ultInvuln)));
+        // pat and joe still work off their own timestamps — unchanged.
+        // field() rebuilds `player`, so the timestamp has to be set on the
+        // object it just made and the plan re-run — the first draft set it and
+        // then had field() overwrite it.
+        field();
+        global.player.ultSpiralUntil = 6002.8;
+        const patLike = T.planMove();
+        test('pat/joe timestamp windows still register', () =>
+            assert.strictEqual(patLike.ultInvuln, true, String(patLike.ultInvuln)));
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
