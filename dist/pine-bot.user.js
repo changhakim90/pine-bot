@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.5
+// @version      6.89.8
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.5';
+    const SCRIPT_VERSION = '6.89.8';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -410,8 +410,29 @@
             grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             kiteDampFull: 0.25,   // v6.89.4: kite pull at a COMPLETE build in hell (1 = off)
-            kiteDampPaused: 0.15, // v6.89.4: and under a TIME STOP, on top of that — a frozen
-                                  //          field has nothing to sweep around (1 = off)
+            kiteDampPaused: 0,    // v6.89.6: and under a TIME STOP, on top of that — a frozen
+                                  //          field has nothing to sweep around, so the sweep is
+                                  //          pure wasted travel that walks the bot off its own
+                                  //          burn and out of its corner seat. Was 0.15; zero is
+                                  //          the honest value (1 = off). The DEADBAND below is
+                                  //          what still steps away from a body that is touching
+                                  //          us, so this costs no contact safety.
+            // v6.89.6 KITE DEADBAND. Past the point where the pack matches our
+            // speed, distance stops being worth anything except the one thing
+            // the user asked for: "just enough distance for no contact damage
+            // deaths." So against an un-outrunnable pack the kite is no longer
+            // a posture with a weight — it is a spacing controller with a
+            // threshold. It fires only while something is inside
+            // (player radius + kiteBand) and is silent otherwise.
+            kiteBand: 20,         // px of margin past contact reach before the spacing kite arms.
+                                  //   ~2-3 frames of closing at hell mob speed. Raise it if
+                                  //   contact deaths persist; lower it if the corner keeps
+                                  //   getting broken by single stragglers.
+            kiteSpacingMul: 0.6,  // the spacing kite's weight. It BYPASSES the anchor/corner/damp
+                                  //   stack on purpose: those exist to stop the bot touring the
+                                  //   arena, and 0.12x would crush a sidestep that is only ever
+                                  //   armed when a body is already on us. Not 1.0, because the
+                                  //   corner still has to win the tie.
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
@@ -592,7 +613,34 @@
             // true = corner as soon as hell is latched and SOUTH SIDE is owned,
             // which is the earliest the burn-in-the-funnel plan can work at all.
             cornerWithZoner: true,
-            cornerPull: 2.4            // weight on closing to the nearest corner
+            // v6.89.8: past this depth, PANIC and FLIGHT stop vetoing the corner
+            // anchor and become reasons to hold it. `flight` is true for
+            // essentially all of deep hell (unkillable bodies, near >= 4, no
+            // pause), so `!flight` in the corner gate was switching the corner
+            // off exactly when it was needed — the corner has effectively never
+            // engaged at depth outside a time stop. Shallow hell keeps the old
+            // vetoes, where fleeing still opens a gap.
+            deepCornerFromS: 2400,
+            // v6.89.8 (user): "ultimate every time it's available, for that
+            // invincibility and chance to kill a potential mob — for the item
+            // drops." Past this depth every crowd/HP/harvest gate on the ult is
+            // bypassed and it fires on availability. The retry gate is short
+            // because callGame is a no-op while the game's own cooldown runs.
+            ultAlwaysFromS: 2400,
+            ultAlwaysGateMs: 250,
+            // v6.89.7: the spacing kite may never claim more than this SHARE of
+            // the corner's own weight. Not a style preference — movement.kitePull
+            // is a CEM-tuned parameter with a box max of 4.0, so any margin
+            // expressed as a fixed multiple of its DEFAULT is a margin that
+            // inverts itself the moment the optimiser walks the dial up.
+            spacingCeilShare: 0.6,
+            cornerPull: 4.0            // weight on closing to the nearest corner.
+                                       // v6.89.6: was 2.4, and it was LOSING. A manual demo
+                                       // digest measured cornerDist at 127px two hours in,
+                                       // while the corner was supposed to be held — the flee
+                                       // and escape terms were simply outbidding it. If the
+                                       // corner is the doctrine it has to win the sum, not
+                                       // merely appear in it.
 
         },
 
@@ -1323,6 +1371,36 @@
         } catch (e) { }
         return blank;
     })();
+    // v6.89.7 THE INCOME AUDIT — the measurement no version has ever taken.
+    //
+    // Source facts change what "survival" means at depth. Invuln is 33 frames
+    // and contact damage is a flat ~22.4, so contact income is RATE-LIMITED at
+    // roughly 40 dps no matter how many bodies are on us. Past the speed
+    // crossover (minguk ~14 min, before hell even starts) positioning cannot
+    // move that number much: mobs run 9x our speed by 60 min and 46x by 129.
+    //
+    // If that is right, deep survival is not a movement problem at all — it is
+    // an ARITHMETIC one. Pool gained per second versus pool lost per second.
+    // Clear the floor and the corner is indefinitely holdable; fall short and
+    // the run dies on a timer no posture can change. Nothing in this bot has
+    // ever measured which side of that line a run is on.
+    //
+    // Bucketed by 10-minute slice of gameTime so the balance can be read AS A
+    // FUNCTION OF DEPTH, which is the whole point — a build that clears the
+    // floor at 40 min and falls under it at 90 is the expected shape, and the
+    // crossing time is the number worth optimising against.
+    const INC_AUDIT_KEY = 'pineBotIncAudit';
+    const INC_BUCKET_S = 600;
+    let incAudit = (() => {
+        const blank = { buckets: {}, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(INC_AUDIT_KEY) || 'null');
+            if (raw && raw.buckets) return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    // Live cursors — deliberately NOT persisted: they describe the current run.
+    const incCursor = { t: null, hp: null };
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
@@ -4482,6 +4560,14 @@
             const slim = Object.assign({}, dmgAudit, { ev: dmgAudit.ev.slice(-120) });
             localStorage.setItem(DMG_AUDIT_KEY, JSON.stringify(slim));
         } catch (e) { }
+        // v6.89.7: the income audit accumulates ACROSS runs — one run's deep
+        // buckets hold only a few minutes of samples, and the balance at 90
+        // minutes needs many runs before it means anything.
+        try {
+            incAudit.runs = (incAudit.runs || 0) + 1;
+            localStorage.setItem(INC_AUDIT_KEY, JSON.stringify(incAudit));
+        } catch (e) { }
+        incCursor.t = null; incCursor.hp = null;   // next run starts a fresh integration
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {
@@ -5996,6 +6082,38 @@
         }
         lastHpSample = hp;
 
+        // v6.89.7 INCOME AUDIT. Both directions of the pool, integrated against
+        // gameTime, bucketed by depth. `hp` here is the POOLED reading (raw HP
+        // plus shield, since 6.89.1) because that is what actually absorbs a
+        // contact tick — a NEGRONI shield regenerating IS heal income.
+        //
+        // Two guards matter. A gap over 5s means the tab was throttled or a
+        // screen intervened, so the interval is dropped rather than smeared
+        // across a bucket. And a single jump over 40% of the pool is not
+        // income — it is a level-up maxHp raise or a COFFEE BEANS revive — so
+        // those are counted separately instead of inflating the heal rate.
+        try {
+            const gtInc = typeof G.gameTime === 'number' ? G.gameTime : null;
+            if (gtInc != null) {
+                const key = Math.floor(gtInc / INC_BUCKET_S) * INC_BUCKET_S;
+                const b = incAudit.buckets[key] ||
+                    (incAudit.buckets[key] = { dtS: 0, lossHp: 0, gainHp: 0, lossN: 0, gainN: 0, spikeN: 0, spikeHp: 0 });
+                const dt = incCursor.t == null ? 0 : gtInc - incCursor.t;
+                if (dt > 0 && dt < 5) {
+                    b.dtS += dt;
+                    if (incCursor.hp != null) {
+                        const d = hp - incCursor.hp;
+                        const poolMax = (maxHp + shieldMax) || 1;
+                        if (d > 0.5) {
+                            if (d > poolMax * 0.4) { b.spikeN++; b.spikeHp += d; }
+                            else { b.gainHp += d; b.gainN++; }
+                        } else if (d < -0.5) { b.lossHp -= d; b.lossN++; }
+                    }
+                }
+                incCursor.t = gtInc; incCursor.hp = hp;
+            }
+        } catch (e) { }
+
         // LATE-DAY FIX (user: passouts not cleared 15-20 min): 'panic' used
         // to trigger on CROWD COUNT alone, which is just the normal state of
         // a dense late-day field — it was turning all farming off exactly
@@ -6109,17 +6227,72 @@
         //
         // Day is untouched: day mobs are slower, the sweep does open a gap, and
         // dragging the conga line through burn zones is how the day phase pays.
-        let fastChasers = 0;
+        //
+        // v6.89.6 corrects the SHAPE of that answer. 6.89.5 made the outrun
+        // test a cliff: 1x on one side, 0x on the other. Both sides are wrong.
+        // Below the threshold the bot kites at full weight even with a finished
+        // build sitting in a corner; above it the bot will not take one step
+        // away from a body that is one frame from touching it. The user's own
+        // phrasing is not a weight at all, it is a THRESHOLD —
+        //
+        //   "just enough distance for no contact damage deaths"
+        //
+        // — so against a pack that cannot be outrun the kite stops being a
+        // posture and becomes a spacing controller: silent until something is
+        // inside (player radius + kiteBand), then a sidestep, then silent again.
+        //
+        // v6.89.7 FROZEN BODIES ARE NOT CHASING ANYTHING. The 6.89.5 ratio was
+        // `fastChasers / chasers`, and those two counts disagreed about frozen
+        // enemies: gather forces `spd = 0` on a frozen body, so it can never be
+        // `chaserFast`, but `chasers` counted it anyway. A freeze therefore
+        // DEFLATED the ratio and flipped `outrunnable` back to true — the exact
+        // opposite of the truth, since the pack resumes at full speed the
+        // instant the stop ends. A live console read caught it: `outrunnable:
+        // true, kiting: true, kiteDamp: 0` under a time stop at 6000s.
+        //
+        // Under a FULL pause the damage was masked (kiteDamp is 0, so the gain
+        // term vanished anyway). The real cost is a PARTIAL freeze — a stop
+        // wearing off, or a WHISKY SOUR catching half the pack — where
+        // `pauseActive` is false, kiteDamp is the ordinary build damp, and a
+        // genuine sweep fires against a pack that is very much still rushing.
+        // It also corrupted the panel's posture flag, which is the one thing
+        // the user was asked to watch.
+        //
+        // Count only bodies that are actually moving, on BOTH sides. An
+        // all-frozen field then has nothing to outrun, which reads as "the
+        // sweep does not pay" rather than "we are faster than them" — the
+        // deadband below still steps away from anything touching us.
+        let liveChasers = 0, fastChasers = 0;
         for (const e of th.enemies) {
             if (e.wall || (e.boss && e.stationary)) continue;
+            if (e.frozen) continue;
+            liveChasers++;
             if (e.chaserFast) fastChasers++;
         }
-        const outrunnable = !hellDetected || chasers === 0 || (fastChasers / chasers) < 0.5;
-        if (chasers >= kiteAt && !panic && outrunnable) {
+        const outrunnable = !hellDetected || (liveChasers > 0 && (fastChasers / liveChasers) < 0.5);
+        // Nearest centre-to-EDGE gap, the same measure the damage audit uses for
+        // `gContact` — so the band is expressed in the units the contact deaths
+        // were actually counted in.
+        let contactGap = Infinity;
+        for (const e of th.enemies) {
+            if (e.wall) continue;
+            const g = Math.hypot(e.x - p.x, e.y - p.y) - e.r;
+            if (g < contactGap) contactGap = g;
+        }
+        const kiteBand = (M.kiteBand != null ? M.kiteBand : 20);
+        const inKiteBand = contactGap < contactReach + kiteBand;
+        // Spacing mode is exactly "the kite ARMED even though the pack cannot be
+        // outrun" — which by construction can only have happened via the band.
+        // Set inside the gate, not beside it: a flag that reports the posture
+        // the bot is not actually in is a flag that makes its own test toothless
+        // (the first draft of kite-deadband proved exactly that).
+        let kiteSpacing = false;
+        if (chasers >= kiteAt && !panic && (outrunnable || inKiteBand)) {
             const rx = p.x - cx, ry = p.y - cy;
             const rm = Math.hypot(rx, ry) || 1;
             const t1 = { x: -ry / rm, y: rx / rm }, t2 = { x: ry / rm, y: -rx / rm };
             kite = (t1.x * lastDir.x + t1.y * lastDir.y) >= (t2.x * lastDir.x + t2.y * lastDir.y) ? t1 : t2;
+            kiteSpacing = !outrunnable;
         }
 
         // GAP ESCAPE: when surrounded, find the widest angular gap between
@@ -6379,7 +6552,36 @@
             e.boss && !e.wall && e.frozen && (e.frozenLeft || 0) >= 45);
         const bossHunt = frozenBossHere || (th.boss === true && tipOpen) || !!th.rival;
         const zonerCorner = CONFIG.deepHell.cornerWithZoner !== false && hellDetected && zoner;
-        const cornerOn = !hpPanic && !markHere && !flight && !bossHunt &&
+        // v6.89.8 PANIC AND FLIGHT MEAN *GO TO THE CORNER*, NOT GO ANYWHERE.
+        //
+        // This gate was the real reason the corner never held. `flight` is
+        //   hellDetected && !pauseActive && unkillable && near >= 4 && !hpPanic
+        // and at depth every one of those is permanently true except during a
+        // time stop — `toughnessAvg` is enormous, `near` is in the hundreds. So
+        // `!flight` switched the corner OFF for all of deep hell EXCEPT the
+        // seconds a pause was holding the field. Sixty versions of corner
+        // doctrine, `cornerAnchorFromS`, `cornerWithZoner` and `cornerPull` were
+        // all downstream of a term that was almost never allowed to fire. It
+        // explains the 127 px `cornerDist` measured at 120 minutes far better
+        // than "cornerPull is losing to the flee terms" did — the corner pull
+        // was not losing the argument, it was not in the room.
+        //
+        // `hpPanic` is the same mistake in miniature: the moment the bot is
+        // actually hurt is the moment it most needs the mark-immune corner, and
+        // that is exactly when the gate revoked it.
+        //
+        // Past `deepCornerFromS` both are demoted from vetoes to non-events:
+        // running away and panicking both resolve to "get to the corner", which
+        // is the only place at depth where anything is safer (marks cannot reach
+        // it — 80.9 px against a 70 px reach). Shallow hell and the day are
+        // untouched: there, fleeing genuinely opens a gap and the veto is right.
+        //
+        // `markHere` still breaks it — standing inside a falling attack is the
+        // one time to move regardless — and so does `bossHunt`.
+        const deepCorner = hellDetected &&
+            gtCorner > (CONFIG.deepHell.deepCornerFromS != null ? CONFIG.deepHell.deepCornerFromS : 2400);
+        const cornerOn = !markHere && !bossHunt &&
+            (deepCorner || (!hpPanic && !flight)) &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
@@ -6531,6 +6733,39 @@
             };
             for (const po of th.passouts) if (!po.far) consider(po.x, po.y, 3);
             for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
+        }
+
+        // v6.89.6/7 THE KITE WEIGHT, hoisted: every factor here is constant
+        // across the candidate sweep, and it now has two arms.
+        //
+        // The SWEEP (the conga line dragged through the burn) is damped by
+        // everything that wants the bot to hold still — anchor, corner, build
+        // completeness, pause.
+        //
+        // The SPACING step is not: it is only ever armed with a body already
+        // inside the band, and a 0.12x corner factor would crush the one
+        // sidestep that prevents a contact death.
+        //
+        // v6.89.7 CAPS the spacing arm instead of trusting a default. 6.89.6
+        // claimed the corner outbids it — "cornerPull 4.0 * 0.5 = 2.0 against
+        // kitePull 2.0 * 0.6 = 1.2" — but `movement.kitePull` is IN THE CEM BOX
+        // (min 0.5, max 4.0) and a live read caught it at 2.223 and climbing.
+        // At the box ceiling the spacing arm reaches 2.4 and beats the corner,
+        // so the invariant would silently invert mid-run while the unit test,
+        // which reads the static default, passed forever. The margin is now
+        // enforced against the corner's ACTUAL weight, every tick.
+        const kiteBaseW = M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) *
+            (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) *
+            (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+        let kiteW;
+        if (kiteSpacing) {
+            const ceil = (CONFIG.deepHell.cornerPull || 4) * 0.5 *
+                (CONFIG.deepHell.spacingCeilShare != null ? CONFIG.deepHell.spacingCeilShare : 0.6);
+            kiteW = Math.min(kiteBaseW * (M.kiteSpacingMul != null ? M.kiteSpacingMul : 0.6), ceil);
+        } else {
+            // v6.89.3: cornered means STOP sweeping — the two pulls fight, and
+            // the corner is the one that keeps the bot alive.
+            kiteW = kiteBaseW * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp;
         }
 
         let best = null;
@@ -6993,7 +7228,7 @@
             if (cornerOn) {
                 const cNow = Math.hypot(p.x - cnrX, p.y - cnrY);
                 const cNew = Math.hypot(nx - cnrX, ny - cnrY);
-                gain += (CONFIG.deepHell.cornerPull || 2.4) * (cNow - cNew) * 0.5;
+                gain += (CONFIG.deepHell.cornerPull || 4.0) * (cNow - cNew) * 0.5;
             }
 
             // TIME-STOP STACKING — DEMO-CORRECTED (81-min manual stall run:
@@ -7077,7 +7312,7 @@
                     if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
                 }
             }
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);   // v6.89.3: cornered means STOP kiting — the two pulls fight, and the corner is the one that kills
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * kiteW;
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
@@ -7109,13 +7344,25 @@
         else { vx = best.dx; vy = best.dy; }   // mid-reversal: commit to the new heading
         lastDir = { x: vx, y: vy };
 
+        // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
+        // dashUntil — it grants NO invulnerability and no i-frames. It is a
+        // 0.16 s movement burst, i.e. a pure MULTIPLIER on the heading the
+        // planner already chose, and therefore only ever as good as that
+        // heading. In panic the heading is a flee vector, so dashing there
+        // carries the bot OUT of its corner faster (user, observed). The
+        // abilities layer needs to know which way this heading points before it
+        // can decide whether amplifying it is a good idea.
+        const cornerward = Math.hypot(cnrX - p.x, cnrY - p.y) > 1
+            ? ((vx * (cnrX - p.x) + vy * (cnrY - p.y)) / Math.hypot(cnrX - p.x, cnrY - p.y)) > 0.2
+            : true;
+
         return {
-            dx: vx, dy: vy,
+            dx: vx, dy: vy, cornerward, markHere,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
@@ -7142,7 +7389,7 @@
             // on screen said so — the only way to notice was to read the config.
             // A posture that cannot be observed cannot be tuned, so kite /
             // anchor / corner are reported live alongside the numbers.
-            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? 'kite' : 'free'))}`
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
         };
     }
 
@@ -7175,7 +7422,43 @@
         const dashGate = plan.flight ? 300
             : (deepHell && slowedNow) ? Math.min(A.dashCooldownMs, 420)
             : (hellDash ? Math.min(A.dashCooldownMs, deepGate) : A.dashCooldownMs);
-        if (A.dashEnabled && hasGame('tryDash') && now - lastDash > dashGate &&
+        // v6.89.8 THE DASH CARRIES NO I-FRAMES. Read whole from source:
+        //
+        //   function tryDash(dirx,diry){ ... player.dashDx=dirx; player.dashDy=diry;
+        //     player.dashUntil=gameTime+0.16; player.dashReadyAt=gameTime+dashCd(lv); ... }
+        //
+        // No invuln, no dashInvuln, nothing the contact loop's `!isInvuln()`
+        // gate would see. So the dash is a 0.16 s speed burst along whatever
+        // heading the planner already picked — a MULTIPLIER on that decision,
+        // never a defence in its own right.
+        //
+        // Two consequences at depth. It cannot open a gap: bodies measured at
+        // 50-119 px/frame cover the whole 540 px arena in 4-11 frames, so the
+        // burst is spent against something that re-closes inside the same
+        // window. And when the planner is in panic the heading is a flee
+        // vector, so dashing AMPLIFIES the move away from the corner — the
+        // user's observation, and the mechanism behind it.
+        //
+        // The deepest demo ever recorded (178:19 → 244:04, crowdMedian 234,
+        // hpMedian 100) logs `dashes: 0`. The "~59 dashes/min" comment above
+        // comes from a shallower run; where the two disagree, the one that
+        // reached 244 minutes wins.
+        //
+        // So past deep-hell depth the dash is allowed only when amplifying the
+        // heading is actually useful: it points at the corner, or it is
+        // escaping a blast/mark — the one hazard class position still defeats
+        // (corner mark-immunity is geometric: 80.9 px against a 70 px reach).
+        // USER DIRECTIVE (6.89.8): "without dashing on panic mode in deep hell
+        // ... and anchor towards one of the four corners." Panic is precisely
+        // when the heading is a flee vector, so it is precisely when amplifying
+        // it does the most damage. Escaping a blast or a mark still overrides —
+        // that is the one hazard class a position change actually defeats.
+        const escaping = inBlastZone || blastImminent || plan.markHere === true;
+        const deepPanic = deepHell && (plan.panic === true || plan.hpPanic === true);
+        const cornerHeld = deepHell && plan.cornerAnchor === true;
+        const dashProductive = escaping ||
+            (!deepPanic && (!cornerHeld || plan.cornerward === true));
+        if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -7310,10 +7593,33 @@
         const DH = CONFIG.deepHell;
         const ultChain = hellDetected && gtU > (DH.ultChainFromS || 9000);
         if (ultChain) ultGate = Math.min(ultGate, DH.ultChainGateMs || 300);
+        // v6.89.8 FIRE ON AVAILABILITY (user): "ultimate every time it's
+        // available, for that invincibility and chance to kill a potential mob
+        // ... for the item drops."
+        //
+        // Every other trigger above optimises the ult as a DAMAGE tool with a
+        // crowd count, an HP ratio, or a harvest lead attached. Demo #5 measured
+        // the opposite: 2174 casts over 3945 s, fired the instant available,
+        // doing zero damage to the passout it was aimed at — a shield re-upped
+        // 33 times a minute. Against that, the bot's own measured deep cadence
+        // was one cast per 218 s, roughly one per 120 the human made.
+        //
+        // Two payoffs, and both survive minguk's lack of an invulnerability
+        // window: the nuke still hits EVERY enemy on the field, and kills are
+        // what drop items — which at depth means TIME STOPS, the one resource
+        // that actually stops a pack moving 15-35x the player's speed. Holding
+        // a charge back for a better moment is holding back the drop economy.
+        //
+        // `callGame` is a no-op while the game's real cooldown runs, so asking
+        // every tick costs nothing but the call. `ultAlways` deliberately
+        // bypasses `!plan.hpPanic` — being hurt is not a reason to save it.
+        const ultAlways = hellDetected &&
+            gtU > (DH.ultAlwaysFromS != null ? DH.ultAlwaysFromS : 2400);
+        if (ultAlways) ultGate = Math.min(ultGate, DH.ultAlwaysGateMs || 250);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
-                ultChain)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
+                ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
             lastUlt = now;
             callGame('useUltimate');
             poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
@@ -7979,6 +8285,40 @@
                 learnedMul: Object.assign({}, (learn && learn.enemyTypeMul) || {}),
                 damageByType: Object.assign({}, dmgAudit.byType || {})
             });
+            // v6.89.7: pineBot.incomeAudit() — the arithmetic of deep survival.
+            // Contact damage is rate-limited near 40 dps by the 33-frame invuln,
+            // and past the speed crossover positioning cannot move that much.
+            // So what decides a deep run is whether heal income clears the
+            // floor. Each row is a 10-minute slice of gameTime: `lossPerSec`
+            // against `gainPerSec`, with `net` the number that matters. Rows
+            // with little `dtS` are noise — read `dtS` before reading `net`.
+            window.pineBot.incomeAudit = () => {
+                const rows = Object.keys(incAudit.buckets)
+                    .map(Number).sort((a, b) => a - b)
+                    .map(k => {
+                        const b = incAudit.buckets[k];
+                        const per = x => b.dtS > 0 ? +(x / b.dtS).toFixed(2) : null;
+                        return {
+                            fromMin: Math.round(k / 60), dtS: Math.round(b.dtS),
+                            lossPerSec: per(b.lossHp), gainPerSec: per(b.gainHp),
+                            net: b.dtS > 0 ? +((b.gainHp - b.lossHp) / b.dtS).toFixed(2) : null,
+                            events: { loss: b.lossN, gain: b.gainN },
+                            spikes: b.spikeN ? { n: b.spikeN, hp: Math.round(b.spikeHp) } : null
+                        };
+                    });
+                const deep = rows.filter(r => r.fromMin >= 20 && r.dtS >= 60);
+                return {
+                    runs: incAudit.runs || 0, buckets: rows,
+                    firstNegativeMin: (deep.find(r => r.net != null && r.net < 0) || {}).fromMin ?? null,
+                    note: 'net < 0 means the pool is draining at that depth: no posture fixes that, only heal income or time-stop uptime. Ignore rows with dtS under ~60. `spikes` are level-up maxHp raises and revives, excluded from gainPerSec.'
+                };
+            };
+            window.pineBot.resetIncomeAudit = () => {
+                incAudit = { buckets: {}, runs: 0 };
+                incCursor.t = null; incCursor.hp = null;
+                try { localStorage.removeItem(INC_AUDIT_KEY); } catch (e) { }
+                return 'income audit cleared';
+            };
             window.pineBot.resetDamageAudit = () => {
                 dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
                 try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }

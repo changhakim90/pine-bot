@@ -807,6 +807,38 @@
         }
         lastHpSample = hp;
 
+        // v6.89.7 INCOME AUDIT. Both directions of the pool, integrated against
+        // gameTime, bucketed by depth. `hp` here is the POOLED reading (raw HP
+        // plus shield, since 6.89.1) because that is what actually absorbs a
+        // contact tick — a NEGRONI shield regenerating IS heal income.
+        //
+        // Two guards matter. A gap over 5s means the tab was throttled or a
+        // screen intervened, so the interval is dropped rather than smeared
+        // across a bucket. And a single jump over 40% of the pool is not
+        // income — it is a level-up maxHp raise or a COFFEE BEANS revive — so
+        // those are counted separately instead of inflating the heal rate.
+        try {
+            const gtInc = typeof G.gameTime === 'number' ? G.gameTime : null;
+            if (gtInc != null) {
+                const key = Math.floor(gtInc / INC_BUCKET_S) * INC_BUCKET_S;
+                const b = incAudit.buckets[key] ||
+                    (incAudit.buckets[key] = { dtS: 0, lossHp: 0, gainHp: 0, lossN: 0, gainN: 0, spikeN: 0, spikeHp: 0 });
+                const dt = incCursor.t == null ? 0 : gtInc - incCursor.t;
+                if (dt > 0 && dt < 5) {
+                    b.dtS += dt;
+                    if (incCursor.hp != null) {
+                        const d = hp - incCursor.hp;
+                        const poolMax = (maxHp + shieldMax) || 1;
+                        if (d > 0.5) {
+                            if (d > poolMax * 0.4) { b.spikeN++; b.spikeHp += d; }
+                            else { b.gainHp += d; b.gainN++; }
+                        } else if (d < -0.5) { b.lossHp -= d; b.lossN++; }
+                    }
+                }
+                incCursor.t = gtInc; incCursor.hp = hp;
+            }
+        } catch (e) { }
+
         // LATE-DAY FIX (user: passouts not cleared 15-20 min): 'panic' used
         // to trigger on CROWD COUNT alone, which is just the normal state of
         // a dense late-day field — it was turning all farming off exactly
@@ -920,17 +952,72 @@
         //
         // Day is untouched: day mobs are slower, the sweep does open a gap, and
         // dragging the conga line through burn zones is how the day phase pays.
-        let fastChasers = 0;
+        //
+        // v6.89.6 corrects the SHAPE of that answer. 6.89.5 made the outrun
+        // test a cliff: 1x on one side, 0x on the other. Both sides are wrong.
+        // Below the threshold the bot kites at full weight even with a finished
+        // build sitting in a corner; above it the bot will not take one step
+        // away from a body that is one frame from touching it. The user's own
+        // phrasing is not a weight at all, it is a THRESHOLD —
+        //
+        //   "just enough distance for no contact damage deaths"
+        //
+        // — so against a pack that cannot be outrun the kite stops being a
+        // posture and becomes a spacing controller: silent until something is
+        // inside (player radius + kiteBand), then a sidestep, then silent again.
+        //
+        // v6.89.7 FROZEN BODIES ARE NOT CHASING ANYTHING. The 6.89.5 ratio was
+        // `fastChasers / chasers`, and those two counts disagreed about frozen
+        // enemies: gather forces `spd = 0` on a frozen body, so it can never be
+        // `chaserFast`, but `chasers` counted it anyway. A freeze therefore
+        // DEFLATED the ratio and flipped `outrunnable` back to true — the exact
+        // opposite of the truth, since the pack resumes at full speed the
+        // instant the stop ends. A live console read caught it: `outrunnable:
+        // true, kiting: true, kiteDamp: 0` under a time stop at 6000s.
+        //
+        // Under a FULL pause the damage was masked (kiteDamp is 0, so the gain
+        // term vanished anyway). The real cost is a PARTIAL freeze — a stop
+        // wearing off, or a WHISKY SOUR catching half the pack — where
+        // `pauseActive` is false, kiteDamp is the ordinary build damp, and a
+        // genuine sweep fires against a pack that is very much still rushing.
+        // It also corrupted the panel's posture flag, which is the one thing
+        // the user was asked to watch.
+        //
+        // Count only bodies that are actually moving, on BOTH sides. An
+        // all-frozen field then has nothing to outrun, which reads as "the
+        // sweep does not pay" rather than "we are faster than them" — the
+        // deadband below still steps away from anything touching us.
+        let liveChasers = 0, fastChasers = 0;
         for (const e of th.enemies) {
             if (e.wall || (e.boss && e.stationary)) continue;
+            if (e.frozen) continue;
+            liveChasers++;
             if (e.chaserFast) fastChasers++;
         }
-        const outrunnable = !hellDetected || chasers === 0 || (fastChasers / chasers) < 0.5;
-        if (chasers >= kiteAt && !panic && outrunnable) {
+        const outrunnable = !hellDetected || (liveChasers > 0 && (fastChasers / liveChasers) < 0.5);
+        // Nearest centre-to-EDGE gap, the same measure the damage audit uses for
+        // `gContact` — so the band is expressed in the units the contact deaths
+        // were actually counted in.
+        let contactGap = Infinity;
+        for (const e of th.enemies) {
+            if (e.wall) continue;
+            const g = Math.hypot(e.x - p.x, e.y - p.y) - e.r;
+            if (g < contactGap) contactGap = g;
+        }
+        const kiteBand = (M.kiteBand != null ? M.kiteBand : 20);
+        const inKiteBand = contactGap < contactReach + kiteBand;
+        // Spacing mode is exactly "the kite ARMED even though the pack cannot be
+        // outrun" — which by construction can only have happened via the band.
+        // Set inside the gate, not beside it: a flag that reports the posture
+        // the bot is not actually in is a flag that makes its own test toothless
+        // (the first draft of kite-deadband proved exactly that).
+        let kiteSpacing = false;
+        if (chasers >= kiteAt && !panic && (outrunnable || inKiteBand)) {
             const rx = p.x - cx, ry = p.y - cy;
             const rm = Math.hypot(rx, ry) || 1;
             const t1 = { x: -ry / rm, y: rx / rm }, t2 = { x: ry / rm, y: -rx / rm };
             kite = (t1.x * lastDir.x + t1.y * lastDir.y) >= (t2.x * lastDir.x + t2.y * lastDir.y) ? t1 : t2;
+            kiteSpacing = !outrunnable;
         }
 
         // GAP ESCAPE: when surrounded, find the widest angular gap between
@@ -1190,7 +1277,36 @@
             e.boss && !e.wall && e.frozen && (e.frozenLeft || 0) >= 45);
         const bossHunt = frozenBossHere || (th.boss === true && tipOpen) || !!th.rival;
         const zonerCorner = CONFIG.deepHell.cornerWithZoner !== false && hellDetected && zoner;
-        const cornerOn = !hpPanic && !markHere && !flight && !bossHunt &&
+        // v6.89.8 PANIC AND FLIGHT MEAN *GO TO THE CORNER*, NOT GO ANYWHERE.
+        //
+        // This gate was the real reason the corner never held. `flight` is
+        //   hellDetected && !pauseActive && unkillable && near >= 4 && !hpPanic
+        // and at depth every one of those is permanently true except during a
+        // time stop — `toughnessAvg` is enormous, `near` is in the hundreds. So
+        // `!flight` switched the corner OFF for all of deep hell EXCEPT the
+        // seconds a pause was holding the field. Sixty versions of corner
+        // doctrine, `cornerAnchorFromS`, `cornerWithZoner` and `cornerPull` were
+        // all downstream of a term that was almost never allowed to fire. It
+        // explains the 127 px `cornerDist` measured at 120 minutes far better
+        // than "cornerPull is losing to the flee terms" did — the corner pull
+        // was not losing the argument, it was not in the room.
+        //
+        // `hpPanic` is the same mistake in miniature: the moment the bot is
+        // actually hurt is the moment it most needs the mark-immune corner, and
+        // that is exactly when the gate revoked it.
+        //
+        // Past `deepCornerFromS` both are demoted from vetoes to non-events:
+        // running away and panicking both resolve to "get to the corner", which
+        // is the only place at depth where anything is safer (marks cannot reach
+        // it — 80.9 px against a 70 px reach). Shallow hell and the day are
+        // untouched: there, fleeing genuinely opens a gap and the veto is right.
+        //
+        // `markHere` still breaks it — standing inside a falling attack is the
+        // one time to move regardless — and so does `bossHunt`.
+        const deepCorner = hellDetected &&
+            gtCorner > (CONFIG.deepHell.deepCornerFromS != null ? CONFIG.deepHell.deepCornerFromS : 2400);
+        const cornerOn = !markHere && !bossHunt &&
+            (deepCorner || (!hpPanic && !flight)) &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
@@ -1342,6 +1458,39 @@
             };
             for (const po of th.passouts) if (!po.far) consider(po.x, po.y, 3);
             for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
+        }
+
+        // v6.89.6/7 THE KITE WEIGHT, hoisted: every factor here is constant
+        // across the candidate sweep, and it now has two arms.
+        //
+        // The SWEEP (the conga line dragged through the burn) is damped by
+        // everything that wants the bot to hold still — anchor, corner, build
+        // completeness, pause.
+        //
+        // The SPACING step is not: it is only ever armed with a body already
+        // inside the band, and a 0.12x corner factor would crush the one
+        // sidestep that prevents a contact death.
+        //
+        // v6.89.7 CAPS the spacing arm instead of trusting a default. 6.89.6
+        // claimed the corner outbids it — "cornerPull 4.0 * 0.5 = 2.0 against
+        // kitePull 2.0 * 0.6 = 1.2" — but `movement.kitePull` is IN THE CEM BOX
+        // (min 0.5, max 4.0) and a live read caught it at 2.223 and climbing.
+        // At the box ceiling the spacing arm reaches 2.4 and beats the corner,
+        // so the invariant would silently invert mid-run while the unit test,
+        // which reads the static default, passed forever. The margin is now
+        // enforced against the corner's ACTUAL weight, every tick.
+        const kiteBaseW = M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) *
+            (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) *
+            (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+        let kiteW;
+        if (kiteSpacing) {
+            const ceil = (CONFIG.deepHell.cornerPull || 4) * 0.5 *
+                (CONFIG.deepHell.spacingCeilShare != null ? CONFIG.deepHell.spacingCeilShare : 0.6);
+            kiteW = Math.min(kiteBaseW * (M.kiteSpacingMul != null ? M.kiteSpacingMul : 0.6), ceil);
+        } else {
+            // v6.89.3: cornered means STOP sweeping — the two pulls fight, and
+            // the corner is the one that keeps the bot alive.
+            kiteW = kiteBaseW * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp;
         }
 
         let best = null;
@@ -1804,7 +1953,7 @@
             if (cornerOn) {
                 const cNow = Math.hypot(p.x - cnrX, p.y - cnrY);
                 const cNew = Math.hypot(nx - cnrX, ny - cnrY);
-                gain += (CONFIG.deepHell.cornerPull || 2.4) * (cNow - cNew) * 0.5;
+                gain += (CONFIG.deepHell.cornerPull || 4.0) * (cNow - cNew) * 0.5;
             }
 
             // TIME-STOP STACKING — DEMO-CORRECTED (81-min manual stall run:
@@ -1888,7 +2037,7 @@
                     if (d0e < reach * 2.2) gain += (d0e - d1e) * 0.9;
                 }
             }
-            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * M.kitePull * charOf().kiteMul * (zoner ? 1.6 : 1) * (knocker && th.boss ? 1.25 : 1) * (rainbowRecent ? 1.4 : 1) * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);   // v6.89.3: cornered means STOP kiting — the two pulls fight, and the corner is the one that kills
+            if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * kiteW;
             if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
 
             // pull toward the middle of the arena — corners are death traps,
@@ -1920,13 +2069,25 @@
         else { vx = best.dx; vy = best.dy; }   // mid-reversal: commit to the new heading
         lastDir = { x: vx, y: vy };
 
+        // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
+        // dashUntil — it grants NO invulnerability and no i-frames. It is a
+        // 0.16 s movement burst, i.e. a pure MULTIPLIER on the heading the
+        // planner already chose, and therefore only ever as good as that
+        // heading. In panic the heading is a flee vector, so dashing there
+        // carries the bot OUT of its corner faster (user, observed). The
+        // abilities layer needs to know which way this heading points before it
+        // can decide whether amplifying it is a good idea.
+        const cornerward = Math.hypot(cnrX - p.x, cnrY - p.y) > 1
+            ? ((vx * (cnrX - p.x) + vy * (cnrY - p.y)) / Math.hypot(cnrX - p.x, cnrY - p.y)) > 0.2
+            : true;
+
         return {
-            dx: vx, dy: vy,
+            dx: vx, dy: vy, cornerward, markHere,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
@@ -1953,6 +2114,6 @@
             // on screen said so — the only way to notice was to read the config.
             // A posture that cannot be observed cannot be tuned, so kite /
             // anchor / corner are reported live alongside the numbers.
-            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? 'kite' : 'free'))}`
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
         };
     }

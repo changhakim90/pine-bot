@@ -196,6 +196,14 @@
             const slim = Object.assign({}, dmgAudit, { ev: dmgAudit.ev.slice(-120) });
             localStorage.setItem(DMG_AUDIT_KEY, JSON.stringify(slim));
         } catch (e) { }
+        // v6.89.7: the income audit accumulates ACROSS runs — one run's deep
+        // buckets hold only a few minutes of samples, and the balance at 90
+        // minutes needs many runs before it means anything.
+        try {
+            incAudit.runs = (incAudit.runs || 0) + 1;
+            localStorage.setItem(INC_AUDIT_KEY, JSON.stringify(incAudit));
+        } catch (e) { }
+        incCursor.t = null; incCursor.hp = null;   // next run starts a fresh integration
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {

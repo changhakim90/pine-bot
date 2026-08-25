@@ -408,8 +408,29 @@
             grindKiteMul: 1.25,    // bossless deep-hell kite pressure (6.85.20)
             kitePull: 2.0,        // tangential sweep around the swarm (conga-line kiting)
             kiteDampFull: 0.25,   // v6.89.4: kite pull at a COMPLETE build in hell (1 = off)
-            kiteDampPaused: 0.15, // v6.89.4: and under a TIME STOP, on top of that — a frozen
-                                  //          field has nothing to sweep around (1 = off)
+            kiteDampPaused: 0,    // v6.89.6: and under a TIME STOP, on top of that — a frozen
+                                  //          field has nothing to sweep around, so the sweep is
+                                  //          pure wasted travel that walks the bot off its own
+                                  //          burn and out of its corner seat. Was 0.15; zero is
+                                  //          the honest value (1 = off). The DEADBAND below is
+                                  //          what still steps away from a body that is touching
+                                  //          us, so this costs no contact safety.
+            // v6.89.6 KITE DEADBAND. Past the point where the pack matches our
+            // speed, distance stops being worth anything except the one thing
+            // the user asked for: "just enough distance for no contact damage
+            // deaths." So against an un-outrunnable pack the kite is no longer
+            // a posture with a weight — it is a spacing controller with a
+            // threshold. It fires only while something is inside
+            // (player radius + kiteBand) and is silent otherwise.
+            kiteBand: 20,         // px of margin past contact reach before the spacing kite arms.
+                                  //   ~2-3 frames of closing at hell mob speed. Raise it if
+                                  //   contact deaths persist; lower it if the corner keeps
+                                  //   getting broken by single stragglers.
+            kiteSpacingMul: 0.6,  // the spacing kite's weight. It BYPASSES the anchor/corner/damp
+                                  //   stack on purpose: those exist to stop the bot touring the
+                                  //   arena, and 0.12x would crush a sidestep that is only ever
+                                  //   armed when a body is already on us. Not 1.0, because the
+                                  //   corner still has to win the tie.
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
@@ -590,7 +611,34 @@
             // true = corner as soon as hell is latched and SOUTH SIDE is owned,
             // which is the earliest the burn-in-the-funnel plan can work at all.
             cornerWithZoner: true,
-            cornerPull: 2.4            // weight on closing to the nearest corner
+            // v6.89.8: past this depth, PANIC and FLIGHT stop vetoing the corner
+            // anchor and become reasons to hold it. `flight` is true for
+            // essentially all of deep hell (unkillable bodies, near >= 4, no
+            // pause), so `!flight` in the corner gate was switching the corner
+            // off exactly when it was needed — the corner has effectively never
+            // engaged at depth outside a time stop. Shallow hell keeps the old
+            // vetoes, where fleeing still opens a gap.
+            deepCornerFromS: 2400,
+            // v6.89.8 (user): "ultimate every time it's available, for that
+            // invincibility and chance to kill a potential mob — for the item
+            // drops." Past this depth every crowd/HP/harvest gate on the ult is
+            // bypassed and it fires on availability. The retry gate is short
+            // because callGame is a no-op while the game's own cooldown runs.
+            ultAlwaysFromS: 2400,
+            ultAlwaysGateMs: 250,
+            // v6.89.7: the spacing kite may never claim more than this SHARE of
+            // the corner's own weight. Not a style preference — movement.kitePull
+            // is a CEM-tuned parameter with a box max of 4.0, so any margin
+            // expressed as a fixed multiple of its DEFAULT is a margin that
+            // inverts itself the moment the optimiser walks the dial up.
+            spacingCeilShare: 0.6,
+            cornerPull: 4.0            // weight on closing to the nearest corner.
+                                       // v6.89.6: was 2.4, and it was LOSING. A manual demo
+                                       // digest measured cornerDist at 127px two hours in,
+                                       // while the corner was supposed to be held — the flee
+                                       // and escape terms were simply outbidding it. If the
+                                       // corner is the doctrine it has to win the sum, not
+                                       // merely appear in it.
 
         },
 
@@ -1321,6 +1369,36 @@
         } catch (e) { }
         return blank;
     })();
+    // v6.89.7 THE INCOME AUDIT — the measurement no version has ever taken.
+    //
+    // Source facts change what "survival" means at depth. Invuln is 33 frames
+    // and contact damage is a flat ~22.4, so contact income is RATE-LIMITED at
+    // roughly 40 dps no matter how many bodies are on us. Past the speed
+    // crossover (minguk ~14 min, before hell even starts) positioning cannot
+    // move that number much: mobs run 9x our speed by 60 min and 46x by 129.
+    //
+    // If that is right, deep survival is not a movement problem at all — it is
+    // an ARITHMETIC one. Pool gained per second versus pool lost per second.
+    // Clear the floor and the corner is indefinitely holdable; fall short and
+    // the run dies on a timer no posture can change. Nothing in this bot has
+    // ever measured which side of that line a run is on.
+    //
+    // Bucketed by 10-minute slice of gameTime so the balance can be read AS A
+    // FUNCTION OF DEPTH, which is the whole point — a build that clears the
+    // floor at 40 min and falls under it at 90 is the expected shape, and the
+    // crossing time is the number worth optimising against.
+    const INC_AUDIT_KEY = 'pineBotIncAudit';
+    const INC_BUCKET_S = 600;
+    let incAudit = (() => {
+        const blank = { buckets: {}, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(INC_AUDIT_KEY) || 'null');
+            if (raw && raw.buckets) return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    // Live cursors — deliberately NOT persisted: they describe the current run.
+    const incCursor = { t: null, hp: null };
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context

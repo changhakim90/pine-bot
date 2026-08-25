@@ -27,7 +27,43 @@
         const dashGate = plan.flight ? 300
             : (deepHell && slowedNow) ? Math.min(A.dashCooldownMs, 420)
             : (hellDash ? Math.min(A.dashCooldownMs, deepGate) : A.dashCooldownMs);
-        if (A.dashEnabled && hasGame('tryDash') && now - lastDash > dashGate &&
+        // v6.89.8 THE DASH CARRIES NO I-FRAMES. Read whole from source:
+        //
+        //   function tryDash(dirx,diry){ ... player.dashDx=dirx; player.dashDy=diry;
+        //     player.dashUntil=gameTime+0.16; player.dashReadyAt=gameTime+dashCd(lv); ... }
+        //
+        // No invuln, no dashInvuln, nothing the contact loop's `!isInvuln()`
+        // gate would see. So the dash is a 0.16 s speed burst along whatever
+        // heading the planner already picked — a MULTIPLIER on that decision,
+        // never a defence in its own right.
+        //
+        // Two consequences at depth. It cannot open a gap: bodies measured at
+        // 50-119 px/frame cover the whole 540 px arena in 4-11 frames, so the
+        // burst is spent against something that re-closes inside the same
+        // window. And when the planner is in panic the heading is a flee
+        // vector, so dashing AMPLIFIES the move away from the corner — the
+        // user's observation, and the mechanism behind it.
+        //
+        // The deepest demo ever recorded (178:19 → 244:04, crowdMedian 234,
+        // hpMedian 100) logs `dashes: 0`. The "~59 dashes/min" comment above
+        // comes from a shallower run; where the two disagree, the one that
+        // reached 244 minutes wins.
+        //
+        // So past deep-hell depth the dash is allowed only when amplifying the
+        // heading is actually useful: it points at the corner, or it is
+        // escaping a blast/mark — the one hazard class position still defeats
+        // (corner mark-immunity is geometric: 80.9 px against a 70 px reach).
+        // USER DIRECTIVE (6.89.8): "without dashing on panic mode in deep hell
+        // ... and anchor towards one of the four corners." Panic is precisely
+        // when the heading is a flee vector, so it is precisely when amplifying
+        // it does the most damage. Escaping a blast or a mark still overrides —
+        // that is the one hazard class a position change actually defeats.
+        const escaping = inBlastZone || blastImminent || plan.markHere === true;
+        const deepPanic = deepHell && (plan.panic === true || plan.hpPanic === true);
+        const cornerHeld = deepHell && plan.cornerAnchor === true;
+        const dashProductive = escaping ||
+            (!deepPanic && (!cornerHeld || plan.cornerward === true));
+        if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -162,10 +198,33 @@
         const DH = CONFIG.deepHell;
         const ultChain = hellDetected && gtU > (DH.ultChainFromS || 9000);
         if (ultChain) ultGate = Math.min(ultGate, DH.ultChainGateMs || 300);
+        // v6.89.8 FIRE ON AVAILABILITY (user): "ultimate every time it's
+        // available, for that invincibility and chance to kill a potential mob
+        // ... for the item drops."
+        //
+        // Every other trigger above optimises the ult as a DAMAGE tool with a
+        // crowd count, an HP ratio, or a harvest lead attached. Demo #5 measured
+        // the opposite: 2174 casts over 3945 s, fired the instant available,
+        // doing zero damage to the passout it was aimed at — a shield re-upped
+        // 33 times a minute. Against that, the bot's own measured deep cadence
+        // was one cast per 218 s, roughly one per 120 the human made.
+        //
+        // Two payoffs, and both survive minguk's lack of an invulnerability
+        // window: the nuke still hits EVERY enemy on the field, and kills are
+        // what drop items — which at depth means TIME STOPS, the one resource
+        // that actually stops a pack moving 15-35x the player's speed. Holding
+        // a charge back for a better moment is holding back the drop economy.
+        //
+        // `callGame` is a no-op while the game's real cooldown runs, so asking
+        // every tick costs nothing but the call. `ultAlways` deliberately
+        // bypasses `!plan.hpPanic` — being hurt is not a reason to save it.
+        const ultAlways = hellDetected &&
+            gtU > (DH.ultAlwaysFromS != null ? DH.ultAlwaysFromS : 2400);
+        if (ultAlways) ultGate = Math.min(ultGate, DH.ultAlwaysGateMs || 250);
         if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
-                ultChain)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
+                ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
             lastUlt = now;
             callGame('useUltimate');
             poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
@@ -831,6 +890,40 @@
                 learnedMul: Object.assign({}, (learn && learn.enemyTypeMul) || {}),
                 damageByType: Object.assign({}, dmgAudit.byType || {})
             });
+            // v6.89.7: pineBot.incomeAudit() — the arithmetic of deep survival.
+            // Contact damage is rate-limited near 40 dps by the 33-frame invuln,
+            // and past the speed crossover positioning cannot move that much.
+            // So what decides a deep run is whether heal income clears the
+            // floor. Each row is a 10-minute slice of gameTime: `lossPerSec`
+            // against `gainPerSec`, with `net` the number that matters. Rows
+            // with little `dtS` are noise — read `dtS` before reading `net`.
+            window.pineBot.incomeAudit = () => {
+                const rows = Object.keys(incAudit.buckets)
+                    .map(Number).sort((a, b) => a - b)
+                    .map(k => {
+                        const b = incAudit.buckets[k];
+                        const per = x => b.dtS > 0 ? +(x / b.dtS).toFixed(2) : null;
+                        return {
+                            fromMin: Math.round(k / 60), dtS: Math.round(b.dtS),
+                            lossPerSec: per(b.lossHp), gainPerSec: per(b.gainHp),
+                            net: b.dtS > 0 ? +((b.gainHp - b.lossHp) / b.dtS).toFixed(2) : null,
+                            events: { loss: b.lossN, gain: b.gainN },
+                            spikes: b.spikeN ? { n: b.spikeN, hp: Math.round(b.spikeHp) } : null
+                        };
+                    });
+                const deep = rows.filter(r => r.fromMin >= 20 && r.dtS >= 60);
+                return {
+                    runs: incAudit.runs || 0, buckets: rows,
+                    firstNegativeMin: (deep.find(r => r.net != null && r.net < 0) || {}).fromMin ?? null,
+                    note: 'net < 0 means the pool is draining at that depth: no posture fixes that, only heal income or time-stop uptime. Ignore rows with dtS under ~60. `spikes` are level-up maxHp raises and revives, excluded from gainPerSec.'
+                };
+            };
+            window.pineBot.resetIncomeAudit = () => {
+                incAudit = { buckets: {}, runs: 0 };
+                incCursor.t = null; incCursor.hp = null;
+                try { localStorage.removeItem(INC_AUDIT_KEY); } catch (e) { }
+                return 'income audit cleared';
+            };
             window.pineBot.resetDamageAudit = () => {
                 dmgAudit = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
                 try { localStorage.removeItem(DMG_AUDIT_KEY); } catch (e) { }

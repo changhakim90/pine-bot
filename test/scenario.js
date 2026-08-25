@@ -1290,10 +1290,16 @@ if (which === 'flight') {
         // see the note in maybeAbilities. Asserted because the directive names
         // it, not because 6.85.6 changed it.
         test('the ult fires during a low-HP flight', () => assert.ok(ults > 0, 'ults ' + ults));
-        // coverage only: with 6 bodies at 70px the danger score fires the dash
-        // regardless. What 6.85.6 changes is the GATE (1300 ms -> 300 ms via
-        // plan.flight), which a single maybeAbilities call cannot observe.
-        test('the dash fires during a low-HP flight', () => assert.ok(dashes > 0, 'dashes ' + dashes));
+        // v6.89.8 REVERSES THIS ASSERTION, deliberately. Source-verified:
+        // tryDash sets only dashDx/dashDy/dashUntil — NO invulnerability. It is
+        // a 0.16 s speed burst along the heading the planner already chose, so
+        // in panic (a flee vector) it amplifies exactly the wrong move, and at
+        // depth it cannot open a gap against 50-119 px/frame bodies anyway.
+        // User: "without dashing on panic mode in deep hell ... and anchor
+        // towards one of the four corners." This scene is gameTime 3000 in hell
+        // with hpPanic set, which is precisely that case.
+        test('a low-HP deep-hell panic does NOT dash any more', () =>
+            assert.strictEqual(dashes, 0, 'dashes ' + dashes + ' — panic should anchor, not sprint'));
         done();
     }, 2000);
 }
@@ -2522,11 +2528,20 @@ if (which === 'kite-damp') {
         // The scaling factor is tested four ways above; this asserts only that
         // the term reaches the gain expression, which is the regression that
         // would otherwise pass silently.
+        // v6.89.6: the gain line now multiplies by `kiteStack`, which selects
+        // between the SWEEP arm (damped by anchor / corner / kiteDamp) and the
+        // SPACING arm (a flat kiteSpacingMul — see the kite-deadband scenario).
+        // Follow both hops, or a refactor that drops kiteDamp from the sweep arm
+        // would pass on the strength of the gain line alone.
         test('the damping is actually wired into the kite gain term', () => {
             const src = require('fs').readFileSync(SCRIPT, 'utf8');
-            const line = src.split('\n').find(l => /kitePull \* charOf\(\)\.kiteMul/.test(l));
-            assert.ok(line && /\*\s*kiteDamp\s*\*/.test(line),
-                'kiteDamp is missing from the kite gain term');
+            const line = src.split('\n').find(l => /gain \+= \(dx \* kite\.x \+ dy \* kite\.y\)/.test(l));
+            assert.ok(line && /\*\s*kiteW\b/.test(line),
+                'kiteW is missing from the kite gain term');
+            const i = src.indexOf('kiteW = kiteBaseW *');
+            assert.ok(i > 0, 'the sweep arm of kiteW is gone');
+            assert.ok(/\*\s*kiteDamp\b/.test(src.slice(i, i + 160)),
+                'kiteDamp is missing from the sweep arm');
         });
 
         // v6.89.5 — THE OUTRUN GATE. User: "kiting has resulted in constant
@@ -2562,4 +2577,343 @@ if (which === 'kite-damp') {
     setTimeout(() => done(), 40);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.6 — THE KITE DEADBAND. 6.89.5 made the outrun test a CLIFF: full pull
+// on one side, nothing on the other. The user's requirement is a threshold, not
+// a weight — "just enough distance for no contact damage deaths" — so against a
+// pack that cannot be outrun the kite must be silent until something is inside
+// (player radius + kiteBand), then step, then go silent again.
+//
+// This one is genuinely behavioural. `kiting` is `kite !== null` and
+// `kiteSpacing` is reported, so the gate is directly observable, and the
+// scene is held fixed while ONLY the thing under test moves. Both arms of
+// the first pair fail with the deadband reverted to `outrunnable` alone.
+if (which === 'kite-deadband') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 6000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();   // latch hell the way the main loop does
+        const T = pineBot.test;
+        // A RUSHING pack — speed 5 against the player's 2.4 puts every body over
+        // the chaserFast 0.85x line, so `outrunnable` is false and 6.89.5 would
+        // refuse to kite at ANY distance. `dist` is the only thing that varies.
+        const ring = (dist, spd) => {
+            global.gameTime = 6000;
+            global.player.x = 270; global.player.y = 270; global.player.r = 7.2;
+            global.player.hp = 120; global.player.maxHp = 120; global.player.speed = 2.4;
+            global.enemies = Array.from({ length: 6 }, (_, i) => ({
+                type: 'drunk', hp: 1e6, r: 18, speed: spd, moving: true,
+                x: 270 + dist * Math.cos(i * Math.PI / 3),
+                y: 270 + dist * Math.sin(i * Math.PI / 3)
+            }));
+            return T.planMove();
+        };
+        // OUT of the band. Nothing is close enough to touch us, so the sweep
+        // stays off — this is the 6.89.5 behaviour, preserved.
+        const far = ring(140, 5);
+        test('a rushing pack at range is still not kited', () =>
+            assert.strictEqual(far.kiting, false,
+                JSON.stringify({ kiting: far.kiting, gap: far.contactGap, outrun: far.outrunnable })));
+        test('and the gap is reported, so the band is observable in the panel', () =>
+            assert.ok(far.contactGap > 40, 'contactGap ' + far.contactGap));
+        // INSIDE the band. Same pack, same speed, same everything — only closer.
+        // 6.89.5 returns kiting:false here and eats the contact tick.
+        const near = ring(60, 5);
+        test('...but the SAME pack inside the band arms the spacing step', () =>
+            assert.strictEqual(near.kiting, true,
+                JSON.stringify({ kiting: near.kiting, gap: near.contactGap, outrun: near.outrunnable })));
+        test('and it is flagged as SPACING, not as a sweep', () =>
+            assert.strictEqual(near.kiteSpacing, true, String(near.kiteSpacing)));
+        test('the pack is still un-outrunnable — the band is what changed, not the gate', () =>
+            assert.strictEqual(near.outrunnable, false, String(near.outrunnable)));
+        // THE DIAL DRIVES IT. Scene held completely fixed at the near ring;
+        // only CONFIG.movement.kiteBand moves. This is what proves the
+        // threshold is read from config rather than falling out of some other
+        // distance-sensitive term firing at 60px.
+        test('the band is what arms it — shrink the dial on a FIXED scene and it disarms', () => {
+            const gap = near.contactGap;
+            pineBot.config.movement.kiteBand = 1;
+            const tight = ring(60, 5);
+            pineBot.config.movement.kiteBand = 20;
+            const wide = ring(60, 5);
+            assert.ok(tight.kiting === false && wide.kiting === true,
+                JSON.stringify({ gap, tight: tight.kiting, wide: wide.kiting }));
+        });
+        // The outrunnable path must be untouched: a slow pack is kited at any
+        // distance, band or no band. This is the day phase's whole economy.
+        const slow = ring(140, 0.5);
+        test('a pack that CAN be outrun is kited at range, band irrelevant', () =>
+            assert.ok(slow.kiting === true && slow.outrunnable === true && slow.kiteSpacing === false,
+                JSON.stringify({ kiting: slow.kiting, outrun: slow.outrunnable, spacing: slow.kiteSpacing })));
+        // v6.89.7 — THE CAP, and this one is behavioural because `kiteW` is now
+        // reported. 6.89.6 asserted the corner outbids the spacing kite by
+        // comparing CONFIG DEFAULTS — but movement.kitePull is a CEM parameter
+        // with a box max of 4.0, and a live read caught it at 2.223 and rising.
+        // A margin that only holds at the default is not a margin.
+        test('the spacing weight is CAPPED against the corner, whatever CEM does to kitePull', () => {
+            const C = pineBot.config;
+            const ceil = C.deepHell.cornerPull * 0.5 * C.deepHell.spacingCeilShare;
+            const at = (kp) => { C.movement.kitePull = kp; return ring(60, 5); };
+            const low = at(2.0), high = at(4.0);   // 4.0 is the CEM box ceiling
+            C.movement.kitePull = 2.0;
+            assert.ok(low.kiteSpacing && high.kiteSpacing, 'both arms must be in spacing mode');
+            assert.ok(high.kiteW <= ceil + 1e-6,
+                'kiteW ' + high.kiteW + ' exceeds the ceiling ' + ceil + ' at the CEM box max');
+            assert.ok(high.kiteW < C.deepHell.cornerPull * 0.5,
+                'the corner must still outweigh the spacing kite: ' + high.kiteW);
+            assert.ok(low.kiteW <= high.kiteW, JSON.stringify({ low: low.kiteW, high: high.kiteW }));
+        });
+        // WIRING, and labelled as such: that the sweep arm still carries the
+        // corner damping. Asserting that by heading is the trap this suite has
+        // fallen into four times, so it reads the built file instead.
+        test('the sweep arm still keeps the corner/anchor/damp stack', () => {
+            const src = require('fs').readFileSync(SCRIPT, 'utf8');
+            const i = src.indexOf('kiteW = kiteBaseW *');
+            assert.ok(i > 0, 'the sweep arm of kiteW is gone');
+            const block = src.slice(i, i + 160);
+            assert.ok(/cornerOn \? 0\.12/.test(block), 'sweep arm lost the corner damping');
+            assert.ok(/kiteDamp/.test(block), 'sweep arm lost kiteDamp');
+        });
+        // v6.89.7 — FROZEN BODIES ARE NOT CHASING. gather forces spd = 0 on a
+        // frozen enemy, so it can never be chaserFast — but 6.89.6 still counted
+        // it in the denominator. Four frozen plus two rushing therefore read as
+        // 2/6 = 0.33 and flipped `outrunnable` back to TRUE, re-arming the full
+        // sweep against a pack that resumes at full speed the instant the stop
+        // ends. Counting only moving bodies gives 2/2 = 1.0, which is the truth.
+        const mixed = (frozenN, rushN) => {
+            global.gameTime = 6000;
+            global.player.x = 270; global.player.y = 270; global.player.r = 7.2;
+            global.player.hp = 120; global.player.maxHp = 120; global.player.speed = 2.4;
+            const all = [];
+            for (let i = 0; i < frozenN + rushN; i++) {
+                const a = i * Math.PI * 2 / (frozenN + rushN);
+                all.push({
+                    type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true,
+                    frozenUntil: i < frozenN ? 1e9 : 0,
+                    x: 270 + 150 * Math.cos(a), y: 270 + 150 * Math.sin(a)
+                });
+            }
+            global.enemies = all;
+            return T.planMove();
+        };
+        const halfFrozen = mixed(4, 2);
+        test('a half-frozen pack is still un-outrunnable — the movers are what count', () =>
+            assert.strictEqual(halfFrozen.outrunnable, false,
+                JSON.stringify({ outrun: halfFrozen.outrunnable, live: halfFrozen.liveChasers, fast: halfFrozen.fastChasers })));
+        test('...and only the moving bodies are counted', () =>
+            assert.strictEqual(halfFrozen.liveChasers, 2, String(halfFrozen.liveChasers)));
+        const allFrozen = mixed(6, 0);
+        test('an ALL-frozen field has nothing to outrun, so the sweep does not pay', () =>
+            assert.ok(allFrozen.outrunnable === false && allFrozen.liveChasers === 0,
+                JSON.stringify({ outrun: allFrozen.outrunnable, live: allFrozen.liveChasers })));
+        // v6.89.6 — UNDER A TIME STOP THE SWEEP IS ZERO. A frozen field has
+        // nothing to sweep around; the arc is pure wasted travel that walks the
+        // bot off its own burn and out of its corner seat during the exact
+        // seconds the corner matters most. 6.89.4 left 0.15 leaking into the
+        // heading. The deadband above is what still steps away from a body that
+        // is actually touching us, so this costs no contact safety.
+        test('a time-stopped field kills the sweep outright', () => {
+            global.gameTime = 6000;
+            global.player.x = 270; global.player.y = 270; global.player.r = 7.2;
+            global.player.hp = 120; global.player.maxHp = 120; global.player.speed = 2.4;
+            global.enemies = Array.from({ length: 6 }, (_, i) => ({
+                type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true, frozenUntil: 1e9,
+                x: 270 + 150 * Math.cos(i * Math.PI / 3),
+                y: 270 + 150 * Math.sin(i * Math.PI / 3)
+            }));
+            const paused = T.planMove();
+            assert.strictEqual(paused.pauseActive, true, 'the pause did not latch: ' + paused.pauseActive);
+            assert.strictEqual(paused.kiteDamp, 0, 'kiteDamp ' + paused.kiteDamp + ' — kiteDampPaused should be 0');
+        });
+        // The corner has to WIN the tie: a straggler in the band must not be
+        // able to tour the bot around the arena. cornerPull 4.0 * 0.5 against
+        // kitePull 2.0 * kiteSpacingMul 0.6 is the margin that guarantees it.
+        test('cornerPull still outweighs the spacing kite', () => {
+            const C = pineBot.config;
+            assert.ok(C.deepHell.cornerPull * 0.5 > C.movement.kitePull * C.movement.kiteSpacingMul,
+                JSON.stringify({ corner: C.deepHell.cornerPull, kite: C.movement.kitePull, mul: C.movement.kiteSpacingMul }));
+        });
+    }, 0);
+    setTimeout(() => done(), 40);
+}
+
+// v6.89.7 — THE INCOME AUDIT. Source facts say contact damage is rate-limited
+// near 40 dps by the 33-frame invuln, and that mobs outrun the player from
+// minute 14 onward. If both hold, deep survival is arithmetic — pool gained
+// per second against pool lost per second — and no version has ever measured
+// it. These assertions check the integrator itself: that it divides by real
+// elapsed gameTime, buckets by depth, drops throttled gaps, and refuses to
+// book a level-up or a revive as heal income.
+if (which === 'income-audit') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 0 } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        pineBot.resetIncomeAudit();
+        const T = pineBot.test;
+        const tick = (gt, hp) => {
+            global.gameTime = gt;
+            global.player.x = 270; global.player.y = 270; global.player.r = 7.2;
+            global.player.maxHp = 100; global.player.hp = hp;
+            global.player.shield = 0; global.player.shieldMax = 0;
+            global.enemies = [];
+            T.planMove();
+        };
+        const bucketAt = (min) => (pineBot.incomeAudit().buckets.find(b => b.fromMin === min) || null);
+        // BLEEDING: 20 pool over 5 s of gameTime = 4.0/s, in the 20-minute bucket.
+        for (let i = 0; i <= 10; i++) tick(1200 + i * 0.5, 100 - i * 2);
+        const bleed = bucketAt(20);
+        test('loss is integrated against real gameTime, not tick count', () =>
+            assert.ok(bleed && Math.abs(bleed.lossPerSec - 4) < 0.2,
+                JSON.stringify(bleed)));
+        test('...and lands in the bucket for its depth', () =>
+            assert.ok(bleed.dtS >= 4.5 && bleed.dtS <= 5.5, 'dtS ' + bleed.dtS));
+        // HEALING, one bucket deeper: the same shape with the sign flipped.
+        for (let i = 0; i <= 10; i++) tick(1800 + i * 0.5, 60 + i * 2);
+        const heal = bucketAt(30);
+        test('gain is integrated the same way', () =>
+            assert.ok(heal && Math.abs(heal.gainPerSec - 4) < 0.2, JSON.stringify(heal)));
+        test('net is gain minus loss, and reads positive while healing', () =>
+            assert.ok(heal.net > 3.5, 'net ' + heal.net));
+        test('the two depths are kept apart', () =>
+            assert.ok(bleed.net < 0 && heal.net > 0,
+                JSON.stringify({ at20: bleed.net, at30: heal.net })));
+        // A LEVEL-UP IS NOT HEAL INCOME. A jump over 40% of the pool is a maxHp
+        // raise or a COFFEE BEANS revive; counting it would make a dying build
+        // look self-sustaining, which is the exact error this audit exists to
+        // avoid making.
+        pineBot.resetIncomeAudit();
+        tick(2400, 30);
+        tick(2400.5, 95);            // +65 on a 100 pool
+        const spiked = bucketAt(40);
+        test('a revive-sized jump is booked as a spike, not as income', () =>
+            assert.ok(spiked && spiked.spikes && spiked.spikes.n === 1,
+                JSON.stringify(spiked)));
+        test('...and it does NOT inflate gainPerSec', () =>
+            assert.ok(!spiked.gainPerSec, 'gainPerSec ' + spiked.gainPerSec));
+        // A THROTTLED TAB must not smear one interval across a bucket.
+        pineBot.resetIncomeAudit();
+        tick(3000, 100);
+        tick(3030, 40);              // 30 s gap: the tab was asleep
+        const gap = bucketAt(50);
+        test('a gap over 5s is dropped rather than integrated', () =>
+            assert.ok(!gap || gap.dtS === 0, JSON.stringify(gap)));
+        // The headline the audit exists to produce.
+        pineBot.resetIncomeAudit();
+        // 1 pool per half-second: the per-event floor is 0.5, so a drip finer
+        // than that is invisible to the integrator by design (it would
+        // otherwise book float noise as damage).
+        // Also long enough to clear the audit's own dtS >= 60 noise floor —
+        // firstNegativeMin deliberately ignores thin buckets, because a bucket
+        // holding four seconds of samples will say anything.
+        for (let i = 0; i <= 120; i++) tick(3600 + i * 0.5, 100 - i * 0.6);
+        const rep = pineBot.incomeAudit();
+        test('firstNegativeMin names the depth where the pool starts draining', () =>
+            assert.strictEqual(rep.firstNegativeMin, 60, JSON.stringify(rep.buckets)));
+        test('and the audit survives a reset', () => {
+            pineBot.resetIncomeAudit();
+            assert.strictEqual(pineBot.incomeAudit().buckets.length, 0);
+        });
+    }, 0);
+    setTimeout(() => done(), 40);
+}
+
+// v6.89.8 — PANIC ANCHORS, IT DOES NOT SPRINT. Three linked changes, all from
+// the same user directive and the same source read:
+//   1. `tryDash` grants NO i-frames (read whole from source), so the dash is a
+//      multiplier on the planner's heading — worst possible thing to apply to a
+//      flee vector. No dashing on panic in deep hell.
+//   2. The corner gate carried `!flight`, and `flight` is true for essentially
+//      all of deep hell. The corner has effectively never engaged at depth.
+//   3. The ult fires on availability at depth: invulnerability where the
+//      character has it, and field-wide kills — hence item drops, hence time
+//      stops — where it does not.
+if (which === 'panic-anchor') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 6000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();   // latch hell
+        pineBot.test.ageHellEntry(120000);
+        const T = pineBot.test;
+        // A deep-hell panic: hurt, surrounded, nothing killable. Held identical
+        // across every assertion below so only the gates vary.
+        const scene = (gt, hp, rad) => {
+            const R = rad || 70;
+            global.gameTime = gt;
+            global.player = { x: 270, y: 270, r: 7.2, hp, maxHp: 180, speed: 2.375 };
+            global.enemies = Array.from({ length: 8 }, (_, i) => ({
+                type: 'mob', hp: 9e9, maxHp: 9e9, r: 14, speed: 5, moving: true,
+                x: 270 + R * Math.cos(i * Math.PI / 4), y: 270 + R * Math.sin(i * Math.PI / 4)
+            }));
+            return T.planMove();
+        };
+        const deep = scene(6000, 60);
+        test('the scene is a genuine deep-hell panic', () =>
+            assert.ok(deep.panic === true || deep.hpPanic === true,
+                JSON.stringify({ panic: deep.panic, hpPanic: deep.hpPanic })));
+        // (2) THE CORNER SURVIVES FLIGHT AND PANIC AT DEPTH. Before 6.89.8 the
+        // gate read `!hpPanic && !flight && ...`, and `flight` is on for all of
+        // deep hell outside a time stop — so this returned false every time.
+        test('the corner anchor engages even in flight/panic at depth', () =>
+            assert.strictEqual(deep.cornerAnchor, true,
+                JSON.stringify({ corner: deep.cornerAnchor, flight: deep.flight, hpPanic: deep.hpPanic })));
+        test('...and the heading points at a corner', () =>
+            assert.strictEqual(deep.cornerward, true,
+                JSON.stringify({ cornerward: deep.cornerward, dx: +deep.dx.toFixed(2), dy: +deep.dy.toFixed(2) })));
+        // ...and SHALLOW hell is untouched: there, fleeing still opens a gap,
+        // so panic must still be allowed to break the corner.
+        const shallow = scene(1500, 60);
+        test('shallow hell still lets panic break the corner', () =>
+            assert.strictEqual(shallow.cornerAnchor, false,
+                JSON.stringify({ corner: shallow.cornerAnchor, flight: shallow.flight })));
+        // maybeAbilities reads gameTime LIVE, not from the plan it is handed,
+        // and `lastDash` is module state shared across calls — the first draft
+        // of this block failed on both, passing a deep plan while the clock had
+        // been left shallow by the assertion above. Each arm now re-runs its own
+        // scene immediately before the call, and the dash cooldown is zeroed
+        // with a real few-ms gap so consecutive calls are not gate-blocked.
+        let dashes = 0, ults = 0;
+        global.tryDash = () => { dashes++; };
+        global.useUltimate = () => { ults++; };
+        pineBot.config.abilities.dashCooldownMs = 0;
+        const wait = (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms); };
+        // (1) NO DASH ON A DEEP PANIC.
+        const deepAgain = scene(6000, 60);
+        dashes = 0; ults = 0; wait(3);
+        T.maybeAbilities(deepAgain);
+        test('a deep-hell panic does not dash', () =>
+            assert.strictEqual(dashes, 0, 'dashes ' + dashes + ' — panic amplified by a 0.16s burst is the wrong move'));
+        // (3) ...but the ult fires, which is the thing that actually helps.
+        test('the ult fires on availability at depth', () =>
+            assert.ok(ults > 0, 'ults ' + ults));
+        // A MARK OVERRIDES the no-dash rule: position is the one defence that
+        // still works against a falling attack (corner mark-immunity is
+        // geometric), so the burst is worth spending there.
+        global.gameTime = 6000;
+        global.player = { x: 270, y: 270, r: 7.2, hp: 60, maxHp: 180, speed: 2.375 };
+        global.enemies = [];
+        global.dropMarks = [{ x: 272, y: 272, r: 58, dmg: 72, tele: 0.6, at: 6000.3 }];
+        const marked = T.planMove();
+        dashes = 0; wait(3);
+        T.maybeAbilities(marked);
+        test('standing in a live mark still dashes out', () =>
+            assert.ok(dashes > 0, 'dashes ' + dashes + ' — marks are what position DOES beat'));
+        global.dropMarks = [];
+        // NO SHALLOW-DASH ASSERTION, and the reason is recorded rather than
+        // fudged. Two drafts tried to prove "shallow hell still dashes on the
+        // same scene" and both measured ZERO dashes in the shallow arm — not
+        // because of this change, but because the dash never triggers there in
+        // the first place: `crowdTol` carries a deep-hell term
+        // ((gameTime-1800)/120) and the deep contact posture widens the danger
+        // bands, so the identical field scores under the dash threshold at
+        // 1500 s and over it at 6000 s. Asserting it anyway would have been a
+        // test that passes for a reason unrelated to its name — the failure
+        // mode this suite has hit five times now.
+        //
+        // Depth-scoping is asserted instead by the CORNER arms above (shallow
+        // off / deep on), which do vary only by the clock, and the no-dash
+        // assertion has teeth: removing the gate makes it fail.
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
