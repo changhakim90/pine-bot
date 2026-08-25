@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.4
+// @version      6.89.5
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.4';
+    const SCRIPT_VERSION = '6.89.5';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -6087,7 +6087,35 @@
         // a fresh rainbow) still buys one chaser of impatience, because the
         // sweep is what drags the train across the burning ground.
         const kiteAt = Math.max(2, (charOf().kiteChasers || 3) - ((zoner || rainbowRecent) ? 1 : 0));
-        if (chasers >= kiteAt && !panic) {
+        // v6.89.5 (user): "in the last runs, kiting has resulted in constant
+        // contact damage with the mobs in hell as they keep rushing, unlike day
+        // mode."
+        //
+        // That is not a tuning complaint, it is a statement about when kiting is
+        // a valid move at all. A tangential sweep only works if it OPENS A GAP:
+        // the arc is longer than the pack's straight-line cut across it, so the
+        // moment the pack matches your speed the sweep stops buying separation
+        // and simply holds the bot inside contact range for the whole arc. This
+        // file already knows when that is — `chaserFast` is set per enemy at
+        // gather time as `speed >= playerSpeed * 0.85` — and the comment on the
+        // standoff term already records that mobs pass the player's speed at
+        // around eleven minutes. So in hell the condition is essentially always
+        // true, and the bot has been paying the arc cost for nothing.
+        //
+        // Damping it (6.89.4) was the right direction but the wrong shape: a
+        // weaker version of a move that cannot work is still a move that cannot
+        // work. When the pack is not outrunnable the kite is OFF, and the corner
+        // plus the burn is what the doctrine puts in its place.
+        //
+        // Day is untouched: day mobs are slower, the sweep does open a gap, and
+        // dragging the conga line through burn zones is how the day phase pays.
+        let fastChasers = 0;
+        for (const e of th.enemies) {
+            if (e.wall || (e.boss && e.stationary)) continue;
+            if (e.chaserFast) fastChasers++;
+        }
+        const outrunnable = !hellDetected || chasers === 0 || (fastChasers / chasers) < 0.5;
+        if (chasers >= kiteAt && !panic && outrunnable) {
             const rx = p.x - cx, ry = p.y - cy;
             const rm = Math.hypot(rx, ry) || 1;
             const t1 = { x: -ry / rm, y: rx / rm }, t2 = { x: ry / rm, y: -rx / rm };
@@ -6337,7 +6365,19 @@
         // they still DROP TIPS; the doctrine's own definition of deep hell is
         // the moment they stop. So the hunt exception expires with the window.
         const tipOpen = gtCorner < (CONFIG.deepHell.tipWindowToS || 4800);
-        const bossHunt = (th.boss === true && tipOpen) || !!th.rival;
+        // v6.89.5 (user): "bot should hunt down time stopped or frozen bosses
+        // early to kill them before they cause severe damage though."
+        //
+        // A frozen boss is the one target on the field that cannot fight back,
+        // and every one left alive comes back later as the thing that ends the
+        // run. So this exception is NOT scoped to the tip window the way plain
+        // boss-hunting is: a free kill is worth leaving the funnel for at any
+        // depth. Same predicate the stacking station uses below (>= 45 frames
+        // left), so the corner releases exactly when that station would engage,
+        // rather than the two fighting over the heading.
+        const frozenBossHere = th.enemies.some(e =>
+            e.boss && !e.wall && e.frozen && (e.frozenLeft || 0) >= 45);
+        const bossHunt = frozenBossHere || (th.boss === true && tipOpen) || !!th.rival;
         const zonerCorner = CONFIG.deepHell.cornerWithZoner !== false && hellDetected && zoner;
         const cornerOn = !hpPanic && !markHere && !flight && !bossHunt &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
@@ -7075,7 +7115,7 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, kiteDamp: +kiteDamp.toFixed(2), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

@@ -2096,6 +2096,24 @@ if (which === 'corner-anchor') {
     test('...but the same boss past the tip window does NOT', () =>
         assert.strictEqual(huntingLate && huntingLate.cornerAnchor, true,
             String(huntingLate && huntingLate.cornerAnchor)));
+    // v6.89.5 (user): "hunt down time stopped or frozen bosses early to kill
+    // them before they cause severe damage." A free kill is worth leaving the
+    // funnel for at ANY depth — unlike a live boss, which is not.
+    const frozenBoss = (gt) => {
+        global.gameTime = gt;
+        global.player.x = 400; global.player.y = 400;
+        global.player.hp = 120; global.player.maxHp = 120;
+        global.frame = 1000;
+        global.enemies = [{
+            x: 470, y: 470, r: 40, hp: 1e6, maxHp: 1e6, type: 'boss', t: 'boss',
+            boss: true, frozenUntil: 100000
+        }];
+        return T.planMove();
+    };
+    const frozenLate = frozenBoss(6000);
+    test('a FROZEN boss breaks the corner even past the tip window', () =>
+        assert.strictEqual(frozenLate && frozenLate.cornerAnchor, false,
+            String(frozenLate && frozenLate.cornerAnchor) + ' — a free kill is worth the trip'));
     global.enemies = Array.from({ length: 6 }, (_, i) => ({
         x: 498 + (i % 3) * 14, y: 498 + Math.floor(i / 3) * 14, r: 18, hp: 1e6, type: 'bomber'
     }));
@@ -2491,8 +2509,8 @@ if (which === 'kite-damp') {
         // fixed: SOUTH SIDE, OLIVE and NEGRONI are owned in BOTH arms, and only
         // the eight items that touch nothing else in the planner are varied.
         // WIRING, NOT BEHAVIOUR — and labelled as such, because four attempts at
-        // a behavioural assertion all passed with the damping deleted:
-        //   1. thin build vs full build — owning those items also flips `zoner`
+        // a behavioural assertion on the DAMPING all passed with it deleted:
+        //   1. thin vs full build — owning those items also flips `zoner`
         //      (kite x1.6) and the OLIVE/NEGRONI armour confidence.
         //   2. holding those three fixed and varying only the "neutral" eight —
         //      build hunger reads them too.
@@ -2501,15 +2519,45 @@ if (which === 'kite-damp') {
         //   4. settling each arm first, on a symmetric ring, with the corner
         //      anchor disabled — the heading is still pinned by flee/escape at
         //      this crowd size, and both arms converge to the same step.
-        // The damping is real and the computation above is tested; what could
-        // not be proven cheaply is that the term reaches the gain expression.
-        // This asserts exactly that and nothing more.
+        // The scaling factor is tested four ways above; this asserts only that
+        // the term reaches the gain expression, which is the regression that
+        // would otherwise pass silently.
         test('the damping is actually wired into the kite gain term', () => {
             const src = require('fs').readFileSync(SCRIPT, 'utf8');
             const line = src.split('\n').find(l => /kitePull \* charOf\(\)\.kiteMul/.test(l));
             assert.ok(line && /\*\s*kiteDamp\s*\*/.test(line),
                 'kiteDamp is missing from the kite gain term');
         });
+
+        // v6.89.5 — THE OUTRUN GATE. User: "kiting has resulted in constant
+        // contact damage with the mobs in hell as they keep rushing, unlike day
+        // mode." A sweep only pays if it opens a gap; against a pack matching
+        // the player's speed it just holds the bot in contact for the whole arc.
+        // This one IS behavioural — `kiting` is `kite !== null`, so the gate
+        // shows up directly, and it is the same field twice with only mob speed
+        // changed.
+        const chase = (speed) => {
+            global.gameTime = 3000;
+            global.player.x = 270; global.player.y = 270;
+            global.player.hp = 120; global.player.maxHp = 120; global.player.speed = 2.375;
+            global.enemies = Array.from({ length: 4 }, (_, i) => ({
+                type: 'mob',
+                x: 270 + 150 * Math.cos(i * Math.PI / 2),
+                y: 270 + 150 * Math.sin(i * Math.PI / 2),
+                r: 14, hp: 9e9, maxHp: 9e9, speed, moving: true
+            }));
+            return T.planMove();
+        };
+        const slowPack = chase(1.0);
+        test('a pack the bot can outrun still gets kited', () =>
+            assert.strictEqual(slowPack.kiting, true,
+                JSON.stringify({ kiting: slowPack.kiting, outrunnable: slowPack.outrunnable })));
+        const fastPack = chase(3.0);
+        test('...but a RUSHING pack in hell is not kited at all', () =>
+            assert.strictEqual(fastPack.kiting, false,
+                JSON.stringify({ kiting: fastPack.kiting, fast: fastPack.fastChasers })));
+        test('and the gate is reported so the posture stays observable', () =>
+            assert.strictEqual(fastPack.outrunnable, false, String(fastPack.outrunnable)));
     }, 0);
     setTimeout(() => done(), 40);
 }
