@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.90.1
+// @version      6.91.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.90.1';
+    const SCRIPT_VERSION = '6.91.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -661,8 +661,31 @@
             // at hell entry, because that is where it is running around in the
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
-            parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
+            parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
+            parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
+            parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
+            // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
+            // the damage circle of the boss is also outside of the canvas, the
+            // bot needs to hunt it down somehow before it wakes up and does huge
+            // one hit damages").
+            dormantHunt: true,
+            // v6.91.1: measured, not guessed. Live tier-3 bosses sit 1285-1641px
+            // from the player with radii 613-858; the old 900px CENTRE-distance
+            // cap gathered none of them. This is how far the BODY may sit from
+            // the play rectangle and still be worth tracking — player-position
+            // independent, which centre distance was not.
+            dormantBodyReach: 1200,
+            dormantHuntS: 20,        // seconds committed to one hunt before giving up
+            dormantHuntRestS: 45,    // and how long before another is allowed
+            dormantHuntRadius: 20,   // "on post": stop moving inside this radius
+            dormantHuntMargin: 8,    // how close to the field edge the post may sit
+            dormantHuntHp: 0.6,      // never leave the seat below this HP ratio
+            // v6.91.1: "wakes up" = a TIME STOP ending (user). The freeze is the
+            // real deadline, so the walk home is subtracted from it rather than
+            // guessed at.
+            huntFrozenMinFrames: 45,  // same threshold stopBoss and frozenBossHere use
+            huntVacateS: 0.75,       // slack on top of (distance home / speed)
             deepCornerFromS: 2400,
             // v6.89.8 (user): "ultimate every time it's available, for that
             // invincibility and chance to kill a potential mob — for the item
@@ -1451,6 +1474,40 @@
     // the classifier blames contact by default. See the audit block in
     // 05-movement.js.
     let lastMarkSnap = [];
+    // v6.91.0 dormant-boss hunt budget (gameTime seconds; reset per run)
+    let huntStartS = null;
+    let huntRestUntilS = 0;
+    // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
+    // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
+    // all is unknown, and this project's recurring cost is acting on models that
+    // were never checked. Every attempt books the target's hp on arrival and on
+    // departure; `pineBot.huntAudit()` reads it back. If `dmg` stays at zero,
+    // the hunt is a walk to the edge that accomplishes nothing and should be
+    // replaced by a warning posture rather than tuned.
+    const HUNT_AUDIT_KEY = 'pineBotHuntAudit';
+    let huntMark = null;   // live, per-attempt; never persisted
+    let huntAudit = (() => {
+        const blank = { attempts: 0, frozenAttempts: 0, dmg: 0, best: 0, vanished: 0, secs: 0, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(HUNT_AUDIT_KEY) || 'null');
+            if (raw && typeof raw.attempts === 'number') return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    function bookHunt(mk, gtNow) {
+        if (!mk) return;
+        huntAudit.attempts++;
+        if (mk.froz) huntAudit.frozenAttempts++;
+        huntAudit.secs += Math.max(0, (gtNow || 0) - (mk.t0 || 0));
+        // hp0 and hp are both null for a boss the game gave us no hp for — book
+        // the attempt, book no damage, and do not invent a number.
+        if (typeof mk.hp0 === 'number' && typeof mk.hp === 'number') {
+            const d = mk.hp0 - mk.hp;
+            if (d > 0) { huntAudit.dmg += d; if (d > huntAudit.best) huntAudit.best = d; }
+        }
+        if (mk.gone) huntAudit.vanished++;
+        try { localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit)); } catch (e) { }
+    }
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
@@ -1566,6 +1623,44 @@
     // script, so they are NOT on window. Bare references resolve via the
     // scope chain; try/catch turns a missing binding into undefined.
     // =================================================================
+    // v6.91.2 READ THE STAT, NOT THE INGREDIENT NAME.
+    //
+    // Live probe, gt 2218, lv 58: `player.defense` = 34.992 — the CAP — while
+    // `ownedLevels['OLIVE']` read 1. In-run upgrade levels are stored under
+    // "OLIVE UP"; the bare "OLIVE" key goes to 1 when the ingredient is first
+    // acquired and never moves again. (Same dump: "OLIVE UP" 4, "WATER UP" 3,
+    // "OLIVE" 1, "WATER" 1.)
+    //
+    // Every armour-permission gate in the planner has therefore been comparing
+    // 1 against thresholds of 2, 4 and 6 — including 6.90.0's `parkArmor`,
+    // which needs 6. DEEP PARK HAS NEVER ENGAGED IN A REAL RUN. Neither has the
+    // armour half of the anchor, and `armorEase`/`armorConf` have been telling
+    // the planner it is unarmoured while it stood at the defense cap.
+    //
+    // The fix is not to chase the right key name. `player.defense` and
+    // `player.regenBonus` are what `recalcStats` produces and what `hurtPlayer`
+    // actually subtracts. They cannot drift out of sync with the pool, the
+    // naming, or the ingredient stack. The ownedLevels path stays only as a
+    // fallback for reads before the game object exists.
+    // SCOPE, deliberately narrow: only the PARK gates are migrated in 6.91.2.
+    // Four other call sites read the same broken key and are also wrong —
+    //   05-movement `armorEase` (fear scaling), `armorLv`/`armorConf` (caution),
+    //   `crowdTol`, the anchor's `OLIVE >= 2` permission — plus 03-scoring's
+    //   `defLv`. Migrating all of them at once means shipping five untested
+    //   behaviour changes in one commit, and one of them (`tank-holdout`:
+    //   "armour is measured off the OLIVE + NEGRONI levels") asserts the old
+    //   reading directly, so it has to be revised on purpose rather than made
+    //   to pass. They stay as they are until each has its own evidence.
+    function liveDefense() {
+        const d = safe(() => player.defense, null);
+        return (typeof d === 'number' && d > 0) ? d : null;
+    }
+    function regenRate() {
+        const r = safe(() => player.regenBonus, null);
+        if (typeof r === 'number' && r > 0) return r;
+        return 0.284 * (ownedLevels['WATER'] || 0) + 0.512 * (ownedLevels['SIMPLE SYRUP'] || 0);
+    }
+
     function safe(fn, fallback) {
         try { const v = fn(); return v === undefined ? fallback : v; } catch (e) { return fallback; }
     }
@@ -4499,6 +4594,8 @@
         deathSnapshot = null;
         dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };
         lastHpSample = null;
+        lastMarkSnap = [];
+        huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
         AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);   // day rules until hell is latched
@@ -4618,6 +4715,14 @@
             localStorage.setItem(INC_AUDIT_KEY, JSON.stringify(incAudit));
         } catch (e) { }
         incCursor.t = null; incCursor.hp = null;   // next run starts a fresh integration
+        // v6.91.1: close out any hunt still in flight when the run ended, then
+        // count the run. Same cross-run accumulation as the income audit — a
+        // single run rarely gets more than a couple of attempts.
+        try {
+            if (huntMark) { bookHunt(huntMark, 0); huntMark = null; }
+            huntAudit.runs = (huntAudit.runs || 0) + 1;
+            localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {
@@ -5437,8 +5542,55 @@
                 const frozenNow = frEarly != null &&
                     ((typeof e.frozenUntil === 'number' && e.frozenUntil > frEarly) ||
                      (typeof p.timeStopUntil === 'number' && p.timeStopUntil > frEarly));
-                const distantBoss = d > R && t0 === 'boss' && d < 480 &&
-                    (!hellDetected || (typeof e.r === 'number' && e.r <= 90) || frozenNow) &&
+                // v6.91.0 THE OFF-CANVAS GIANT WAS INVISIBLE (user: "when some
+                // boss is off-canvas and the damage circle of the boss is also
+                // outside of the canvas, the bot needs to hunt it down somehow
+                // before it wakes up and does huge one hit damages").
+                //
+                // The hell branch of this gate keeps a distant boss only when
+                // `e.r <= 90` or it is frozen. A GIANT parked beyond the field
+                // edge fails both tests, so it was dropped from `out.enemies`
+                // outright: no danger cost, no engagement target, no term in the
+                // corner or park gates, nothing in the telemetry. The bot could
+                // not hunt it because nothing downstream knew it existed.
+                //
+                // The corner-chasing risk that justifies excluding live giants
+                // is a risk about giants ON the field, whose body the planner
+                // can orbit into a wall. A boss whose centre is beyond the edge
+                // cannot be orbited at all — every candidate step is clamped to
+                // the field — so the exclusion buys nothing in that case and
+                // costs the entire hunt.
+                const fwG = safe(() => W, CONFIG.field.w) || CONFIG.field.w;
+                const fhG = safe(() => H, CONFIG.field.h) || CONFIG.field.h;
+                const offC = e.x < 0 || e.x > fwG || e.y < 0 || e.y > fhG;
+                // Distance from the PLAY RECTANGLE to the centre (0 on-canvas).
+                const gapF = Math.hypot(Math.max(0, Math.max(-e.x, e.x - fwG)),
+                                        Math.max(0, Math.max(-e.y, e.y - fhG)));
+                // DORMANT = not even the body edge reaches the playable area,
+                // so nothing this boss owns can touch a player who is clamped
+                // to that area. That is exactly the window the user describes:
+                // it is harmless NOW and will not be harmless later, which
+                // makes it the one boss worth walking to.
+                const dormantB = t0 === 'boss' && offC &&
+                    gapF > (typeof e.r === 'number' ? e.r : 40) &&
+                    !(e.wall === true || /nobook/i.test(bc0 + ' ' + t0));
+                // v6.91.1 MEASURED, AND 6.91.0's RANGE WAS FAR TOO SHORT.
+                // Live dump at gt 5024 (84 min), player at (7,533): four tier-3
+                // bosses at (-1610,253) r613, (100,-1100) r638, (1033,1307) r777,
+                // (1299,26) r858 — 1285 to 1641 px from the player. The 900px cap
+                // gathered NONE of them, and the telemetry confirmed it:
+                // `dormantBoss: false` with four giants on the board.
+                //
+                // Player distance was also the wrong axis. What matters is
+                // whether the BODY can reach the play area, which does not depend
+                // on where we happen to be standing — and with radii of 600-860
+                // against a 540px field, centre distance says almost nothing.
+                const bodyGap = gapF - (typeof e.r === 'number' ? e.r : 0);
+                const offReach = CONFIG.deepHell.dormantBodyReach != null
+                    ? CONFIG.deepHell.dormantBodyReach : 1200;
+                const offRelevant = offC && bodyGap < offReach;
+                const distantBoss = d > R && t0 === 'boss' && (offRelevant || d < 480) &&
+                    (!hellDetected || offRelevant || (typeof e.r === 'number' && e.r <= 90) || frozenNow) &&
                     !(e.wall === true || /nobook/i.test(bc0 + ' ' + t0));
                 if (d > R && !distantBoss) continue;
                 const prof = enemyProfile(e);
@@ -5533,8 +5685,17 @@
                     // v6.85.19: centre beyond the field bounds — most of the
                     // hit circle is unreachable, so any standoff ring must
                     // collapse to the sliver of body that pokes on-canvas.
-                    offCanvas: (() => { const fw2 = safe(() => W, 540) || 540, fh2 = safe(() => H, 540) || 540;
-                        return e.x < 0 || e.x > fw2 || e.y < 0 || e.y > fh2; })()
+                    offCanvas: offC,
+                    // v6.91.0: `dormant` is the hunt flag; `gapField` is how far
+                    // the centre sits outside the play rectangle, which is what
+                    // the hunt post is computed from.
+                    dormant: dormantB, gapField: gapF,
+                    // v6.91.1: the live probe showed every enemy carries a
+                    // stable `id` and its own `hp` — which is what lets the hunt
+                    // MEASURE whether it is doing anything, instead of assuming.
+                    id: e.id != null ? e.id : null,
+                    hp: typeof e.hp === 'number' ? e.hp : null,
+                    maxHp: typeof e.maxHp === 'number' ? e.maxHp : null
                 });
                 // A wall next to you is not a swarm closing in — it never
                 // counts toward "surrounded" panic.
@@ -6303,9 +6464,13 @@
         // Crowd centroid for kiting/standoff: CHASING mobs only. Walls and
         // stationary bosses don't move, so including them would bend the kite
         // circle toward things that never follow.
+        // v6.91.0: a DORMANT boss (centre and body entirely off the play
+        // rectangle) is not part of the crowd. It is hundreds of px outside the
+        // field, so leaving it in would drag the centroid off the map and bend
+        // the whole kite circle toward a body nothing can reach.
         let cx = 0, cy = 0, chasers = 0;
         for (const e of th.enemies) {
-            if (e.wall || (e.boss && e.stationary)) continue;
+            if (e.wall || e.dormant || (e.boss && e.stationary)) continue;
             cx += e.x; cy += e.y; chasers++;
         }
         if (chasers) { cx /= chasers; cy /= chasers; }
@@ -6399,7 +6564,7 @@
         // deadband below still steps away from anything touching us.
         let liveChasers = 0, fastChasers = 0;
         for (const e of th.enemies) {
-            if (e.wall || (e.boss && e.stationary)) continue;
+            if (e.wall || e.dormant || (e.boss && e.stationary)) continue;
             if (e.frozen) continue;
             liveChasers++;
             if (e.chaserFast) fastChasers++;
@@ -6410,7 +6575,7 @@
         // were actually counted in.
         let contactGap = Infinity;
         for (const e of th.enemies) {
-            if (e.wall) continue;
+            if (e.wall || e.dormant) continue;   // v6.91.0: a body off the play rectangle is not a contact
             const g = Math.hypot(e.x - p.x, e.y - p.y) - e.r;
             if (g < contactGap) contactGap = g;
         }
@@ -6515,7 +6680,7 @@
         // unkillable-scaled bodies are actually moving at us.
         let frozenNear = 0, movingNear = 0;
         for (const e of th.enemies) {
-            if (e.wall) continue;
+            if (e.wall || e.dormant) continue;   // v6.91.0
             if (Math.hypot(e.x - p.x, e.y - p.y) > 200) continue;
             if (e.frozen) frozenNear++; else movingNear++;
         }
@@ -6767,7 +6932,138 @@
             l && typeof l.ang === 'number' && lineCost(l, x, y) > 0.15);
         const lineHere = laneCovers(p.x, p.y);
         const lineOnCorner = laneCovers(cnrX, cnrY) || lineHere;
-        const cornerOn = !markHere && !lineOnCorner && !bossHunt &&
+        // v6.91.0 THE DORMANT-BOSS HUNT.
+        //
+        // A boss whose whole body sits beyond the play rectangle cannot be hit
+        // by anything the player owns and cannot hit the player back. It is a
+        // free target that becomes an expensive one the moment it drifts in —
+        // and at depth "expensive" means a single hit that ends the run. The
+        // only window in which it can be fought on our terms is while it is
+        // still out there.
+        //
+        // Implemented as an OVERRIDE, not a gain term, for the reason 6.89.11
+        // measured the hard way: a pull competing with a dozen other gain terms
+        // moved the bot 127 px in 120 minutes and showed z = -0.06 against the
+        // version without it. Park works because it zeroes movement outright.
+        // The hunt has to be the same kind of object or it will not fire.
+        //
+        // Three bounds, because this deliberately walks out of the only stable
+        // seat on the board:
+        //   * DORMANT ONLY. The instant the body edge touches the field the
+        //     flag clears and normal doctrine — corner, park, the boss ring —
+        //     takes the fight back. We never chase something that can hit us.
+        //   * A CLOCK. `dormantHuntS` seconds per attempt, then a rest. If the
+        //     weapons cannot reach the sliver from the post, the bot finds that
+        //     out once and goes home instead of standing at the edge forever.
+        //   * A SEAT CHECK. Panic, a mark underfoot, a live charge lane, the
+        //     finale rival or low HP all cancel it. The hunt is an opportunity,
+        //     never an emergency.
+        //
+        // v6.91.1 — WHAT "WAKES UP" MEANS, ANSWERED BY THE USER: A TIME STOP
+        // ENDING. The live probe returned exactly one off-canvas boss and it was
+        // `frozen: true` (boss_glass, r 131, hp 6.03e9). So the dangerous object
+        // is not a boss asleep on a timer; it is a boss the player FROZE, parked
+        // where nothing can reach it, whose thaw lands a huge contact hit.
+        //
+        // That is the karaoke lesson the codebase already states for the
+        // on-canvas case — "leave BEFORE it wakes" — and the frozen window is a
+        // far better clock than my arbitrary 20 seconds, because it is the real
+        // deadline rather than a guess.
+        //
+        // PARK WAS ALSO OUTRANKING A FREE KILL. `frozenBossHere` releases the
+        // CORNER (a frozen boss is worth leaving the funnel for at any depth),
+        // but 6.90.0's park has no such exception and simply zeroes movement.
+        // Every frozen boss since then has been ignored at depth. The hunt now
+        // covers both cases and sits above park, which fixes that too.
+        let huntTarget = null;
+        const DHh = CONFIG.deepHell;
+        const frozenMin = DHh.huntFrozenMinFrames != null ? DHh.huntFrozenMinFrames : 45;
+        if (DHh.dormantHunt !== false && hellDetected) {
+            for (const e of th.enemies) {
+                if (!e.boss || e.wall) continue;
+                // OFF-CANVAS ONLY. The on-canvas frozen boss already has a
+                // better answer than anything here: the demo-tuned two-phase
+                // stacking station (burn ring while the freeze has time, falling
+                // back to the safe 150 as it runs down). Overriding that with a
+                // flat max(150, r+90) post BROKE it — the `item-stop` suite
+                // caught the regression immediately. What park actually did to
+                // that boss was zero its movement, and the fix for that is to
+                // release park, not to re-implement the station.
+                if (!e.offCanvas) continue;
+                const isFroz = e.frozen && (e.frozenLeft || 0) >= frozenMin;
+                if (!isFroz && !e.dormant) continue;
+                // A frozen target outranks a merely dormant one: its window is
+                // closing, the other's is not.
+                if (!huntTarget) { huntTarget = e; continue; }
+                const wasFroz = huntTarget.frozen && (huntTarget.frozenLeft || 0) >= frozenMin;
+                if (isFroz && !wasFroz) huntTarget = e;
+                else if (isFroz === wasFroz && e.gapField < huntTarget.gapField) huntTarget = e;
+            }
+        }
+        const gtHunt = safe(() => gameTime, 0) || 0;
+        const hmg = DHh.dormantHuntMargin != null ? DHh.dormantHuntMargin : 8;
+        let huntOn = false, huntPost = null, huntVacate = false;
+        if (huntTarget) {
+            // THE POST. For a DORMANT boss it is the field point nearest the
+            // centre — the closest a clamped player can physically get. For a
+            // frozen boss whose body IS reachable it is the existing stacking
+            // station (~150px out, demo-measured: the manual stall run never
+            // hugged a paused body, p10 140 / med 254), so the wake-up burst
+            // cannot reach the seat we chose.
+            const bx = huntTarget.x, by = huntTarget.y;
+            const dpb = Math.hypot(p.x - bx, p.y - by) || 1;
+            const postRing = huntTarget.dormant ? 0 : Math.max(150, (huntTarget.r || 40) + 90);
+            huntPost = {
+                x: Math.max(hmg, Math.min(fieldW - hmg, bx + (p.x - bx) / dpb * postRing)),
+                y: Math.max(hmg, Math.min(fieldH - hmg, by + (p.y - by) / dpb * postRing))
+            };
+            // LEAVE BEFORE IT WAKES, computed rather than guessed: the walk home
+            // is a real distance at a real speed, so the margin is
+            // (distance post->seat / speed) + a fixed slack. A short freeze on a
+            // far post is correctly refused outright.
+            const frozenLeftS = (huntTarget.frozen && huntTarget.frozenLeft > 0)
+                ? huntTarget.frozenLeft / 60 : Infinity;
+            const pxPerS = Math.max(0.5, (typeof p.speed === 'number' && p.speed > 0)
+                ? p.speed : M.playerSpeed) * 60;
+            const homeS = Math.hypot(huntPost.x - cnrX, huntPost.y - cnrY) / pxPerS;
+            huntVacate = frozenLeftS <= homeS + (DHh.huntVacateS != null ? DHh.huntVacateS : 0.75);
+        }
+        if (!huntTarget) {
+            huntStartS = null;
+        } else if (hpPanic || markHere || lineHere || th.rival || rainbowRecent ||
+                   hpRatio < (DHh.dormantHuntHp != null ? DHh.dormantHuntHp : 0.6)) {
+            huntStartS = null;   // the seat check failed — abandon, don't bank the time
+        } else if (huntVacate) {
+            huntStartS = null;   // the thaw is closer than the walk home
+        } else if (gtHunt >= huntRestUntilS) {
+            if (huntStartS == null || huntStartS > gtHunt) huntStartS = gtHunt;
+            if (gtHunt - huntStartS <= (DHh.dormantHuntS != null ? DHh.dormantHuntS : 20)) {
+                huntOn = true;
+            } else {
+                huntRestUntilS = gtHunt + (DHh.dormantHuntRestS != null ? DHh.dormantHuntRestS : 45);
+                huntStartS = null;
+            }
+        }
+        if (!huntOn) huntPost = null;
+        // v6.91.1 THE HUNT MEASURES ITSELF. That boss had 6.03 BILLION hp at 46
+        // minutes. Whether anything we own moves that number is unknown, and
+        // guessing is what this project keeps paying for — so every attempt
+        // books the boss's hp on arrival and on departure. If `dmg` stays at
+        // zero across a few dozen attempts, the hunt is a 20-second walk that
+        // accomplishes nothing and should become a warning posture instead.
+        if (huntOn && huntTarget) {
+            if (!huntMark || huntMark.id !== huntTarget.id) {
+                huntMark = { id: huntTarget.id, hp0: huntTarget.hp, hp: huntTarget.hp, t0: gtHunt, froz: !!huntTarget.frozen };
+            } else if (typeof huntTarget.hp === 'number') huntMark.hp = huntTarget.hp;
+        } else if (huntMark) {
+            // "gone" means the id left the enemy list while we were on it. That
+            // is a kill OR a despawn — the audit books it as `vanished`, not as
+            // a kill, because nothing here can tell the two apart.
+            huntMark.gone = !th.enemies.some(e => e.boss && e.id != null && e.id === huntMark.id);
+            bookHunt(huntMark, gtHunt);
+            huntMark = null;
+        }
+        const cornerOn = !huntOn && !markHere && !lineOnCorner && !bossHunt &&
             (deepCorner || (!hpPanic && !flight)) &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
@@ -6970,7 +7266,7 @@
             // when a mob is chasing us and the passout is parked.)
             let candNearestLive = Infinity;
             for (const e of th.enemies) {
-                if (e.wall) continue;
+                if (e.wall || e.dormant) continue;   // v6.91.0
                 const de = Math.hypot(nx - e.x, ny - e.y) - (e.r || 0);
                 if (de < candNearestLive) candNearestLive = de;
             }
@@ -7545,8 +7841,13 @@
         //   lineOnCorner  — a charge lane is an unbounded RAY; no point in the
         //                   arena is outside it, so the corner cannot defeat it.
         const DHp = CONFIG.deepHell;
-        const parkArmor = (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
-        const parkRegen = (ownedLevels['WATER'] || 0) >= 4 || (ownedLevels['SIMPLE SYRUP'] || 0) >= 2;
+        // v6.91.2: gated on the LIVE stats. The old keys read 1 at the defense
+        // cap, so park could never engage. Measured live: def 34.992, regen 2.218.
+        const parkDef = liveDefense();
+        const parkArmor = (parkDef != null)
+            ? parkDef >= (DHp.parkDefense != null ? DHp.parkDefense : 30)
+            : (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
+        const parkRegen = regenRate() >= (DHp.parkRegenRate != null ? DHp.parkRegenRate : 1.0);
         // v6.90.1 adds the OFFENSIVE half of the equilibrium. A parked player
         // survives because two things are true at once: armor and regen absorb
         // what arrives, AND the auto-attack plus the SOUTH SIDE burn clear the
@@ -7554,11 +7855,25 @@
         // accumulate and the seat stops being safe — which is the real risk of
         // parking early, when the offensive build is still thin.
         const parkClear = zoner;   // SOUTH SIDE owned, or its super made
+        // v6.91.1: park yields to a FROZEN boss, the same exception the corner
+        // has carried since 6.89.8 — "a free kill is worth leaving the funnel
+        // for at any depth". Park shipped in 6.90.0 without it and has been
+        // zeroing movement over the top of the stacking station ever since.
+        // Releasing park hands the heading back to that station rather than to
+        // a new one, so the tuned two-phase ring keeps doing the work.
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
-            !markHere && !lineOnCorner;
-        let parked = false;
-        if (parkOn) {
+            !markHere && !lineOnCorner && !frozenBossHere;
+        let parked = false, onPost = false;
+        // v6.91.0: the hunt outranks the park. Park is the reason the bot could
+        // not hunt at all — it zeroes movement, so a boss the gather now sees
+        // would still be ignored. Ordering them here keeps both as overrides
+        // and makes the precedence explicit rather than emergent.
+        if (huntOn && huntPost) {
+            const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
+            if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
+            else { vx = (huntPost.x - p.x) / dPost; vy = (huntPost.y - p.y) / dPost; }
+        } else if (parkOn) {
             const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
@@ -7579,6 +7894,15 @@
 
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
+            // v6.91.0 dormant-boss hunt telemetry
+            hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
+            huntFrozen: !!(huntTarget && huntTarget.frozen),
+            huntDmg: (huntMark && typeof huntMark.hp0 === 'number' && typeof huntMark.hp === 'number')
+                ? Math.round(huntMark.hp0 - huntMark.hp) : null,
+            huntGap: huntTarget ? Math.round(huntTarget.gapField) : null,
+            huntLeft: (huntOn && huntStartS != null)
+                ? +Math.max(0, (DHh.dormantHuntS != null ? DHh.dormantHuntS : 20) - (gtHunt - huntStartS)).toFixed(1)
+                : null,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
@@ -7610,7 +7934,7 @@
             // on screen said so — the only way to notice was to read the config.
             // A posture that cannot be observed cannot be tuned, so kite /
             // anchor / corner are reported live alongside the numbers.
-            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${parkOn ? (parked ? 'PARKED' : 'to-corner') : cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${huntOn ? (onPost ? 'ON-POST' : 'HUNT') : parkOn ? (parked ? 'PARKED' : 'to-corner') : cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
         };
     }
 
@@ -8564,6 +8888,30 @@
                     firstNegativeMin: (deep.find(r => r.net != null && r.net < 0) || {}).fromMin ?? null,
                     note: 'net < 0 means the pool is draining at that depth: no posture fixes that, only heal income or time-stop uptime. Ignore rows with dtS under ~60. `spikes` are level-up maxHp raises and revives, excluded from gainPerSec.'
                 };
+            };
+            // v6.91.1: pineBot.huntAudit() — does the dormant/frozen-boss hunt
+            // actually damage anything? The one boss measured live had 6.03e9
+            // hp. If `dmg` stays at 0 across a few dozen attempts the hunt is a
+            // walk to the edge that accomplishes nothing.
+            window.pineBot.huntAudit = () => {
+                const a = huntAudit || {};
+                const n = a.attempts || 0;
+                return {
+                    runs: a.runs || 0, attempts: n, frozenAttempts: a.frozenAttempts || 0,
+                    secsTotal: Math.round(a.secs || 0),
+                    secsPerAttempt: n ? +((a.secs || 0) / n).toFixed(1) : null,
+                    dmgTotal: Math.round(a.dmg || 0),
+                    dmgPerAttempt: n ? Math.round((a.dmg || 0) / n) : null,
+                    best: Math.round(a.best || 0),
+                    vanished: a.vanished || 0,
+                    note: 'dmg is the target boss hp lost while the bot held the post. `vanished` = the id left the enemy list (a kill OR a despawn — indistinguishable here). dmgTotal 0 over 20+ attempts means the hunt should become a warning posture, not a trip.'
+                };
+            };
+            window.pineBot.resetHuntAudit = () => {
+                huntAudit = { attempts: 0, frozenAttempts: 0, dmg: 0, best: 0, vanished: 0, secs: 0, runs: 0 };
+                huntMark = null;
+                try { localStorage.removeItem(HUNT_AUDIT_KEY); } catch (e) { }
+                return 'hunt audit cleared';
             };
             window.pineBot.resetIncomeAudit = () => {
                 incAudit = { buckets: {}, runs: 0 };

@@ -949,6 +949,30 @@
                     note: 'net < 0 means the pool is draining at that depth: no posture fixes that, only heal income or time-stop uptime. Ignore rows with dtS under ~60. `spikes` are level-up maxHp raises and revives, excluded from gainPerSec.'
                 };
             };
+            // v6.91.1: pineBot.huntAudit() — does the dormant/frozen-boss hunt
+            // actually damage anything? The one boss measured live had 6.03e9
+            // hp. If `dmg` stays at 0 across a few dozen attempts the hunt is a
+            // walk to the edge that accomplishes nothing.
+            window.pineBot.huntAudit = () => {
+                const a = huntAudit || {};
+                const n = a.attempts || 0;
+                return {
+                    runs: a.runs || 0, attempts: n, frozenAttempts: a.frozenAttempts || 0,
+                    secsTotal: Math.round(a.secs || 0),
+                    secsPerAttempt: n ? +((a.secs || 0) / n).toFixed(1) : null,
+                    dmgTotal: Math.round(a.dmg || 0),
+                    dmgPerAttempt: n ? Math.round((a.dmg || 0) / n) : null,
+                    best: Math.round(a.best || 0),
+                    vanished: a.vanished || 0,
+                    note: 'dmg is the target boss hp lost while the bot held the post. `vanished` = the id left the enemy list (a kill OR a despawn — indistinguishable here). dmgTotal 0 over 20+ attempts means the hunt should become a warning posture, not a trip.'
+                };
+            };
+            window.pineBot.resetHuntAudit = () => {
+                huntAudit = { attempts: 0, frozenAttempts: 0, dmg: 0, best: 0, vanished: 0, secs: 0, runs: 0 };
+                huntMark = null;
+                try { localStorage.removeItem(HUNT_AUDIT_KEY); } catch (e) { }
+                return 'hunt audit cleared';
+            };
             window.pineBot.resetIncomeAudit = () => {
                 incAudit = { buckets: {}, runs: 0 };
                 incCursor.t = null; incCursor.hp = null;

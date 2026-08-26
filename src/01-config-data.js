@@ -659,8 +659,31 @@
             // at hell entry, because that is where it is running around in the
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
-            parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
+            parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
+            parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
+            parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
+            // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
+            // the damage circle of the boss is also outside of the canvas, the
+            // bot needs to hunt it down somehow before it wakes up and does huge
+            // one hit damages").
+            dormantHunt: true,
+            // v6.91.1: measured, not guessed. Live tier-3 bosses sit 1285-1641px
+            // from the player with radii 613-858; the old 900px CENTRE-distance
+            // cap gathered none of them. This is how far the BODY may sit from
+            // the play rectangle and still be worth tracking — player-position
+            // independent, which centre distance was not.
+            dormantBodyReach: 1200,
+            dormantHuntS: 20,        // seconds committed to one hunt before giving up
+            dormantHuntRestS: 45,    // and how long before another is allowed
+            dormantHuntRadius: 20,   // "on post": stop moving inside this radius
+            dormantHuntMargin: 8,    // how close to the field edge the post may sit
+            dormantHuntHp: 0.6,      // never leave the seat below this HP ratio
+            // v6.91.1: "wakes up" = a TIME STOP ending (user). The freeze is the
+            // real deadline, so the walk home is subtracted from it rather than
+            // guessed at.
+            huntFrozenMinFrames: 45,  // same threshold stopBoss and frozenBossHere use
+            huntVacateS: 0.75,       // slack on top of (distance home / speed)
             deepCornerFromS: 2400,
             // v6.89.8 (user): "ultimate every time it's available, for that
             // invincibility and chance to kill a potential mob — for the item
@@ -1449,6 +1472,40 @@
     // the classifier blames contact by default. See the audit block in
     // 05-movement.js.
     let lastMarkSnap = [];
+    // v6.91.0 dormant-boss hunt budget (gameTime seconds; reset per run)
+    let huntStartS = null;
+    let huntRestUntilS = 0;
+    // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
+    // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
+    // all is unknown, and this project's recurring cost is acting on models that
+    // were never checked. Every attempt books the target's hp on arrival and on
+    // departure; `pineBot.huntAudit()` reads it back. If `dmg` stays at zero,
+    // the hunt is a walk to the edge that accomplishes nothing and should be
+    // replaced by a warning posture rather than tuned.
+    const HUNT_AUDIT_KEY = 'pineBotHuntAudit';
+    let huntMark = null;   // live, per-attempt; never persisted
+    let huntAudit = (() => {
+        const blank = { attempts: 0, frozenAttempts: 0, dmg: 0, best: 0, vanished: 0, secs: 0, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(HUNT_AUDIT_KEY) || 'null');
+            if (raw && typeof raw.attempts === 'number') return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    function bookHunt(mk, gtNow) {
+        if (!mk) return;
+        huntAudit.attempts++;
+        if (mk.froz) huntAudit.frozenAttempts++;
+        huntAudit.secs += Math.max(0, (gtNow || 0) - (mk.t0 || 0));
+        // hp0 and hp are both null for a boss the game gave us no hp for — book
+        // the attempt, book no damage, and do not invent a number.
+        if (typeof mk.hp0 === 'number' && typeof mk.hp === 'number') {
+            const d = mk.hp0 - mk.hp;
+            if (d > 0) { huntAudit.dmg += d; if (d > huntAudit.best) huntAudit.best = d; }
+        }
+        if (mk.gone) huntAudit.vanished++;
+        try { localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit)); } catch (e) { }
+    }
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
@@ -1564,6 +1621,44 @@
     // script, so they are NOT on window. Bare references resolve via the
     // scope chain; try/catch turns a missing binding into undefined.
     // =================================================================
+    // v6.91.2 READ THE STAT, NOT THE INGREDIENT NAME.
+    //
+    // Live probe, gt 2218, lv 58: `player.defense` = 34.992 — the CAP — while
+    // `ownedLevels['OLIVE']` read 1. In-run upgrade levels are stored under
+    // "OLIVE UP"; the bare "OLIVE" key goes to 1 when the ingredient is first
+    // acquired and never moves again. (Same dump: "OLIVE UP" 4, "WATER UP" 3,
+    // "OLIVE" 1, "WATER" 1.)
+    //
+    // Every armour-permission gate in the planner has therefore been comparing
+    // 1 against thresholds of 2, 4 and 6 — including 6.90.0's `parkArmor`,
+    // which needs 6. DEEP PARK HAS NEVER ENGAGED IN A REAL RUN. Neither has the
+    // armour half of the anchor, and `armorEase`/`armorConf` have been telling
+    // the planner it is unarmoured while it stood at the defense cap.
+    //
+    // The fix is not to chase the right key name. `player.defense` and
+    // `player.regenBonus` are what `recalcStats` produces and what `hurtPlayer`
+    // actually subtracts. They cannot drift out of sync with the pool, the
+    // naming, or the ingredient stack. The ownedLevels path stays only as a
+    // fallback for reads before the game object exists.
+    // SCOPE, deliberately narrow: only the PARK gates are migrated in 6.91.2.
+    // Four other call sites read the same broken key and are also wrong —
+    //   05-movement `armorEase` (fear scaling), `armorLv`/`armorConf` (caution),
+    //   `crowdTol`, the anchor's `OLIVE >= 2` permission — plus 03-scoring's
+    //   `defLv`. Migrating all of them at once means shipping five untested
+    //   behaviour changes in one commit, and one of them (`tank-holdout`:
+    //   "armour is measured off the OLIVE + NEGRONI levels") asserts the old
+    //   reading directly, so it has to be revised on purpose rather than made
+    //   to pass. They stay as they are until each has its own evidence.
+    function liveDefense() {
+        const d = safe(() => player.defense, null);
+        return (typeof d === 'number' && d > 0) ? d : null;
+    }
+    function regenRate() {
+        const r = safe(() => player.regenBonus, null);
+        if (typeof r === 'number' && r > 0) return r;
+        return 0.284 * (ownedLevels['WATER'] || 0) + 0.512 * (ownedLevels['SIMPLE SYRUP'] || 0);
+    }
+
     function safe(fn, fallback) {
         try { const v = fn(); return v === undefined ? fallback : v; } catch (e) { return fallback; }
     }

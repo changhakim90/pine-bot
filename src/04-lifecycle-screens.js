@@ -85,6 +85,8 @@
         deathSnapshot = null;
         dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };
         lastHpSample = null;
+        lastMarkSnap = [];
+        huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
         AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);   // day rules until hell is latched
@@ -204,6 +206,14 @@
             localStorage.setItem(INC_AUDIT_KEY, JSON.stringify(incAudit));
         } catch (e) { }
         incCursor.t = null; incCursor.hp = null;   // next run starts a fresh integration
+        // v6.91.1: close out any hunt still in flight when the run ended, then
+        // count the run. Same cross-run accumulation as the income audit — a
+        // single run rarely gets more than a couple of attempts.
+        try {
+            if (huntMark) { bookHunt(huntMark, 0); huntMark = null; }
+            huntAudit.runs = (huntAudit.runs || 0) + 1;
+            localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {

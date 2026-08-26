@@ -3183,8 +3183,243 @@ if (which === 'deep-park') {
         test('a thrower windup does NOT veto the corner', () =>
             assert.ok(thrower.lineOnCorner === false && thrower.parkOn === true,
                 JSON.stringify({ lineOnCorner: thrower.lineOnCorner, park: thrower.parkOn })));
+
+        // v6.91.2 PARK WAS GATED ON A KEY THAT NEVER MOVES.
+        // Live probe, gt 2218, lv 58: player.defense 34.992 — THE CAP — with
+        // ownedLevels['OLIVE'] reading 1 and WATER 1. In-run upgrade levels are
+        // stored under "OLIVE UP" (4) and "WATER UP" (3); the bare key goes to 1
+        // when the ingredient is acquired and never moves again. parkArmor needs
+        // OLIVE >= 6, so DEEP PARK HAS NEVER ENGAGED IN A REAL RUN — not once
+        // since 6.90.0, which is why every park row is untestable noise.
+        //
+        // Chasing the right key name is the wrong fix. player.defense and
+        // player.regenBonus are what recalcStats produces and what hurtPlayer
+        // subtracts; they cannot drift out of sync with pool or naming.
+        const live = (def, regen) => {
+            global.gameTime = 6000;
+            global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375,
+                defense: def, regenBonus: regen };
+            global.dropMarks = []; global.roadLines = []; global.enemies = [];
+            return T.planMove();
+        };
+        build({ 'OLIVE': 1, 'WATER': 1, 'SOUTH SIDE': 1 });   // the LIVE reading, verbatim
+        const capped = live(34.992, 2.218);
+        test('armour at the cap parks, even though OLIVE reads 1', () =>
+            assert.ok(capped.parkOn === true && capped.parked === true,
+                JSON.stringify({ park: capped.parkOn, parked: capped.parked, olive: 1 })));
+        const thinDef = live(10, 2.218);
+        test('...and a genuinely thin defense still does not', () =>
+            assert.strictEqual(thinDef.parkOn, false, String(thinDef.parkOn)));
+        const noRegen = live(34.992, 0.2);
+        test('...nor does the cap without a heal income', () =>
+            assert.strictEqual(noRegen.parkOn, false, String(noRegen.parkOn)));
     }, 0);
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// 60. v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and the
+// damage circle of the boss is also outside of the canvas, the bot needs to
+// hunt it down somehow before it wakes up and does huge one hit damages").
+if (which === 'dormant-hunt') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 6000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();
+        pineBot.test.applyDefaults();   // params are CEM-sampled per run; pin for determinism
+        const T = pineBot.test;
+        const owned = {};
+        const build = (o) => { for (const k in owned) delete owned[k]; Object.assign(owned, o); T.setOwned(owned); };
+        build({ 'OLIVE': 6, 'WATER': 6, 'SOUTH SIDE': 3 });
+        // The bot is SEATED in the bottom-right corner — park is engaged and,
+        // before this version, nothing could get it out of that chair.
+        // The boss is a GIANT 400px beyond the right edge: r 150, so its whole
+        // body (and therefore its damage circle) is off the play rectangle.
+        // Centre distance from the seat is 484 — past the old 480 cap AND past
+        // the `r <= 90` hell rule, so the old gather dropped it entirely.
+        const scene = (gt, hp) => {
+            global.gameTime = gt;
+            global.player = { x: 533, y: 533, r: 7.2, hp: hp == null ? 300 : hp, maxHp: 309, speed: 2.375 };
+            global.dropMarks = []; global.roadLines = [];
+            global.enemies = [
+                { type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true, x: 470, y: 470 },
+                { type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true, x: 490, y: 520 },
+                { type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true, x: 520, y: 490 },
+                { type: 'boss', hp: 1e7, maxHp: 1e7, r: 150, reach: 200, speed: 0.4, moving: true, x: 940, y: 270 }
+            ];
+            return T.planMove();
+        };
+        const hunt = scene(6000);
+        test('a giant boss 400px off-canvas is SEEN at all', () =>
+            assert.strictEqual(hunt.dormantBoss, true,
+                JSON.stringify({ dormantBoss: hunt.dormantBoss, huntGap: hunt.huntGap })));
+        test('...and its gap to the play rectangle is measured, not guessed', () =>
+            assert.strictEqual(hunt.huntGap, 400, String(hunt.huntGap)));
+        // THE POINT OF THE VERSION: park zeroes movement, so seeing the boss is
+        // worth nothing unless the hunt OUTRANKS the seat.
+        test('the hunt overrides DEEP PARK', () =>
+            assert.ok(hunt.hunting === true && hunt.parked === false,
+                JSON.stringify({ hunting: hunt.hunting, parked: hunt.parked, parkOn: hunt.parkOn })));
+        test('...and it walks to the field point nearest the boss', () => {
+            // post is (532, 270) from a seat at (533, 533): almost pure north
+            assert.ok(hunt.dy < -0.9 && Math.abs(hunt.dx) < 0.2,
+                JSON.stringify({ dx: +hunt.dx.toFixed(2), dy: +hunt.dy.toFixed(2) }));
+        });
+        // ...and a mark underfoot outranks it. Asserted as an A/B ONE SECOND
+        // APART, because the first draft of this check ran 260s later and
+        // passed with the seat check reverted — the budget clock had expired by
+        // then and was doing the work the assertion claimed credit for.
+        scene(6002);
+        global.dropMarks = [{ x: 533, y: 533, r: 58, dmg: 72, tele: 0.6, at: 6002.3 }];
+        const marked = T.planMove();
+        test('a mark on the seat cancels the hunt', () =>
+            assert.ok(marked.hunting === false && marked.dormantBoss === true,
+                JSON.stringify({ hunting: marked.hunting, markHere: marked.markHere })));
+        const unmarked = scene(6003);
+        test('...and clearing the mark resumes it, same tick, same board', () =>
+            assert.strictEqual(unmarked.hunting, true, String(unmarked.hunting)));
+        const mid = scene(6013);
+        test('the hunt is still on inside the budget', () =>
+            assert.strictEqual(mid.hunting, true, String(mid.hunting)));
+        // THE CLOCK. If the weapons cannot reach the sliver from the post, the
+        // bot finds that out once and goes back to the only stable seat — it
+        // does not stand at the edge for the rest of the run.
+        const spent = scene(6028);
+        test('the hunt budget expires and the bot goes home', () =>
+            assert.ok(spent.hunting === false && spent.parked === true,
+                JSON.stringify({ hunting: spent.hunting, parked: spent.parked })));
+        const resting = scene(6060);
+        test('...and it rests before trying again', () =>
+            assert.strictEqual(resting.hunting, false, String(resting.hunting)));
+        const again = scene(6080);
+        test('...then the rest expires and the hunt is allowed once more', () =>
+            assert.strictEqual(again.hunting, true, String(again.hunting)));
+        // WAKE-UP. The moment any part of the body reaches the play rectangle
+        // the boss can hit us, and normal doctrine takes the fight back.
+        global.gameTime = 6090;
+        global.enemies[3].x = 600;   // gap 60 against r 150 — the body pokes on-canvas
+        const awake = T.planMove();
+        test('a boss whose body reaches the canvas is NOT hunted', () =>
+            assert.ok(awake.hunting === false && awake.dormantBoss === false,
+                JSON.stringify({ hunting: awake.hunting, dormantBoss: awake.dormantBoss })));
+        // THE SEAT CHECK. The hunt is an opportunity, never an emergency: a hurt
+        // bot stays in the chair even with a free target on the board.
+        const hurt = scene(6200, 90);
+        test('a hurt bot does not leave the seat to hunt', () =>
+            assert.ok(hurt.dormantBoss === true && hurt.hunting === false,
+                JSON.stringify({ dormantBoss: hurt.dormantBoss, hunting: hurt.hunting, hp: 90 })));
+
+        // v6.91.1 — "WAKES UP" MEANS A TIME STOP ENDING (user). The live probe
+        // returned one off-canvas boss and it was frozen (boss_glass, r 131,
+        // hp 6.03e9). The dangerous object is a boss the player FROZE, parked
+        // where nothing can reach it, whose thaw lands a huge contact hit.
+        global.frame = 1000;
+        const frozen = (gt, freezeFrames, opts) => {
+            const o = opts || {};
+            global.gameTime = gt;
+            global.player = { x: o.px == null ? 533 : o.px, y: o.py == null ? 533 : o.py,
+                r: 7.2, hp: 300, maxHp: 309, speed: 2.375 };
+            global.dropMarks = []; global.roadLines = [];
+            global.enemies = [
+                { type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true, x: 470, y: 470 },
+                { id: 'b1', type: 'boss', hp: o.hp == null ? 1e7 : o.hp, maxHp: 1e7,
+                  r: o.r == null ? 150 : o.r, reach: 200, speed: 0.4, moving: true,
+                  x: o.bx == null ? 940 : o.bx, y: o.by == null ? 270 : o.by,
+                  frozenUntil: 1000 + freezeFrames }
+            ];
+            return T.planMove();
+        };
+        // PARK HAD NO FROZEN-BOSS EXCEPTION. `frozenBossHere` has released the
+        // CORNER since 6.89.8 — "a free kill is worth leaving the funnel for at
+        // any depth" — but 6.90.0's park just zeroes movement, so every frozen
+        // boss has been ignored at depth since it shipped. Asserted on an
+        // ON-CANVAS frozen boss, where the demo-tuned stacking station (not this
+        // version's post) is the thing park was suppressing.
+        const near = frozen(6300, 600, { bx: 270, by: 270, r: 60 });
+        test('a FROZEN boss on the field releases DEEP PARK', () =>
+            assert.ok(near.parkOn === false && near.parked === false,
+                JSON.stringify({ parkOn: near.parkOn, parked: near.parked })));
+        test('...and the override does NOT fire for it — the tuned station owns that case', () =>
+            assert.strictEqual(near.hunting, false,
+                JSON.stringify({ hunting: near.hunting })));
+        // OFF-CANVAS AND FROZEN: nothing on the field can reach it, and the
+        // freeze is a closing window. This is the case the user described.
+        const froz = frozen(6310, 600);
+        test('an OFF-CANVAS frozen boss is hunted', () =>
+            assert.ok(froz.hunting === true && froz.huntFrozen === true && froz.parked === false,
+                JSON.stringify({ hunting: froz.hunting, huntFrozen: froz.huntFrozen, parked: froz.parked })));
+        test('...and it heads for the edge nearest the boss', () =>
+            assert.ok(froz.dy < -0.9 && Math.abs(froz.dx) < 0.2,
+                JSON.stringify({ dx: +froz.dx.toFixed(2), dy: +froz.dy.toFixed(2) })));
+        // THE STACKING STATION, asserted as a SIGN FLIP. The first draft checked
+        // the heading from the corner seat, where "walk to the station" and
+        // "walk onto the body" point the same way — it passed with the station
+        // reverted to zero and proved nothing. Here the boss POKES onto the
+        // field (x 560, r 60: gap 20 against r 60, so not dormant) and the bot
+        // stands at (500,270), INSIDE its 166px station. Holding the station
+        // means backing AWAY. The karaoke lesson: never hug a paused body.
+        const inside = frozen(6312, 600, { bx: 560, by: 270, r: 60, px: 500, py: 270 });
+        test('...and standing too close to a poking body it BACKS OFF to the station', () =>
+            assert.ok(inside.hunting === true && inside.dx < -0.3,
+                JSON.stringify({ hunting: inside.hunting, dx: +inside.dx.toFixed(2) })));
+        // THE HUNT MEASURES ITSELF: that live boss had 6.03e9 hp and nothing
+        // here knows whether our weapons move that number.
+        const bit = frozen(6313, 600, { hp: 1e7 - 50000 });
+        test('the hunt books the damage it actually does to the target', () =>
+            assert.strictEqual(bit.huntDmg, 50000, String(bit.huntDmg)));
+        // LEAVE BEFORE IT WAKES. 60 frames = 1s of freeze against the walk home
+        // from the far edge: the thaw arrives before we are back in the chair.
+        const brief = frozen(6320, 60);
+        test('a freeze too short to get home again is NOT hunted', () =>
+            assert.ok(brief.hunting === false && brief.huntVacate === true,
+                JSON.stringify({ hunting: brief.hunting, vacate: brief.huntVacate })));
+        test('...and the finished attempt is booked to the audit', () => {
+            const a = pineBot.huntAudit();
+            assert.ok(a.attempts >= 1 && a.frozenAttempts >= 1,
+                JSON.stringify({ attempts: a.attempts, frozen: a.frozenAttempts, dmg: a.dmgTotal }));
+        });
+
+        // v6.91.1 THE REAL BOARD, verbatim from a live dump at gt 5024 (84 min),
+        // player at (7,533), W=H=540, frame 345250, all four frozenUntil 350495.
+        // 6.91.0 shipped with a 900px CENTRE-distance cap and gathered NONE of
+        // these; the live telemetry read `dormantBoss: false` with four tier-3
+        // giants on the board. Radii of 613-858 against a 540px field are why
+        // centre distance was the wrong axis.
+        global.gameTime = 5024;
+        global.frame = 345250;
+        global.player = { x: 7, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375 };
+        global.dropMarks = []; global.roadLines = [];
+        global.enemies = [
+            { id: 164, type: 'boss', bossChar: 'boss_amaro', tier: 3, x: -1610, y: 253, r: 613,
+              hp: 2046701140216, maxHp: 3256478322334, speed: 25.2, moving: false, frozenUntil: 350495 },
+            { id: 166, type: 'boss', bossChar: 'boss_sprinter', tier: 3, x: 100, y: -1100, r: 638,
+              hp: 393176729664, maxHp: 3389948068653, speed: 25.6, moving: false, frozenUntil: 350495 },
+            { id: 176, type: 'boss', bossChar: 'boss_photo', tier: 3, x: 1033, y: 1307, r: 777,
+              hp: 836338578881, maxHp: 8074318895470, speed: 28, moving: false, frozenUntil: 350495 },
+            { id: 181, type: 'boss', bossChar: 'boss_amaro', tier: 3, x: 1299, y: 26, r: 858,
+              hp: 2175590499658, maxHp: 2176569432370, speed: 29.1, moving: false, frozenUntil: 350495 }
+        ];
+        const real = T.gatherThreats(global.player);
+        test('all four measured tier-3 giants are gathered (900px cap saw none)', () => {
+            const ids = real.enemies.filter(e => e.boss).map(e => e.id).sort((x, y) => x - y);
+            assert.deepStrictEqual(ids, [164, 166, 176, 181], JSON.stringify(ids));
+        });
+        test('...and dormancy is per-body, not per-distance', () => {
+            const by = {}; for (const e of real.enemies) if (e.boss) by[e.id] = e;
+            // 164: gap 1610 vs r 613 -> dormant.   166: gap 1100 vs 638 -> dormant.
+            // 176: gap 912 vs 777 -> dormant.      181: gap 759 vs 858 -> body ON the field.
+            assert.deepStrictEqual(
+                { a: by[164].dormant, b: by[166].dormant, c: by[176].dormant, d: by[181].dormant },
+                { a: true, b: true, c: true, d: false });
+        });
+        // The nearest-body giant (181) is 1388px from the player and its body
+        // DOES reach the field — the case that most needs to be visible.
+        const realPlan = T.planMove();
+        test('the board is no longer invisible to the planner', () =>
+            assert.strictEqual(realPlan.dormantBoss, true,
+                JSON.stringify({ dormantBoss: realPlan.dormantBoss, huntGap: realPlan.huntGap })));
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
