@@ -347,8 +347,23 @@
         const rows = versionRows();
         const withData = rows.filter(r => isFinite(r.bestTimeS));
         const bestByTime = withData.slice().sort((a, b) => b.bestTimeS - a.bestTimeS)[0] || null;
-        const bestByMean = withData.filter(r => isFinite(r.meanTimeS)).sort((a, b) => b.meanTimeS - a.meanTimeS)[0] || null;
-        const bestByP60 = withData.filter(r => isFinite(r.p60) && r.runs >= 20).sort((a, b) => b.p60 - a.p60)[0] || null;
+        // v6.91.7 `bestAverage` HAD NO SAMPLE FLOOR, and the mean is the noisiest
+        // of the three headline fields. Live case: 6.91.2 at n=4 was promoted as
+        // best-average on meanTimeS 4236 — one 14805s run against 1282 / 592 /
+        // 264, sd 7059. Its own medianTimeS in the same block reads 937, the
+        // WORST of any recent row. `bestDeepRunRate` already floored at 20 and
+        // correctly kept pointing at 6.89.10 (n=133).
+        //
+        // A headline that a single lucky run can capture is a lottery, which is
+        // exactly what `howToRead` warns about for bestPeak — and the warning did
+        // not cover the field that needed it most. Both floored on the same
+        // constant now, so there is one threshold rather than a hardcoded 20
+        // beside an unguarded sort.
+        const floorN = CONFIG.learning.minMeaningfulRuns;
+        const bestByMean = withData.filter(r => isFinite(r.meanTimeS) && r.runs >= floorN)
+            .sort((a, b) => b.meanTimeS - a.meanTimeS)[0] || null;
+        const bestByP60 = withData.filter(r => isFinite(r.p60) && r.runs >= floorN)
+            .sort((a, b) => b.p60 - a.p60)[0] || null;
         const epochs = new Set(rows.map(r => r.rewardEpoch).filter(e => e != null));
         return {
             note: epochs.size > 1
@@ -358,7 +373,7 @@
             bestPeak: bestByTime ? { version: bestByTime.version, bestTimeS: bestByTime.bestTimeS } : null,
             bestAverage: bestByMean ? { version: bestByMean.version, meanTimeS: bestByMean.meanTimeS, medianTimeS: bestByMean.medianTimeS, runs: bestByMean.runs } : null,
             bestDeepRunRate: bestByP60 ? { version: bestByP60.version, p60: bestByP60.p60, p120: bestByP60.p120, runs: bestByP60.runs } : null,
-            howToRead: 'bestPeak is a lottery that grows with run count. Judge versions on medianTimeS / p60 / p120 and the vsPrev z-score.',
+            howToRead: 'bestPeak is a lottery that grows with run count and has NO sample floor — one lucky run owns it. bestAverage and bestDeepRunRate are floored at ' + floorN + ' runs. Judge versions on medianTimeS / p60 / p120 and the vsPrev z-score.',
             versions: rows
         };
     }

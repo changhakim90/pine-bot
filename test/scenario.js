@@ -28,8 +28,17 @@ const which = process.argv[2];
 if (which === 'snapshots') {
     const prev = {
         runs: 3737, rewardEpoch: 2, lastVersion: '6.80.0+crown',
-        versions: { '6.79.0': { n: 93, sumT: 150102, bestT: 9845, sumR: 195, hell: 59, day: 59, sumSupers: 288, deaths: {}, epoch: 2, firstRun: 3612, lastRun: 3704 } },
-        runLog: [{ v: '6.79.0', t: 9845 }, { v: '6.79.0', t: 257 }]
+        versions: {
+            '6.79.0': { n: 93, sumT: 150102, bestT: 9845, sumR: 195, hell: 59, day: 59, sumSupers: 288, deaths: {}, epoch: 2, firstRun: 3612, lastRun: 3704 },
+            // v6.91.7 fixture, modelled on the LIVE 6.91.2 row: four runs, one
+            // 14805s outlier against 1282 / 592 / 264. meanTimeS 4236 beats
+            // every well-powered row in the table; medianTimeS is 937, the
+            // worst of them. `bestAverage` had no sample floor and promoted it.
+            '9.99.9+lottery': { n: 4, sumT: 16943, bestT: 14805, sumR: 7.4, hell: 2, day: 2, sumSupers: 4, deaths: {}, epoch: 2, firstRun: 272, lastRun: 275 }
+        },
+        runLog: [{ v: '6.79.0', t: 9845 }, { v: '6.79.0', t: 257 },
+                 { v: '9.99.9+lottery', t: 14805 }, { v: '9.99.9+lottery', t: 1282 },
+                 { v: '9.99.9+lottery', t: 592 }, { v: '9.99.9+lottery', t: 264 }]
     };
     const { pineBot, store } = makeEnv({ script: SCRIPT, storage: { pineBotUCB_v5: JSON.stringify(prev), paco_bdh_time: JSON.stringify([{ time: 15150 }]) } });
     pineBot.stop();
@@ -41,6 +50,25 @@ if (which === 'snapshots') {
     const c = pineBot.compare();
     test('6.74.0 seeded from hell board', () => assert.strictEqual(c.versions.find(v => v.version === '6.74.0').bestTimeS, 15150));
     test('6.79.0 row present in comparison', () => assert.ok(c.versions.find(v => v.version === '6.79.0')));
+    // v6.91.7 THE HEADLINE FIELDS NEED SAMPLE FLOORS.
+    const lottery = c.versions.find(v => v.version === '9.99.9+lottery');
+    test('the 4-run row really does have the highest mean in the table', () => {
+        const best = c.versions.filter(v => isFinite(v.meanTimeS))
+            .sort((x, y) => y.meanTimeS - x.meanTimeS)[0];
+        assert.strictEqual(best.version, '9.99.9+lottery',
+            JSON.stringify({ top: best.version, mean: Math.round(best.meanTimeS) }));
+    });
+    test('...and its MEDIAN is worse than the row it outranks on mean', () =>
+        assert.ok(lottery.medianTimeS < c.versions.find(v => v.version === '6.79.0').meanTimeS,
+            JSON.stringify({ median: lottery.medianTimeS })));
+    test('bestAverage refuses it — one lucky run is not an average', () =>
+        assert.notStrictEqual(c.bestAverage && c.bestAverage.version, '9.99.9+lottery',
+            JSON.stringify(c.bestAverage)));
+    test('...and whatever it picks clears the significance floor', () =>
+        assert.ok(!c.bestAverage || c.bestAverage.runs >= 20,
+            JSON.stringify(c.bestAverage)));
+    test('bestPeak still reports it, because peak IS the lottery field', () =>
+        assert.ok(c.howToRead.indexOf('NO sample floor') > 0, c.howToRead));
     test('lastVersion persisted in the shared store', () => assert.strictEqual(sharedBlob().lastVersion, pineBot.tag));
     test('rollupStats median/sd/p60', () => {
         const ts = [257, 488, 1241, 3528, 6122, 9845];
