@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.92.2
+// @version      6.92.3
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.92.2';
+    const SCRIPT_VERSION = '6.92.3';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -4083,6 +4083,26 @@
         // would have delayed the pick past the phase it exists for.
         if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
             add(46 + (hellDetected ? 20 : 0), 'keyless-core');
+        }
+        // v6.92.3 — THE MULE LOCKOUT (user, stating a game-design rule):
+        // "a character cannot get moscow mule if the character has vodka cherry
+        // and vice versa". The two are MUTUALLY EXCLUSIVE.
+        //
+        // That turns MOSCOW MULE from a neutral occupant into an active
+        // DEFENCE. VODKA CRANBERRY is the most dangerous latent line on the
+        // board — its super key CRANBERRY is a PLAN_INGREDIENT the build MUST
+        // max for pickup radius, so unlike GIMLET or MANHATTAN its key is
+        // armed by the plan's own success and the arming cap cannot touch it.
+        // Taking the mule closes that line PERMANENTLY, by the game's own rule
+        // rather than by our scoring winning a bidding war in a narrow pool.
+        //
+        // This is the rainbow-lockout doctrine exactly: occupancy beats
+        // vetoing, and it only works while the pool is still wide. So the
+        // bonus is DAY-weighted and switches off the moment either card is
+        // owned — once the exclusion has resolved there is nothing left to buy.
+        if (!atCap && type === 'weapon' && name === 'MOSCOW MULE' &&
+            !(ownedLevels['MOSCOW MULE'] || 0) && !(ownedLevels['VODKA CRANBERRY'] || 0)) {
+            add(hellDetected ? 18 : 45, 'mule-lockout');
         }
         // the four keyed lines sit ABOVE the keyless three by construction
         if (!atCap && type === 'weapon' && SUPER_LINE_COCKTAILS.includes(name)) {

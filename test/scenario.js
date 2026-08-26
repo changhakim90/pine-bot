@@ -3799,6 +3799,34 @@ if (which === 'arming-cap') {
                 c + ' key ' + k + ' @lv5 ' + Math.round(sc(k, 'passive', 5)));
         }
     });
+    // v6.92.3 — THE MULE LOCKOUT. User, stating a game-design rule: "a
+    // character cannot get moscow mule if the character has vodka cherry and
+    // vice versa." VODKA CRANBERRY is the one latent line the arming cap
+    // CANNOT close, because its key CRANBERRY is a PLAN_INGREDIENT the build
+    // must max for pickup radius. The mule closes it by the game's own
+    // exclusion rule instead.
+    test('CRANBERRY is the latent key the arming cap deliberately does NOT close', () => {
+        assert.ok(pineBot.test.scoreCard({ n: 'CRANBERRY', type: 'passive', lv: 5, maxlv: 6 }, 0, []).score > -400,
+            'CRANBERRY is capped — pickup radius has been sacrificed');
+        assert.strictEqual(pineBot.test.superKey('VODKA CRANBERRY'), 'CRANBERRY');
+    });
+    test('...so MOSCOW MULE is boosted while the exclusion is still open', () => {
+        pineBot.test.setOwned({ 'MOSCOW MULE': 0, 'VODKA CRANBERRY': 0 });
+        assert.ok(/mule-lockout/.test(pineBot.test.scoreCard({ n: 'MOSCOW MULE', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || ''),
+            pineBot.test.scoreCard({ n: 'MOSCOW MULE', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why);
+    });
+    test('...and the boost switches OFF once the exclusion has resolved', () => {
+        pineBot.test.setOwned({ 'MOSCOW MULE': 1 });
+        assert.ok(!/mule-lockout/.test(pineBot.test.scoreCard({ n: 'MOSCOW MULE', type: 'weapon', lv: 1, maxlv: 6 }, 0, []).why || ''),
+            'still bidding for a card it already owns');
+        pineBot.test.setOwned({ 'MOSCOW MULE': 0 });
+    });
+    // AND THE OTHER HALF OF THE EXCLUSION: VODKA CRANBERRY must stay refused,
+    // or the bot can spend the exclusive slot on the line it must never open.
+    test('VODKA CRANBERRY is refused outright — it would spend the exclusion badly', () => {
+        const v = pineBot.test.scoreCard({ n: 'VODKA CRANBERRY', type: 'weapon', lv: 0, maxlv: 6 }, 0, []);
+        assert.ok(v.score < -400, 'VODKA CRANBERRY ' + Math.round(v.score) + ' ' + v.why);
+    });
     // GIMLET's key is shut the same way, which is what keeps an off-roster
     // cocktail from becoming the sixth line even when the pool forces it in.
     test('GIMLET cannot be armed even if the pool forces the cocktail', () =>
