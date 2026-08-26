@@ -2512,6 +2512,22 @@
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
         }
+        // v6.91.8: record the entrance build and the first park engagement. Both
+        // are per-run and cost nothing; see PARK_AUDIT_KEY.
+        if (hellDetected) {
+            if (entrySample == null && gtCorner >= (DHp.parkFromS != null ? DHp.parkFromS : 1200)) {
+                const dEnt = liveDefense();
+                entrySample = {
+                    gt: Math.round(gtCorner),
+                    def: dEnt == null ? 0 : +dEnt.toFixed(1),
+                    regen: +regenRate().toFixed(2),
+                    supers: (typeof supersThisRun === 'number' ? supersThisRun : 0),
+                    zoner: !!zoner
+                };
+            }
+            if (parkOn) { parkOnTicks++; if (parkFirstS == null) parkFirstS = Math.round(gtCorner); }
+            if (parked) parkedTicks++;
+        }
         lastDir = { x: vx, y: vy };
 
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
@@ -2532,7 +2548,7 @@
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
             seat: { x: +cnrX.toFixed(1), y: +cnrY.toFixed(1) },
-            parkYieldFrozen, pauseShare: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
+            parkYieldFrozen, parkFirst: parkFirstS, pauseShare: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
             armorLv: +armorLv.toFixed(2),
             hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
             huntFrozen: !!(huntTarget && huntTarget.frozen),

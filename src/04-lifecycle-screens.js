@@ -89,6 +89,7 @@
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
+        parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -220,6 +221,22 @@
         try {
             markAudit.runs = (markAudit.runs || 0) + 1;
             localStorage.setItem(MARK_AUDIT_KEY, JSON.stringify(markAudit));
+        } catch (e) { }
+        // v6.91.8: one record per HELL run — the build at the entrance, whether
+        // the seat was ever reached, and how long the run lasted. Rolling window;
+        // the question it answers is a comparison between two groups, not a total.
+        try {
+            if (hellRunEnded) {
+                parkAudit.runs.push({
+                    t: Math.round(stats.time || 0),
+                    first: parkFirstS,
+                    onShare: runHellTicks ? +(parkOnTicks / runHellTicks).toFixed(3) : null,
+                    seatShare: runHellTicks ? +(parkedTicks / runHellTicks).toFixed(3) : null,
+                    entry: entrySample
+                });
+                while (parkAudit.runs.length > 80) parkAudit.runs.shift();
+                localStorage.setItem(PARK_AUDIT_KEY, JSON.stringify(parkAudit));
+            }
         } catch (e) { }
         try {
             if (runHellTicks > 0) {

@@ -230,7 +230,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -337,15 +337,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -1035,7 +1035,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -1089,14 +1089,29 @@
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
     // v6.89.3 (user, from watching the runs): "these are the only essential
-    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC is out.
-    // Note the SELF-ENFORCING consequence: TONIC and SUGAR and MINT stay in the
-    // ingredient plan, so under the 6.89.1 latent-line rule every off-plan
-    // cocktail keyed to them — GIN TONIC, VODKA CRANBERRY, ESPRESSO MARTINI —
-    // is now hard-refused at level zero. The roster shrink enforces itself.
-    // Three super lines against a six-super gate is the widest safety margin
-    // this build has ever had.
-    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO'];
+    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC was out,
+    // and the shrink was self-enforcing: TONIC stays in the ingredient plan, so
+    // the 6.89.1 latent-line rule hard-refused GIN TONIC at level zero.
+    //
+    // v6.91.9 — THE CROWN RUN SAYS OTHERWISE, and it is the strongest build
+    // evidence this project has. The user's 62686s (17.4 h) manual run — FOUR
+    // TIMES the bot's best ever — was built on:
+    //
+    //     supers      GIN TONIC, VODKA TONIC, MOJITO, SOUTH SIDE
+    //     non-supers  NEGRONI, WHISKY SOUR
+    //
+    // The bot was carrying five of those six and missing a SUPER LINE.
+    //
+    // AND IT IS THE CHEAPEST LINE ON THE BOARD. GIN TONIC and VODKA TONIC share
+    // one key — both are TONIC — and TONIC is already in PLAN_INGREDIENTS for
+    // VODKA TONIC. So the fourth super costs ONE COCKTAIL SLOT AND ZERO
+    // INGREDIENT SLOTS. Nothing else on the roster is that cheap, and 6.89.3
+    // gave it away for nothing.
+    //
+    // Completable lines go 3 -> 4 (MINT, TONIC x2, SUGAR). NEGRONI's CAMPARI is
+    // off-plan and WHISKY SOUR's LEMON is permanently banned, so neither can
+    // ever complete. Four against the six-super Rainbow Gun gate.
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
 
     // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
     // VODKA TONIC / MOJITO / NEGRONI / GIN TONIC and the black vermouth and
@@ -1135,7 +1150,7 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI', 'WHISKY SOUR'
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR'
     ];   // v6.91.5 (user): "whisky sour should be in the planned cocktails".
          // LAST among the cocktails on purpose — the three super lines and the
          // keyless NEGRONI keep their order, and WHISKY SOUR is the fifth slot
@@ -1590,6 +1605,38 @@
     function pauseShareRun() {
         return runHellTicks >= 300 ? runPauseTicks / runHellTicks : null;
     }
+
+    // v6.91.8 WHY DO 90% OF RUNS NEVER REACH THE SEAT?
+    //
+    // 6.91.6 at n=67 made the distribution BIMODAL: p60 and p120 are the same
+    // number (8/67), and the last 30 runs contain NOTHING between 26 minutes and
+    // 124 minutes. Against 6.89.10's shape that void is p = 6.2e-4, and the
+    // 3-of-3 conversion from one hour to two is p = 8.2e-4.
+    //
+    // So the deep game is solved and the entry is not. A run either fails to get
+    // seated and dies just past the 20-minute hell entrance, or gets seated and
+    // survives to 2+ hours. The single lever left is the probability of reaching
+    // the seat — and nothing currently measures it.
+    //
+    // Prime suspect, stated so it can be refuted: `parkArmor` needs
+    // defense >= 30, which is ~5.15 OLIVE-equivalents. A run whose armour has
+    // not got there by 1200s cannot park at hell entry no matter what else is
+    // true. This audit records the build AT THE ENTRANCE and when park first
+    // engaged, so the 10% and the 90% can be compared directly instead of
+    // guessed at.
+    const PARK_AUDIT_KEY = 'pineBotParkAudit';
+    let parkFirstS = null;      // gameTime park first engaged this run
+    let parkOnTicks = 0;        // hell ticks with parkOn
+    let parkedTicks = 0;        // hell ticks actually seated (vx=vy=0)
+    let entrySample = null;     // the build as it crossed parkFromS
+    let parkAudit = (() => {
+        const blank = { runs: [] };
+        try {
+            const raw = JSON.parse(localStorage.getItem(PARK_AUDIT_KEY) || 'null');
+            if (raw && Array.isArray(raw.runs)) return raw;
+        } catch (e) { }
+        return blank;
+    })();
 
     const MARK_AUDIT_KEY = 'pineBotMarkAudit';
     let markAudit = (() => {

@@ -1538,8 +1538,13 @@ if (which === 'roster-cap') {
         for (const k of ['MINT', 'TONIC', 'SUGAR'])
             assert.ok(pat.ingredients.includes(k), k + ' missing');
     });
+    // v6.91.9 — REVISED ON PURPOSE. GIN TONIC comes OFF this list, because the
+    // user's 62686 s (17.4 h) crown run — 4x the bot's best ever — carried it as
+    // one of four supers (GIN TONIC, VODKA TONIC, MOJITO, SOUTH SIDE) with
+    // NEGRONI and WHISKY SOUR as the non-supers. That is direct evidence
+    // against the 6.89.3 drop. VODKA CRANBERRY stays dropped.
     test('...and the ones the user dropped are gone', () => {
-        for (const c of ['GIN TONIC', 'VODKA CRANBERRY'])
+        for (const c of ['VODKA CRANBERRY'])
             assert.ok(!pat.cocktails.includes(c), c + ' should be off the roster');
     });
     // v6.91.5 — REVISED ON PURPOSE, not made to pass. Both assertions below
@@ -1555,7 +1560,18 @@ if (which === 'roster-cap') {
     test('TWO keyless cocktails are now carried: NEGRONI and WHISKY SOUR', () => {
         assert.ok(pat.cocktails.includes('NEGRONI'), 'NEGRONI missing');
         assert.ok(pat.cocktails.includes('WHISKY SOUR'), 'WHISKY SOUR missing');
-        assert.strictEqual(pat.cocktails.length, 5, pat.cocktails.join(','));
+        assert.strictEqual(pat.cocktails.length, 6, pat.cocktails.join(','));
+    });
+    // v6.91.9 — GIN TONIC is back, and it is the CHEAPEST line on the board:
+    // SUPER_KEY_INGREDIENT maps GIN TONIC and VODKA TONIC to the SAME key
+    // (TONIC), which is already planned. So the fourth super line costs one
+    // cocktail slot and ZERO ingredient slots.
+    test('GIN TONIC is a FOURTH super line at zero ingredient cost', () => {
+        assert.ok(pat.cocktails.includes('GIN TONIC'), pat.cocktails.join(','));
+        assert.strictEqual(pineBot.test.superKey('GIN TONIC'),
+                           pineBot.test.superKey('VODKA TONIC'), 'keys must be shared');
+        assert.ok(pat.ingredients.includes(pineBot.test.superKey('GIN TONIC')),
+                  'the shared key must already be planned');
     });
     // THE SAFETY PROPERTY that makes the fifth slot free: LEMON is permanently
     // banned, so WHISKY SOUR can never complete a super and cannot move the
@@ -1601,6 +1617,16 @@ if (which === 'roster-cap') {
             patN.length + ' / ' + mgN.length + ' / ' + joeN.length));
     test('and it stays under the six-super gun gate', () =>
         assert.ok(patN.length <= 5, patN.length + ': ' + patN.join(',')));
+    // v6.91.9 — the exact count, so the GIN TONIC addition is measured and not
+    // merely permitted by the <=5 cap. Three completable lines before, FOUR now,
+    // matching the crown roster. NEGRONI (CAMPARI, unplanned) and WHISKY SOUR
+    // (LEMON, never unbans) still add none, which is what keeps the sixth slot
+    // free and the gun gate out of reach.
+    test('the crown roster gives FOUR completable super lines, not three', () =>
+        assert.strictEqual(patN.length, 4, patN.join(',')));
+    test('...and the two keyless cocktails still contribute none', () => {
+        assert.ok(!patN.includes('NEGRONI') && !patN.includes('WHISKY SOUR'), patN.join(','));
+    });
     done();
 }
 
@@ -2250,21 +2276,24 @@ if (which === 'slot-lockout') {
     // cocktails. Asserted on the tag, which names the rank, because two softer
     // forms of this check were toothless: a `/roadmap|day-order/` regex passed
     // with WHISKY SOUR removed from PLAN_COCKTAILS entirely, and beating an
-    // off-roster GIN TONIC passed for unrelated reasons. `day-order16` can only
+    // off-roster GIN TONIC passed for unrelated reasons. `day-orderNN` can only
     // appear if the name is in DAY_ORDER at that position.
     // (PLAN_COCKTAILS membership is guarded by `roster-cap`, which does fail
     // when it is removed — this one guards the ordering list.)
-    test('WHISKY SOUR carries a real DAY_ORDER rank (16th, last cocktail)', () =>
-        assert.ok(/day-order16/.test(T.scoreCard({ n: 'WHISKY SOUR', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || ''),
+    // v6.91.9: GIN TONIC re-entered DAY_ORDER ahead of the two keyless
+    // cocktails, so WHISKY SOUR's rank shifts 16 -> 17. Still dead last.
+    test('WHISKY SOUR carries a real DAY_ORDER rank (17th, last cocktail)', () =>
+        assert.ok(/day-order17/.test(T.scoreCard({ n: 'WHISKY SOUR', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || ''),
             T.scoreCard({ n: 'WHISKY SOUR', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why));
-    // ...and it sits LAST among the five. This is an INVARIANT guard, not a
+    // ...and it sits LAST among the six. This is an INVARIANT guard, not a
     // guard on this change: it does not fail when the roster edit is reverted,
     // but it fails the moment any future boost pushes the freeze ahead of a
     // super line during the funding phase.
-    test('...and it ranks LAST of the five planned cocktails in the day', () => {
+    test('...and it ranks LAST of the six planned cocktails in the day', () => {
         const ws = sc('WHISKY SOUR', 'weapon', 0);
         const others = { ss: sc('SOUTH SIDE', 'weapon', 0), vt: sc('VODKA TONIC', 'weapon', 0),
-                         mo: sc('MOJITO', 'weapon', 0), ne: sc('NEGRONI', 'weapon', 0) };
+                         mo: sc('MOJITO', 'weapon', 0), gt: sc('GIN TONIC', 'weapon', 0),
+                         ne: sc('NEGRONI', 'weapon', 0) };
         for (const k of Object.keys(others))
             assert.ok(others[k] > ws, JSON.stringify(Object.assign({ ws: Math.round(ws) },
                 Object.fromEntries(Object.entries(others).map(([a, b]) => [a, Math.round(b)])))));
@@ -3331,6 +3360,24 @@ if (which === 'deep-park') {
         const noRegen = live(34.992, 0.2);
         test('...nor does the cap without a heal income', () =>
             assert.strictEqual(noRegen.parkOn, false, String(noRegen.parkOn)));
+
+        // v6.91.8 THE ENTRANCE IS THE WHOLE GAME NOW.
+        //
+        // 6.91.6 at n=67 made the distribution BIMODAL: p60 and p120 are the
+        // same 8/67, and the last 30 runs hold NOTHING between 26 and 124
+        // minutes. Against 6.89.10's shape that void is p = 6.2e-4 and the
+        // 3-of-3 hour-to-two-hours conversion is p = 8.2e-4. So the only lever
+        // left is P(reach the seat) — and `parkFirstS` is what measures it.
+        //
+        // FIRST, not latest: the question is when a run got seated, so a tick
+        // that re-parks 100s later must not overwrite the answer.
+        const seat1 = live(34.992, 2.218);
+        test('the first park engagement is stamped', () =>
+            assert.strictEqual(seat1.parkFirst, 6000, String(seat1.parkFirst)));
+        global.gameTime = 6100;
+        const seat2 = T.planMove();
+        test('...and a later tick does NOT overwrite it', () =>
+            assert.strictEqual(seat2.parkFirst, 6000, String(seat2.parkFirst)));
 
         // v6.91.3 THE SEAT WAS INSIDE THE MARKS. The corner's whole
         // justification is "80.92px from the nearest spawnable mark centre

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.91.7
+// @version      6.91.9
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.91.7';
+    const SCRIPT_VERSION = '6.91.9';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -232,7 +232,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -339,15 +339,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -1037,7 +1037,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -1091,14 +1091,29 @@
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
     // v6.89.3 (user, from watching the runs): "these are the only essential
-    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC is out.
-    // Note the SELF-ENFORCING consequence: TONIC and SUGAR and MINT stay in the
-    // ingredient plan, so under the 6.89.1 latent-line rule every off-plan
-    // cocktail keyed to them — GIN TONIC, VODKA CRANBERRY, ESPRESSO MARTINI —
-    // is now hard-refused at level zero. The roster shrink enforces itself.
-    // Three super lines against a six-super gate is the widest safety margin
-    // this build has ever had.
-    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO'];
+    // super cocktails: mojito, vodka tonic, and southside." GIN TONIC was out,
+    // and the shrink was self-enforcing: TONIC stays in the ingredient plan, so
+    // the 6.89.1 latent-line rule hard-refused GIN TONIC at level zero.
+    //
+    // v6.91.9 — THE CROWN RUN SAYS OTHERWISE, and it is the strongest build
+    // evidence this project has. The user's 62686s (17.4 h) manual run — FOUR
+    // TIMES the bot's best ever — was built on:
+    //
+    //     supers      GIN TONIC, VODKA TONIC, MOJITO, SOUTH SIDE
+    //     non-supers  NEGRONI, WHISKY SOUR
+    //
+    // The bot was carrying five of those six and missing a SUPER LINE.
+    //
+    // AND IT IS THE CHEAPEST LINE ON THE BOARD. GIN TONIC and VODKA TONIC share
+    // one key — both are TONIC — and TONIC is already in PLAN_INGREDIENTS for
+    // VODKA TONIC. So the fourth super costs ONE COCKTAIL SLOT AND ZERO
+    // INGREDIENT SLOTS. Nothing else on the roster is that cheap, and 6.89.3
+    // gave it away for nothing.
+    //
+    // Completable lines go 3 -> 4 (MINT, TONIC x2, SUGAR). NEGRONI's CAMPARI is
+    // off-plan and WHISKY SOUR's LEMON is permanently banned, so neither can
+    // ever complete. Four against the six-super Rainbow Gun gate.
+    const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
 
     // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
     // VODKA TONIC / MOJITO / NEGRONI / GIN TONIC and the black vermouth and
@@ -1137,7 +1152,7 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI', 'WHISKY SOUR'
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR'
     ];   // v6.91.5 (user): "whisky sour should be in the planned cocktails".
          // LAST among the cocktails on purpose — the three super lines and the
          // keyless NEGRONI keep their order, and WHISKY SOUR is the fifth slot
@@ -1592,6 +1607,38 @@
     function pauseShareRun() {
         return runHellTicks >= 300 ? runPauseTicks / runHellTicks : null;
     }
+
+    // v6.91.8 WHY DO 90% OF RUNS NEVER REACH THE SEAT?
+    //
+    // 6.91.6 at n=67 made the distribution BIMODAL: p60 and p120 are the same
+    // number (8/67), and the last 30 runs contain NOTHING between 26 minutes and
+    // 124 minutes. Against 6.89.10's shape that void is p = 6.2e-4, and the
+    // 3-of-3 conversion from one hour to two is p = 8.2e-4.
+    //
+    // So the deep game is solved and the entry is not. A run either fails to get
+    // seated and dies just past the 20-minute hell entrance, or gets seated and
+    // survives to 2+ hours. The single lever left is the probability of reaching
+    // the seat — and nothing currently measures it.
+    //
+    // Prime suspect, stated so it can be refuted: `parkArmor` needs
+    // defense >= 30, which is ~5.15 OLIVE-equivalents. A run whose armour has
+    // not got there by 1200s cannot park at hell entry no matter what else is
+    // true. This audit records the build AT THE ENTRANCE and when park first
+    // engaged, so the 10% and the 90% can be compared directly instead of
+    // guessed at.
+    const PARK_AUDIT_KEY = 'pineBotParkAudit';
+    let parkFirstS = null;      // gameTime park first engaged this run
+    let parkOnTicks = 0;        // hell ticks with parkOn
+    let parkedTicks = 0;        // hell ticks actually seated (vx=vy=0)
+    let entrySample = null;     // the build as it crossed parkFromS
+    let parkAudit = (() => {
+        const blank = { runs: [] };
+        try {
+            const raw = JSON.parse(localStorage.getItem(PARK_AUDIT_KEY) || 'null');
+            if (raw && Array.isArray(raw.runs)) return raw;
+        } catch (e) { }
+        return blank;
+    })();
 
     const MARK_AUDIT_KEY = 'pineBotMarkAudit';
     let markAudit = (() => {
@@ -4784,6 +4831,7 @@
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
+        parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -4915,6 +4963,22 @@
         try {
             markAudit.runs = (markAudit.runs || 0) + 1;
             localStorage.setItem(MARK_AUDIT_KEY, JSON.stringify(markAudit));
+        } catch (e) { }
+        // v6.91.8: one record per HELL run — the build at the entrance, whether
+        // the seat was ever reached, and how long the run lasted. Rolling window;
+        // the question it answers is a comparison between two groups, not a total.
+        try {
+            if (hellRunEnded) {
+                parkAudit.runs.push({
+                    t: Math.round(stats.time || 0),
+                    first: parkFirstS,
+                    onShare: runHellTicks ? +(parkOnTicks / runHellTicks).toFixed(3) : null,
+                    seatShare: runHellTicks ? +(parkedTicks / runHellTicks).toFixed(3) : null,
+                    entry: entrySample
+                });
+                while (parkAudit.runs.length > 80) parkAudit.runs.shift();
+                localStorage.setItem(PARK_AUDIT_KEY, JSON.stringify(parkAudit));
+            }
         } catch (e) { }
         try {
             if (runHellTicks > 0) {
@@ -8143,6 +8207,22 @@
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
         }
+        // v6.91.8: record the entrance build and the first park engagement. Both
+        // are per-run and cost nothing; see PARK_AUDIT_KEY.
+        if (hellDetected) {
+            if (entrySample == null && gtCorner >= (DHp.parkFromS != null ? DHp.parkFromS : 1200)) {
+                const dEnt = liveDefense();
+                entrySample = {
+                    gt: Math.round(gtCorner),
+                    def: dEnt == null ? 0 : +dEnt.toFixed(1),
+                    regen: +regenRate().toFixed(2),
+                    supers: (typeof supersThisRun === 'number' ? supersThisRun : 0),
+                    zoner: !!zoner
+                };
+            }
+            if (parkOn) { parkOnTicks++; if (parkFirstS == null) parkFirstS = Math.round(gtCorner); }
+            if (parked) parkedTicks++;
+        }
         lastDir = { x: vx, y: vy };
 
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
@@ -8163,7 +8243,7 @@
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
             seat: { x: +cnrX.toFixed(1), y: +cnrY.toFixed(1) },
-            parkYieldFrozen, pauseShare: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
+            parkYieldFrozen, parkFirst: parkFirstS, pauseShare: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
             armorLv: +armorLv.toFixed(2),
             hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
             huntFrozen: !!(huntTarget && huntTarget.frozen),
@@ -9225,6 +9305,40 @@
                 runHellTicks = 0; runPauseTicks = 0;
                 try { localStorage.removeItem(PAUSE_AUDIT_KEY); } catch (e) { }
                 return 'pause audit cleared';
+            };
+            // v6.91.8: pineBot.parkAudit() — the 10% vs the 90%.
+            // 6.91.6 showed a BIMODAL distribution: nothing between 26 and 124
+            // minutes. A run either reaches the seat or dies at the entrance, so
+            // the only lever left is P(reach the seat). This compares the build
+            // AT THE ENTRANCE for runs that got seated against runs that did not.
+            window.pineBot.parkAudit = () => {
+                const rs = (parkAudit && parkAudit.runs) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2); };
+                const grp = (list, label) => ({
+                    group: label, n: list.length,
+                    medianTimeS: med(list.map(r => r.t)),
+                    medianEntryDef: med(list.filter(r => r.entry).map(r => r.entry.def)),
+                    medianEntryRegen: med(list.filter(r => r.entry).map(r => r.entry.regen)),
+                    medianEntrySupers: med(list.filter(r => r.entry).map(r => r.entry.supers)),
+                    zonerShare: list.length ? +(list.filter(r => r.entry && r.entry.zoner).length / list.length).toFixed(2) : null
+                });
+                const seated = rs.filter(r => r.first != null);
+                const never = rs.filter(r => r.first == null);
+                return {
+                    hellRuns: rs.length,
+                    reachedSeat: seated.length,
+                    reachRate: rs.length ? +(seated.length / rs.length).toFixed(2) : null,
+                    medianFirstParkS: med(seated.map(r => r.first)),
+                    medianSeatShare: med(seated.map(r => Math.round((r.seatShare || 0) * 100))),
+                    groups: [grp(seated, 'REACHED THE SEAT'), grp(never, 'NEVER PARKED')],
+                    note: 'parkArmor needs defense >= deepHell.parkDefense (30, about 5.15 OLIVE-equivalents) and regen >= parkRegenRate (1.0), plus SOUTH SIDE. If medianEntryDef is far below 30 in the NEVER group and at/above it in the SEATED group, the entrance build IS the lever and the fix is upstream in the picker, not in the posture.'
+                };
+            };
+            window.pineBot.resetParkAudit = () => {
+                parkAudit = { runs: [] };
+                try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
+                return 'park audit cleared';
             };
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };

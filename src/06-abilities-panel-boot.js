@@ -1016,6 +1016,40 @@
                 try { localStorage.removeItem(PAUSE_AUDIT_KEY); } catch (e) { }
                 return 'pause audit cleared';
             };
+            // v6.91.8: pineBot.parkAudit() — the 10% vs the 90%.
+            // 6.91.6 showed a BIMODAL distribution: nothing between 26 and 124
+            // minutes. A run either reaches the seat or dies at the entrance, so
+            // the only lever left is P(reach the seat). This compares the build
+            // AT THE ENTRANCE for runs that got seated against runs that did not.
+            window.pineBot.parkAudit = () => {
+                const rs = (parkAudit && parkAudit.runs) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2); };
+                const grp = (list, label) => ({
+                    group: label, n: list.length,
+                    medianTimeS: med(list.map(r => r.t)),
+                    medianEntryDef: med(list.filter(r => r.entry).map(r => r.entry.def)),
+                    medianEntryRegen: med(list.filter(r => r.entry).map(r => r.entry.regen)),
+                    medianEntrySupers: med(list.filter(r => r.entry).map(r => r.entry.supers)),
+                    zonerShare: list.length ? +(list.filter(r => r.entry && r.entry.zoner).length / list.length).toFixed(2) : null
+                });
+                const seated = rs.filter(r => r.first != null);
+                const never = rs.filter(r => r.first == null);
+                return {
+                    hellRuns: rs.length,
+                    reachedSeat: seated.length,
+                    reachRate: rs.length ? +(seated.length / rs.length).toFixed(2) : null,
+                    medianFirstParkS: med(seated.map(r => r.first)),
+                    medianSeatShare: med(seated.map(r => Math.round((r.seatShare || 0) * 100))),
+                    groups: [grp(seated, 'REACHED THE SEAT'), grp(never, 'NEVER PARKED')],
+                    note: 'parkArmor needs defense >= deepHell.parkDefense (30, about 5.15 OLIVE-equivalents) and regen >= parkRegenRate (1.0), plus SOUTH SIDE. If medianEntryDef is far below 30 in the NEVER group and at/above it in the SEATED group, the entrance build IS the lever and the fix is upstream in the picker, not in the posture.'
+                };
+            };
+            window.pineBot.resetParkAudit = () => {
+                parkAudit = { runs: [] };
+                try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
+                return 'park audit cleared';
+            };
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
                 try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }
