@@ -1055,7 +1055,10 @@
     // passouts and NO BOOKING walls — that the day phase is spent clearing.
     // They are the bottom of the junk tier, below ordinary filler.
     const DEAD_VS_HOLDOUTS = new Set(['CORPSE REVIVER NO.2', 'ABSINTHE']);
-    const AVOID_INGREDIENTS_BASE = ['COINTREAU', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER'];
+    const AVOID_INGREDIENTS_BASE = ['COINTREAU', 'ABSINTHE', 'LEMON', 'ORANGE', 'ANGOSTURA', 'GINGER BEER',
+        // v6.92.0: CAMPARI was on NO list at all, and the live run bought it to
+        // Lv6 and evolved NEGRONI — the keyless occupant that must never super.
+        'CAMPARI'];
     // v6.88.3 (user): "lime, soda water can be junk pool picks". They are not
     // plan ingredients and never will be, but when the pool is all junk they
     // are a better answer than CORPSE REVIVER No.2 or ABSINTHE, which cannot
@@ -1112,6 +1115,47 @@
     // off-plan and WHISKY SOUR's LEMON is permanently banned, so neither can
     // ever complete. Four against the six-super Rainbow Gun gate.
     const SUPER_LINE_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO'];
+
+    // =================================================================
+    // v6.92.0 — THE ARMING CAP. Measured, not theorised.
+    //
+    // A live run was read at five evolved supers, one short of the gun:
+    //   evolved: [southside, vodkatonic, negroni, mojito, gimlet]
+    // NEGRONI and GIMLET are both supposed to be structurally impossible.
+    // `weapons` shows why, and it is not the absorbed-key subtlety of 6.89.0:
+    //   campari: 6   lime: 6
+    // The bot simply BOUGHT them to max. CAMPARI is on no list at all, and
+    // LIME is on JUNK_ACCEPTABLE / HELL_SAFE_JUNK by user direction.
+    // Its own safe-junk tier armed an off-plan super line.
+    //
+    // Banning them outright does not work — the late pool narrows until junk
+    // is the only card on offer, which is the whole reason JUNK_ACCEPTABLE
+    // exists. So refuse only the LAST level. A key at Lv5 arms nothing: the
+    // junk still fills the pool and still pays its stat, and the line stays
+    // shut. Occupancy closes the cocktail side; this closes the key side.
+    //
+    // The set is COMPUTED, never listed, so a roster edit can't leave it
+    // stale. An ingredient is arming-capped when all three hold:
+    //   - some cocktail keys off it (otherwise it can arm nothing), AND
+    //   - it is not the key of a line we intend to complete, AND
+    //   - it is not in PLAN_INGREDIENTS — because OLIVE, TOMATO JUICE,
+    //     CRANBERRY, SWEET VERMOUTH, DRY VERMOUTH and WATER are all keys of
+    //     off-plan cocktails too, and the plan needs every one of them MAXED
+    //     for its stat. Those stay guarded by occupancy and `latent-line`.
+    // Yields exactly the ingredients with no plan value: LIME, CAMPARI,
+    // LEMON, ORANGE, ANGOSTURA, COINTREAU, GINGER BEER, ABSINTHE.
+    const SUPER_LINE_KEYS = new Set(SUPER_LINE_COCKTAILS.map(c => SUPER_KEY_INGREDIENT[c]).filter(Boolean));
+    function armsOffPlanLine(name) {
+        if (PLAN_INGREDIENTS.includes(name)) return false;
+        if (SUPER_LINE_KEYS.has(name)) return false;
+        return COCKTAILS.some(c => SUPER_KEY_INGREDIENT[c] === name);
+    }
+    // true when THIS pick is the one that would max the key and arm the line.
+    function armsLineNow(type, name, lv, maxlv) {
+        if (type === 'weapon' || !armsOffPlanLine(name)) return false;
+        const top = (typeof maxlv === 'number' && maxlv > 0) ? maxlv : 6;
+        return (lv || 0) + 1 >= top;
+    }
 
     // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
     // VODKA TONIC / MOJITO / NEGRONI / GIN TONIC and the black vermouth and

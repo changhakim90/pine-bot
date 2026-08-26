@@ -1166,6 +1166,15 @@
             // first place (user: block it when picking weapons/ingredients).
             if (nSupers >= CAP && (type === 'weapon' || type === 'passive') &&
                 opensNewSuperLine(type, name)) add(-500, 'gun-guard-source');
+            // v6.92.0 THE ARMING CAP — the CAMPARI/LIME hole, closed.
+            // Both guards above are gated on `nSupers >= CAP`, so they say
+            // nothing while the count is still climbing. That is exactly when
+            // a junk key gets maxed: the live run read campari 6 / lime 6 with
+            // GIMLET and NEGRONI already evolved and nSupers only at 5.
+            // This fires at ANY super count, because arming a line the plan
+            // never wanted is never right — and only on the final level, so
+            // the junk tier keeps working up to Lv5.
+            if (armsLineNow(type, name, lv, cap)) add(-700, 'arming-cap');
             // v6.89.0 LATENT LINE — the MANHATTAN hole, closed.
             // An off-plan cocktail whose super key is ALREADY satisfied (maxed,
             // or maxed-then-absorbed by a craft) is not a gun risk that grows

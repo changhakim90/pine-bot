@@ -3705,4 +3705,77 @@ if (which === 'freeze-slot') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+
+// v6.92.0 — THE ARMING CAP, written from a LIVE READ, not from theory.
+// A running bot was probed at five evolved supers with the gun not yet taken:
+//   evolved: [southside, vodkatonic, negroni, mojito, gimlet]
+//   weapons: { ..., campari: 6, lime: 6, ... }
+// NEGRONI and GIMLET are both supposed to be impossible. NEGRONI is a
+// deliberate KEYLESS occupant (its key CAMPARI is off-plan) and GIMLET is not
+// on the roster at all. The bot bought both keys to Lv6 itself — LIME because
+// the user's own JUNK_ACCEPTABLE / HELL_SAFE_JUNK tier promotes it, CAMPARI
+// because it appeared on no list whatsoever.
+//
+// The fix refuses ONLY the level that arms the key. Lv5 is free.
+if (which === 'arming-cap') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
+    const why = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).why;
+
+    // THE TWO KEYS THAT ACTUALLY FIRED IN THE LIVE RUN.
+    for (const k of ['LIME', 'CAMPARI'])
+        test('the arming level of ' + k + ' is refused', () =>
+            assert.ok(sc(k, 'passive', 5) < -400, k + ' @lv5 ' + Math.round(sc(k, 'passive', 5))));
+    for (const k of ['LIME', 'CAMPARI'])
+        test('...and the refusal is tagged: ' + k, () =>
+            assert.ok(/arming-cap/.test(why(k, 'passive', 5)), why(k, 'passive', 5)));
+
+    // THE POINT OF A CAP RATHER THAN A BAN: the junk tier still works. The
+    // pool narrows late until junk is the only card on offer, which is why
+    // JUNK_ACCEPTABLE exists at all. Lv0-4 must stay pickable.
+    test('LIME below the cap is still a live junk pick, not banned', () => {
+        for (const lv of [0, 1, 2, 3, 4])
+            assert.ok(sc('LIME', 'passive', lv) > -400,
+                'LIME @lv' + lv + ' ' + Math.round(sc('LIME', 'passive', lv)));
+    });
+    test('...and the cap is strictly the LAST level, not a range', () =>
+        assert.ok(sc('LIME', 'passive', 4) - sc('LIME', 'passive', 5) > 400,
+            'lv4 ' + Math.round(sc('LIME', 'passive', 4)) +
+            ' vs lv5 ' + Math.round(sc('LIME', 'passive', 5))));
+
+    // THE EXEMPTION THAT MAKES IT SAFE. OLIVE, TOMATO JUICE, CRANBERRY,
+    // SWEET VERMOUTH, DRY VERMOUTH and WATER are ALL super keys of off-plan
+    // cocktails (DRY MARTINI, BLOODY MARY, VODKA CRANBERRY, MANHATTAN,
+    // VODKA MARTINI, WHISKEY HIGHBALL) — and the plan needs every one MAXED
+    // for its stat. A blanket cap would gut the survival core. Those stay
+    // guarded by occupancy and `latent-line` instead.
+    for (const k of ['OLIVE', 'TOMATO JUICE', 'SWEET VERMOUTH', 'WATER'])
+        test('the plan ingredient ' + k + ' can still be MAXED', () =>
+            assert.ok(sc(k, 'passive', 5) > -400, k + ' @lv5 ' + Math.round(sc(k, 'passive', 5))));
+    // ...as can the keys of lines we DO intend to complete.
+    for (const k of ['MINT', 'TONIC', 'SUGAR'])
+        test('the super-line key ' + k + ' can still be MAXED', () =>
+            assert.ok(sc(k, 'passive', 5) > -400, k + ' @lv5 ' + Math.round(sc(k, 'passive', 5))));
+
+    // AND THE OUTCOME THE WHOLE THING EXISTS FOR: with the keys shut, the two
+    // keyless occupants stay keyless and the live run's 5-super state is
+    // unreachable. This is the assertion that would have caught the bug.
+    test('NEGRONI and WHISKY SOUR cannot be armed, so they stay keyless', () => {
+        for (const c of ['NEGRONI', 'WHISKY SOUR']) {
+            const k = pineBot.test.superKey(c);
+            assert.ok(sc(k, 'passive', 5) < -400,
+                c + ' key ' + k + ' @lv5 ' + Math.round(sc(k, 'passive', 5)));
+        }
+    });
+    // GIMLET's key is shut the same way, which is what keeps an off-roster
+    // cocktail from becoming the sixth line even when the pool forces it in.
+    test('GIMLET cannot be armed even if the pool forces the cocktail', () =>
+        assert.ok(sc(pineBot.test.superKey('GIMLET'), 'passive', 5) < -400,
+            'LIME @lv5 ' + Math.round(sc('LIME', 'passive', 5))));
+    done();
+}
