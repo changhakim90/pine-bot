@@ -214,6 +214,10 @@
             huntAudit.runs = (huntAudit.runs || 0) + 1;
             localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit));
         } catch (e) { }
+        try {
+            markAudit.runs = (markAudit.runs || 0) + 1;
+            localStorage.setItem(MARK_AUDIT_KEY, JSON.stringify(markAudit));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {

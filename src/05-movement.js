@@ -224,7 +224,7 @@
                 // (up to -36% at OLIVE 6), so the bot stands and grinds.
                 const gtDay = safe(() => gameTime, 0) || 0;
                 const armorEase = ((t !== 'boss' && !isWall)
-                    ? 1 - 0.06 * Math.min(6, ownedLevels['OLIVE'] || 0) : 1) *
+                    ? 1 - 0.06 * Math.min(6, armorLevel()) : 1) *
                     ((t !== 'boss' && !isWall && gtDay < 1200 && !hellDetected) ? 1.15 : 1);   // DAY: commons are avoided, not absorbed (manual run crowd median 0)
                 out.enemies.push({
                     x: e.x, y: e.y, vx, vy, spd,
@@ -829,7 +829,7 @@
         // hold ground. Pat (tank) converts it 1.4x, which is what lets him
         // stand on a passout long enough for the flame cross or the ult to
         // land instead of sliding off the body every time a mob closes.
-        const armorLv = (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
+        const armorLv = armorLevel();   // v6.91.3: player.defense, not the key that reads 1 at the cap
         const armorConf = Math.min(M.armorConfMax,
             armorLv * M.armorConfPer * (charOf().style === 'tank' ? 1.4 : 1));
         const caution = (1 - armorConf * (M.armorCautionShare || 0)) * (ultInvuln ? 0.35 : 1) *
@@ -946,6 +946,20 @@
         // v6.89.11: remember this tick's marks so the NEXT tick can still blame
         // one that detonated and removed itself. Positions only — the objects
         // belong to the game and may be recycled.
+        // v6.91.3: book new marks against the SEAT before the snapshot is
+        // overwritten. The seat is recomputed here rather than threaded down
+        // from the corner block below — it needs only the player position and
+        // the field, and duplicating three lines beats reordering the planner.
+        (() => {
+            const gtM = safe(() => gameTime, null);
+            if (typeof gtM !== 'number' || !th.marks.length) return;
+            const fwM = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+            const fhM = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
+            const ins = (CONFIG.deepHell.cornerInset != null) ? CONFIG.deepHell.cornerInset : 0;
+            bookMarks(th.marks, lastMarkSnap, gtM,
+                (p.x < fwM / 2) ? ins : fwM - ins,
+                (p.y < fhM / 2) ? ins : fhM - ins);
+        })();
         lastMarkSnap = th.marks.map(m => ({ x: m.x, y: m.y, r: m.r }));
 
         // v6.89.7 INCOME AUDIT. Both directions of the pool, integrated against
@@ -1000,7 +1014,7 @@
         // keeps farming bosses/passouts/walls through a rush instead of
         // sprinting for a corner.
         const crowdTol = M.crowdedCount +
-            Math.round(((ownedLevels['NEGRONI'] || 0) + (ownedLevels['OLIVE'] || 0)) / 3) +
+            Math.round(armorLevel() / 3) +   // v6.91.3
             ((hellDetected || (typeof G.gameTime === 'number' && G.gameTime > 1200)) ? 4 : 0) +
             // DEEP-HELL CALIBRATION: the manual run's MEDIAN crowd at 200
             // minutes was 44 within 90px (p90 219) at 100% HP — density at
@@ -1356,7 +1370,7 @@
                 (Math.hypot(po.x - p.x, po.y - p.y) - po.r) < M.poEngageRange * 0.5);
         const anchor = flameAnchor || holdoutAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
-            ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
+            armorLevel() >= 2 &&   // v6.91.3
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
         // v6.88.2 CORNER ANCHOR — deliberate user strategy in deep hell, and
         // the source says why it works. Boss drop-marks spawn UNIFORMLY at
@@ -1454,9 +1468,37 @@
         // whether the SEAT is safe, not only where the bot is standing.
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
-        const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
-        const cnrX = (p.x < fieldW / 2) ? pr : fieldW - pr;
-        const cnrY = (p.y < fieldH / 2) ? pr : fieldH - pr;
+        // v6.91.3 THE SEAT WAS INSIDE THE MARKS THE WHOLE TIME.
+        //
+        // The corner doctrine's entire justification is "80.9 px from the
+        // nearest possible mark centre against a 70 px reach". That 80.9 is the
+        // distance from the TRUE corner (0,0) to the nearest spawnable mark
+        // centre (52,62) — source-verified spawn box [52,W-52] x [62,H-62].
+        //
+        // The code never sat there. It seated at (p.r, p.r), and the live player
+        // radius is 7.2:
+        //
+        //   seat (0,0)     -> 80.92 px   margin +10.92   IMMUNE
+        //   seat (7.2,7.2) -> 70.78 px   margin  +0.78   a hair
+        //   seat (12,12)   -> 64.03 px   margin  -5.97   INSIDE THE MARK
+        //
+        // and 12 is the fallback whenever `p.r` cannot be read. So the seat was
+        // never the seat the doctrine describes; it was 10 px in, with the whole
+        // claimed margin spent. That is the best available explanation for the
+        // one non-noise number in the last compare() dump: across the 22 runs
+        // where the corner FIRST actually worked (6.90.0 fixed the thrower
+        // regression that had disabled it outright), mark deaths went 19% -> 45%,
+        // z ~ 3.2. Enabling a seat that sits inside every mark that can exist is
+        // exactly what that looks like.
+        //
+        // The planner's own candidate clamp is Math.max(0, Math.min(fw, ...)),
+        // so the centre is allowed at 0. If the GAME clamps to [r, W-r] the bot
+        // simply stops at 7.2 and `parked` still latches (parkRadius 26) — this
+        // costs nothing if it turns out to be unreachable, and buys the entire
+        // claimed margin if it is not.
+        const cornerInset = (CONFIG.deepHell.cornerInset != null) ? CONFIG.deepHell.cornerInset : 0;
+        const cnrX = (p.x < fieldW / 2) ? cornerInset : fieldW - cornerInset;
+        const cnrY = (p.y < fieldH / 2) ? cornerInset : fieldH - cornerInset;
         // v6.89.11 THE CORNER DOES NOT DEFEAT A CHARGE LANE (user: "anchoring
         // contradicting the linebacker boss").
         //
@@ -2465,6 +2507,10 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             // v6.91.0 dormant-boss hunt telemetry
+            // v6.91.3: the seat and the armour reading are now observable — both
+            // were wrong for versions precisely because nothing reported them.
+            seat: { x: +cnrX.toFixed(1), y: +cnrY.toFixed(1) },
+            armorLv: +armorLv.toFixed(2),
             hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
             huntFrozen: !!(huntTarget && huntTarget.frozen),
             huntDmg: (huntMark && typeof huntMark.hp0 === 'number' && typeof huntMark.hp === 'number')

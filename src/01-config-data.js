@@ -663,6 +663,12 @@
             parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
+            // v6.91.3: how far in from the TRUE corner the seat sits. The
+            // mark-immunity geometry is 80.92 px at inset 0, 70.78 at 7.2 (the
+            // live player radius, which is what the code used) and 64.03 at 12
+            // (the fallback) — against a 70 px mark reach. Anything above ~10
+            // puts the seat inside every mark that can spawn.
+            cornerInset: 0,
             // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
             // the damage circle of the boss is also outside of the canvas, the
             // bot needs to hunt it down somehow before it wakes up and does huge
@@ -1492,6 +1498,45 @@
         } catch (e) { }
         return blank;
     })();
+    // v6.91.3 THE MARK AUDIT. The corner doctrine rests on one number —
+    // "80.92 px from the nearest spawnable mark centre against a 70 px reach" —
+    // and neither half has ever been measured live. The spawn box came from
+    // source; the 70 px reach did not. If `dropMark.r` grows with depth then no
+    // seat is immune at depth and the corner is the wrong answer to marks.
+    //
+    // Records every mark the FIRST tick it appears (marks persist for many
+    // ticks; counting each tick would just weight long telegraphs), bucketed by
+    // depth, with the quantity that actually decides the doctrine: the margin
+    // between the seat and the mark's edge. A negative `worstMargin` means a
+    // mark covered the seat.
+    const MARK_AUDIT_KEY = 'pineBotMarkAudit';
+    let markAudit = (() => {
+        const blank = { buckets: {}, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(MARK_AUDIT_KEY) || 'null');
+            if (raw && raw.buckets) return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    function bookMarks(marks, prevSnap, gt, seatX, seatY) {
+        if (!Array.isArray(marks) || !marks.length || typeof gt !== 'number') return;
+        const key = String(Math.floor(gt / INC_BUCKET_S) * INC_BUCKET_S);
+        let b = markAudit.buckets[key];
+        if (!b) b = markAudit.buckets[key] = { n: 0, rSum: 0, rMin: null, rMax: null, covers: 0, worstMargin: null };
+        const pad = CONFIG.threat.markPad || 0;
+        for (const m of marks) {
+            // first tick only: nothing within 3px of it in the previous snapshot
+            if (prevSnap && prevSnap.some(q => Math.abs(q.x - m.x) < 3 && Math.abs(q.y - m.y) < 3)) continue;
+            const rGame = (typeof m.r === 'number' ? m.r : 0) - pad;   // our padding is not the game's radius
+            if (!(rGame > 0)) continue;
+            b.n++; b.rSum += rGame;
+            if (b.rMin == null || rGame < b.rMin) b.rMin = rGame;
+            if (b.rMax == null || rGame > b.rMax) b.rMax = rGame;
+            const margin = Math.hypot(m.x - seatX, m.y - seatY) - rGame;
+            if (b.worstMargin == null || margin < b.worstMargin) b.worstMargin = margin;
+            if (margin <= 0) b.covers++;
+        }
+    }
     function bookHunt(mk, gtNow) {
         if (!mk) return;
         huntAudit.attempts++;
@@ -1649,9 +1694,20 @@
     //   "armour is measured off the OLIVE + NEGRONI levels") asserts the old
     //   reading directly, so it has to be revised on purpose rather than made
     //   to pass. They stay as they are until each has its own evidence.
+    const ARMOR_PER_LEVEL = 5.832;   // olive.pas.per 4 x the 1.458 ingredient stack
     function liveDefense() {
         const d = safe(() => player.defense, null);
         return (typeof d === 'number' && d > 0) ? d : null;
+    }
+    // v6.91.3: total armour in LEVEL units — the same scale the old
+    // `OLIVE + NEGRONI` expression was reaching for, but read off the stat that
+    // hurtPlayer actually subtracts. OLIVE 6 alone gives defense 34.992, which
+    // is exactly 6.0 here, so the units line up with what the call sites expect
+    // and their CEM-tuned dials keep their learned meaning.
+    function armorLevel() {
+        const d = liveDefense();
+        if (d != null) return Math.min(12, d / ARMOR_PER_LEVEL);
+        return (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
     }
     function regenRate() {
         const r = safe(() => player.regenBonus, null);

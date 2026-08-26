@@ -973,6 +973,34 @@
                 try { localStorage.removeItem(HUNT_AUDIT_KEY); } catch (e) { }
                 return 'hunt audit cleared';
             };
+            // v6.91.3: pineBot.markAudit() — does the corner actually clear the
+            // marks? `worstMargin` is the closest a mark edge ever came to the
+            // seat; negative means it covered it. `rMax` climbing with depth
+            // would mean the 80.92px geometry lapses and the corner is the wrong
+            // answer to marks at depth.
+            window.pineBot.markAudit = () => {
+                const rows = Object.keys(markAudit.buckets || {}).map(Number).sort((a, b) => a - b).map(k => {
+                    const b = markAudit.buckets[k];
+                    return {
+                        fromMin: Math.round(k / 60), n: b.n,
+                        rAvg: b.n ? +(b.rSum / b.n).toFixed(1) : null,
+                        rMin: b.rMin == null ? null : +b.rMin.toFixed(1),
+                        rMax: b.rMax == null ? null : +b.rMax.toFixed(1),
+                        worstMargin: b.worstMargin == null ? null : +b.worstMargin.toFixed(1),
+                        coveredSeat: b.covers
+                    };
+                });
+                return {
+                    runs: markAudit.runs || 0, buckets: rows,
+                    seatGeometry: 'true corner (0,0) is 80.92px from the nearest spawnable mark centre (52,62); the seat used before 6.91.3 was (p.r,p.r) = 70.78px, and its 12px fallback was 64.03 — inside a 70px mark.',
+                    note: 'worstMargin <= 0 in any bucket means the corner is NOT mark-immune at that depth. rMax rising across buckets means mark radius scales with time, which would retire the corner as the answer to marks.'
+                };
+            };
+            window.pineBot.resetMarkAudit = () => {
+                markAudit = { buckets: {}, runs: 0 };
+                try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }
+                return 'mark audit cleared';
+            };
             window.pineBot.resetIncomeAudit = () => {
                 incAudit = { buckets: {}, runs: 0 };
                 incCursor.t = null; incCursor.hp = null;

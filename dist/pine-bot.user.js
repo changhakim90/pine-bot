@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.91.2
+// @version      6.91.3
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.91.2';
+    const SCRIPT_VERSION = '6.91.3';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -665,6 +665,12 @@
             parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
+            // v6.91.3: how far in from the TRUE corner the seat sits. The
+            // mark-immunity geometry is 80.92 px at inset 0, 70.78 at 7.2 (the
+            // live player radius, which is what the code used) and 64.03 at 12
+            // (the fallback) — against a 70 px mark reach. Anything above ~10
+            // puts the seat inside every mark that can spawn.
+            cornerInset: 0,
             // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
             // the damage circle of the boss is also outside of the canvas, the
             // bot needs to hunt it down somehow before it wakes up and does huge
@@ -1494,6 +1500,45 @@
         } catch (e) { }
         return blank;
     })();
+    // v6.91.3 THE MARK AUDIT. The corner doctrine rests on one number —
+    // "80.92 px from the nearest spawnable mark centre against a 70 px reach" —
+    // and neither half has ever been measured live. The spawn box came from
+    // source; the 70 px reach did not. If `dropMark.r` grows with depth then no
+    // seat is immune at depth and the corner is the wrong answer to marks.
+    //
+    // Records every mark the FIRST tick it appears (marks persist for many
+    // ticks; counting each tick would just weight long telegraphs), bucketed by
+    // depth, with the quantity that actually decides the doctrine: the margin
+    // between the seat and the mark's edge. A negative `worstMargin` means a
+    // mark covered the seat.
+    const MARK_AUDIT_KEY = 'pineBotMarkAudit';
+    let markAudit = (() => {
+        const blank = { buckets: {}, runs: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(MARK_AUDIT_KEY) || 'null');
+            if (raw && raw.buckets) return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    function bookMarks(marks, prevSnap, gt, seatX, seatY) {
+        if (!Array.isArray(marks) || !marks.length || typeof gt !== 'number') return;
+        const key = String(Math.floor(gt / INC_BUCKET_S) * INC_BUCKET_S);
+        let b = markAudit.buckets[key];
+        if (!b) b = markAudit.buckets[key] = { n: 0, rSum: 0, rMin: null, rMax: null, covers: 0, worstMargin: null };
+        const pad = CONFIG.threat.markPad || 0;
+        for (const m of marks) {
+            // first tick only: nothing within 3px of it in the previous snapshot
+            if (prevSnap && prevSnap.some(q => Math.abs(q.x - m.x) < 3 && Math.abs(q.y - m.y) < 3)) continue;
+            const rGame = (typeof m.r === 'number' ? m.r : 0) - pad;   // our padding is not the game's radius
+            if (!(rGame > 0)) continue;
+            b.n++; b.rSum += rGame;
+            if (b.rMin == null || rGame < b.rMin) b.rMin = rGame;
+            if (b.rMax == null || rGame > b.rMax) b.rMax = rGame;
+            const margin = Math.hypot(m.x - seatX, m.y - seatY) - rGame;
+            if (b.worstMargin == null || margin < b.worstMargin) b.worstMargin = margin;
+            if (margin <= 0) b.covers++;
+        }
+    }
     function bookHunt(mk, gtNow) {
         if (!mk) return;
         huntAudit.attempts++;
@@ -1651,9 +1696,20 @@
     //   "armour is measured off the OLIVE + NEGRONI levels") asserts the old
     //   reading directly, so it has to be revised on purpose rather than made
     //   to pass. They stay as they are until each has its own evidence.
+    const ARMOR_PER_LEVEL = 5.832;   // olive.pas.per 4 x the 1.458 ingredient stack
     function liveDefense() {
         const d = safe(() => player.defense, null);
         return (typeof d === 'number' && d > 0) ? d : null;
+    }
+    // v6.91.3: total armour in LEVEL units — the same scale the old
+    // `OLIVE + NEGRONI` expression was reaching for, but read off the stat that
+    // hurtPlayer actually subtracts. OLIVE 6 alone gives defense 34.992, which
+    // is exactly 6.0 here, so the units line up with what the call sites expect
+    // and their CEM-tuned dials keep their learned meaning.
+    function armorLevel() {
+        const d = liveDefense();
+        if (d != null) return Math.min(12, d / ARMOR_PER_LEVEL);
+        return (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
     }
     function regenRate() {
         const r = safe(() => player.regenBonus, null);
@@ -4723,6 +4779,10 @@
             huntAudit.runs = (huntAudit.runs || 0) + 1;
             localStorage.setItem(HUNT_AUDIT_KEY, JSON.stringify(huntAudit));
         } catch (e) { }
+        try {
+            markAudit.runs = (markAudit.runs || 0) + 1;
+            localStorage.setItem(MARK_AUDIT_KEY, JSON.stringify(markAudit));
+        } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();
         if (bartenderThisRun) {
@@ -5654,7 +5714,7 @@
                 // (up to -36% at OLIVE 6), so the bot stands and grinds.
                 const gtDay = safe(() => gameTime, 0) || 0;
                 const armorEase = ((t !== 'boss' && !isWall)
-                    ? 1 - 0.06 * Math.min(6, ownedLevels['OLIVE'] || 0) : 1) *
+                    ? 1 - 0.06 * Math.min(6, armorLevel()) : 1) *
                     ((t !== 'boss' && !isWall && gtDay < 1200 && !hellDetected) ? 1.15 : 1);   // DAY: commons are avoided, not absorbed (manual run crowd median 0)
                 out.enemies.push({
                     x: e.x, y: e.y, vx, vy, spd,
@@ -6259,7 +6319,7 @@
         // hold ground. Pat (tank) converts it 1.4x, which is what lets him
         // stand on a passout long enough for the flame cross or the ult to
         // land instead of sliding off the body every time a mob closes.
-        const armorLv = (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
+        const armorLv = armorLevel();   // v6.91.3: player.defense, not the key that reads 1 at the cap
         const armorConf = Math.min(M.armorConfMax,
             armorLv * M.armorConfPer * (charOf().style === 'tank' ? 1.4 : 1));
         const caution = (1 - armorConf * (M.armorCautionShare || 0)) * (ultInvuln ? 0.35 : 1) *
@@ -6376,6 +6436,20 @@
         // v6.89.11: remember this tick's marks so the NEXT tick can still blame
         // one that detonated and removed itself. Positions only — the objects
         // belong to the game and may be recycled.
+        // v6.91.3: book new marks against the SEAT before the snapshot is
+        // overwritten. The seat is recomputed here rather than threaded down
+        // from the corner block below — it needs only the player position and
+        // the field, and duplicating three lines beats reordering the planner.
+        (() => {
+            const gtM = safe(() => gameTime, null);
+            if (typeof gtM !== 'number' || !th.marks.length) return;
+            const fwM = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+            const fhM = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
+            const ins = (CONFIG.deepHell.cornerInset != null) ? CONFIG.deepHell.cornerInset : 0;
+            bookMarks(th.marks, lastMarkSnap, gtM,
+                (p.x < fwM / 2) ? ins : fwM - ins,
+                (p.y < fhM / 2) ? ins : fhM - ins);
+        })();
         lastMarkSnap = th.marks.map(m => ({ x: m.x, y: m.y, r: m.r }));
 
         // v6.89.7 INCOME AUDIT. Both directions of the pool, integrated against
@@ -6430,7 +6504,7 @@
         // keeps farming bosses/passouts/walls through a rush instead of
         // sprinting for a corner.
         const crowdTol = M.crowdedCount +
-            Math.round(((ownedLevels['NEGRONI'] || 0) + (ownedLevels['OLIVE'] || 0)) / 3) +
+            Math.round(armorLevel() / 3) +   // v6.91.3
             ((hellDetected || (typeof G.gameTime === 'number' && G.gameTime > 1200)) ? 4 : 0) +
             // DEEP-HELL CALIBRATION: the manual run's MEDIAN crowd at 200
             // minutes was 44 within 90px (p90 219) at 100% HP — density at
@@ -6786,7 +6860,7 @@
                 (Math.hypot(po.x - p.x, po.y - p.y) - po.r) < M.poEngageRange * 0.5);
         const anchor = flameAnchor || holdoutAnchor || (!hpPanic && hpRatio > 0.7 && !markHere && !projHere && !th.rival && !rainbowRecent && !flight &&
             (!dayPhaseNow || th.near <= 2 + charOf().anchorBias * 2) &&   // day: only anchor on a quiet field (manual run: crowd median 0)
-            ((ownedLevels['OLIVE'] || 0) >= 2 || (ownedLevels['NEGRONI'] || 0) >= 2) &&
+            armorLevel() >= 2 &&   // v6.91.3
             (wallFocus || th.passouts.some(po => !po.contested && Math.hypot(po.x - p.x, po.y - p.y) < 220)));
         // v6.88.2 CORNER ANCHOR — deliberate user strategy in deep hell, and
         // the source says why it works. Boss drop-marks spawn UNIFORMLY at
@@ -6884,9 +6958,37 @@
         // whether the SEAT is safe, not only where the bot is standing.
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
-        const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
-        const cnrX = (p.x < fieldW / 2) ? pr : fieldW - pr;
-        const cnrY = (p.y < fieldH / 2) ? pr : fieldH - pr;
+        // v6.91.3 THE SEAT WAS INSIDE THE MARKS THE WHOLE TIME.
+        //
+        // The corner doctrine's entire justification is "80.9 px from the
+        // nearest possible mark centre against a 70 px reach". That 80.9 is the
+        // distance from the TRUE corner (0,0) to the nearest spawnable mark
+        // centre (52,62) — source-verified spawn box [52,W-52] x [62,H-62].
+        //
+        // The code never sat there. It seated at (p.r, p.r), and the live player
+        // radius is 7.2:
+        //
+        //   seat (0,0)     -> 80.92 px   margin +10.92   IMMUNE
+        //   seat (7.2,7.2) -> 70.78 px   margin  +0.78   a hair
+        //   seat (12,12)   -> 64.03 px   margin  -5.97   INSIDE THE MARK
+        //
+        // and 12 is the fallback whenever `p.r` cannot be read. So the seat was
+        // never the seat the doctrine describes; it was 10 px in, with the whole
+        // claimed margin spent. That is the best available explanation for the
+        // one non-noise number in the last compare() dump: across the 22 runs
+        // where the corner FIRST actually worked (6.90.0 fixed the thrower
+        // regression that had disabled it outright), mark deaths went 19% -> 45%,
+        // z ~ 3.2. Enabling a seat that sits inside every mark that can exist is
+        // exactly what that looks like.
+        //
+        // The planner's own candidate clamp is Math.max(0, Math.min(fw, ...)),
+        // so the centre is allowed at 0. If the GAME clamps to [r, W-r] the bot
+        // simply stops at 7.2 and `parked` still latches (parkRadius 26) — this
+        // costs nothing if it turns out to be unreachable, and buys the entire
+        // claimed margin if it is not.
+        const cornerInset = (CONFIG.deepHell.cornerInset != null) ? CONFIG.deepHell.cornerInset : 0;
+        const cnrX = (p.x < fieldW / 2) ? cornerInset : fieldW - cornerInset;
+        const cnrY = (p.y < fieldH / 2) ? cornerInset : fieldH - cornerInset;
         // v6.89.11 THE CORNER DOES NOT DEFEAT A CHARGE LANE (user: "anchoring
         // contradicting the linebacker boss").
         //
@@ -7895,6 +7997,10 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             // v6.91.0 dormant-boss hunt telemetry
+            // v6.91.3: the seat and the armour reading are now observable — both
+            // were wrong for versions precisely because nothing reported them.
+            seat: { x: +cnrX.toFixed(1), y: +cnrY.toFixed(1) },
+            armorLv: +armorLv.toFixed(2),
             hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
             huntFrozen: !!(huntTarget && huntTarget.frozen),
             huntDmg: (huntMark && typeof huntMark.hp0 === 'number' && typeof huntMark.hp === 'number')
@@ -8912,6 +9018,34 @@
                 huntMark = null;
                 try { localStorage.removeItem(HUNT_AUDIT_KEY); } catch (e) { }
                 return 'hunt audit cleared';
+            };
+            // v6.91.3: pineBot.markAudit() — does the corner actually clear the
+            // marks? `worstMargin` is the closest a mark edge ever came to the
+            // seat; negative means it covered it. `rMax` climbing with depth
+            // would mean the 80.92px geometry lapses and the corner is the wrong
+            // answer to marks at depth.
+            window.pineBot.markAudit = () => {
+                const rows = Object.keys(markAudit.buckets || {}).map(Number).sort((a, b) => a - b).map(k => {
+                    const b = markAudit.buckets[k];
+                    return {
+                        fromMin: Math.round(k / 60), n: b.n,
+                        rAvg: b.n ? +(b.rSum / b.n).toFixed(1) : null,
+                        rMin: b.rMin == null ? null : +b.rMin.toFixed(1),
+                        rMax: b.rMax == null ? null : +b.rMax.toFixed(1),
+                        worstMargin: b.worstMargin == null ? null : +b.worstMargin.toFixed(1),
+                        coveredSeat: b.covers
+                    };
+                });
+                return {
+                    runs: markAudit.runs || 0, buckets: rows,
+                    seatGeometry: 'true corner (0,0) is 80.92px from the nearest spawnable mark centre (52,62); the seat used before 6.91.3 was (p.r,p.r) = 70.78px, and its 12px fallback was 64.03 — inside a 70px mark.',
+                    note: 'worstMargin <= 0 in any bucket means the corner is NOT mark-immune at that depth. rMax rising across buckets means mark radius scales with time, which would retire the corner as the answer to marks.'
+                };
+            };
+            window.pineBot.resetMarkAudit = () => {
+                markAudit = { buckets: {}, runs: 0 };
+                try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }
+                return 'mark audit cleared';
             };
             window.pineBot.resetIncomeAudit = () => {
                 incAudit = { buckets: {}, runs: 0 };

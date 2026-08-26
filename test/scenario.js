@@ -3213,6 +3213,44 @@ if (which === 'deep-park') {
         const noRegen = live(34.992, 0.2);
         test('...nor does the cap without a heal income', () =>
             assert.strictEqual(noRegen.parkOn, false, String(noRegen.parkOn)));
+
+        // v6.91.3 THE SEAT WAS INSIDE THE MARKS. The corner's whole
+        // justification is "80.92px from the nearest spawnable mark centre
+        // (52,62) against a 70px reach" — measured from the TRUE corner (0,0).
+        // The code seated at (p.r, p.r): 70.78px at the live radius 7.2, and
+        // 64.03 at the 12 fallback, which is INSIDE a 70px mark. The claimed
+        // margin was entirely spent before the doctrine ever ran.
+        const onSeat = live(34.992, 2.218);
+        test('the seat is the TRUE corner, outside every mark that can spawn', () => {
+            // player is bottom-right, so the nearest spawnable centre is (488,478)
+            const d = Math.hypot(onSeat.seat.x - (540 - 52), onSeat.seat.y - (540 - 62));
+            assert.ok(d >= 80, JSON.stringify({ seat: onSeat.seat, distToNearestSpawn: +d.toFixed(2) }));
+        });
+        // ...and it actually DRIVES there. From the old seat (532.8,532.8) with
+        // the arrival radius tightened, the heading must still point outward.
+        const savedRadius = pineBot.config.deepHell.parkRadius;
+        pineBot.config.deepHell.parkRadius = 2;
+        global.gameTime = 6000;
+        global.player = { x: 532.8, y: 532.8, r: 7.2, hp: 300, maxHp: 309, speed: 2.375,
+            defense: 34.992, regenBonus: 2.218 };
+        global.dropMarks = []; global.roadLines = []; global.enemies = [];
+        const nudge = T.planMove();
+        pineBot.config.deepHell.parkRadius = savedRadius;
+        test('...and from the OLD seat it keeps walking outward to reach it', () =>
+            assert.ok(nudge.dx > 0.5 && nudge.dy > 0.5,
+                JSON.stringify({ dx: +nudge.dx.toFixed(2), dy: +nudge.dy.toFixed(2) })));
+
+        // v6.91.3 THE PLANNER PLAYED FRIGHTENED AT THE DEFENSE CAP.
+        // armorLv fed armorConf -> caution, crowdTol and the anchor's armour
+        // permission. All four read ownedLevels['OLIVE'], which is 1 at the cap.
+        build({ 'OLIVE': 1, 'WATER': 1, 'SOUTH SIDE': 1, 'NEGRONI': 0 });
+        const armored = live(34.992, 2.218);
+        test('armour is read off player.defense, not the key that reads 1', () =>
+            assert.ok(Math.abs(armored.armorLv - 6) < 0.05,
+                JSON.stringify({ armorLv: armored.armorLv, olive: 1, defense: 34.992 })));
+        const bare = live(0, 2.218);   // defense unreadable -> the ownedLevels fallback
+        test('...with the ownedLevels fallback kept for reads before the game exists', () =>
+            assert.strictEqual(bare.armorLv, 1, String(bare.armorLv)));
     }, 0);
     setTimeout(() => done(), 60);
 }
