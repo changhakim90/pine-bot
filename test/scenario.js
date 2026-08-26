@@ -2929,6 +2929,30 @@ if (which === 'panic-anchor') {
                 JSON.stringify({ corner: missed.cornerAnchor, lineOnCorner: missed.lineOnCorner })));
         global.roadLines = [];
 
+        // v6.89.12 — THE GATE KEY MOVED FROM A CLOCK TO PHYSICS. It was
+        // `hellDetected && gameTime > 2400`, but the measured median run is
+        // 1325 s, so most runs never reached it. `outrunnable` is the same test
+        // that governs the kite and it turns false around minute ELEVEN.
+        const early = scene(1200, 60);      // twenty minutes, well under the old gate
+        test('a fast pack is un-outrunnable long before the old 2400s gate', () =>
+            assert.strictEqual(early.outrunnable, false,
+                JSON.stringify({ outrun: early.outrunnable, gt: 1200 })));
+        // WIRING, labelled as such: that the dash gate reads the physics key and
+        // no longer reads the decaying accumulator. `dangerAccum` adds 0.25 per
+        // overlapping tick and decays x0.96, so `inBlastZone` answers "was there
+        // a mark on me recently" and stayed true ~35 ticks after the hazard
+        // left, short-circuiting the suppression entirely.
+        test('the dash gate keys on outrunnable, and escaping is instantaneous', () => {
+            const src = require('fs').readFileSync(SCRIPT, 'utf8');
+            const i = src.indexOf('const escaping = ');
+            assert.ok(i > 0, 'the escaping term is gone');
+            const block = src.slice(i, i + 400);
+            assert.ok(!/inBlastZone/.test(block), 'escaping still reads the decaying accumulator');
+            assert.ok(/plan\.lineHere/.test(block), 'escaping does not test lanes instantaneously');
+            assert.ok(/const cornered = plan\.outrunnable === false/.test(block),
+                'the panic gate no longer keys on outrunnable');
+        });
+
         // NO SHALLOW-DASH ASSERTION, and the reason is recorded rather than
         // fudged. Two drafts tried to prove "shallow hell still dashes on the
         // same scene" and both measured ZERO dashes in the shallow arm — not
@@ -3059,4 +3083,87 @@ if (which === 'mark-ghost') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.90.0 — DEEP PARK. The measured A/B: bot ON gives a 22-minute median; bot
+// OFF, parked in a corner at 258 enemies, went 309/309 -> 306/309 across 155 s
+// and was still going at 125 minutes. Past the point where armor and regen make
+// the corner survivable, the correct movement policy is to walk there and stop.
+if (which === 'deep-park') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 6000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();
+        const T = pineBot.test;
+        const owned = {};
+        const build = (o) => { for (const k in owned) delete owned[k]; Object.assign(owned, o); T.setOwned(owned); };
+        // A field that would normally have the planner fleeing hard.
+        const field = (gt, x, y) => {
+            global.gameTime = gt;
+            global.player = { x, y, r: 7.2, hp: 300, maxHp: 309, speed: 2.375 };
+            global.dropMarks = []; global.roadLines = [];
+            global.enemies = Array.from({ length: 12 }, (_, i) => ({
+                type: 'drunk', hp: 1e6, r: 18, speed: 5, moving: true,
+                x: x + 90 * Math.cos(i * Math.PI / 6), y: y + 90 * Math.sin(i * Math.PI / 6)
+            }));
+            return T.planMove();
+        };
+        // WITHOUT the defensive build, nothing changes — parking a fragile bot
+        // in a corner is how you die there instead of somewhere else.
+        build({ 'OLIVE': 3, 'WATER': 6 });
+        const thin = field(6000, 270, 270);
+        test('a thin defensive build does NOT park', () =>
+            assert.strictEqual(thin.parkOn, false,
+                JSON.stringify({ park: thin.parkOn, olive: 3 })));
+        // WITH armor at the cap and a regen source, park engages.
+        build({ 'OLIVE': 6, 'WATER': 6 });
+        const away = field(6000, 270, 270);
+        test('armor at cap plus regen engages park', () =>
+            assert.strictEqual(away.parkOn, true, String(away.parkOn)));
+        test('...and away from the corner it walks straight there', () => {
+            // bottom-right corner from centre: both components positive
+            assert.ok(away.dx > 0.5 && away.dy > 0.5,
+                JSON.stringify({ dx: +away.dx.toFixed(2), dy: +away.dy.toFixed(2) }));
+        });
+        test('...not parked yet, because it has not arrived', () =>
+            assert.strictEqual(away.parked, false, String(away.parked)));
+        // ON the corner seat: STOP. This is the whole doctrine.
+        const seated = field(6000, 533, 533);
+        test('on the corner seat it stops moving entirely', () =>
+            assert.ok(seated.parked === true && seated.dx === 0 && seated.dy === 0,
+                JSON.stringify({ parked: seated.parked, dx: seated.dx, dy: seated.dy })));
+        // A MARK overlapping hands control straight back to the planner — the
+        // corner is mark-immune in principle, so if one IS on us, move.
+        global.dropMarks = [{ x: 533, y: 533, r: 58, dmg: 72, tele: 0.6, at: 6000.3 }];
+        const marked = T.planMove();
+        test('a mark on the seat releases the park', () =>
+            assert.strictEqual(marked.parkOn, false,
+                JSON.stringify({ park: marked.parkOn, markHere: marked.markHere })));
+        global.dropMarks = [];
+        // A CHARGE LANE likewise: an unbounded ray, no corner defeats it.
+        global.roadLines = [{ x: 533, y: 533, ang: Math.PI / 4, armed: true, dmg: 50 }];
+        const laned = T.planMove();
+        test('a charge lane on the seat releases the park', () =>
+            assert.strictEqual(laned.parkOn, false,
+                JSON.stringify({ park: laned.parkOn, lineOnCorner: laned.lineOnCorner })));
+        global.roadLines = [];
+        // Too early: the build can be complete before hell has gone anywhere.
+        const early = field(900, 533, 533);
+        test('park never engages before parkFromS', () =>
+            assert.strictEqual(early.parkOn, false, String(early.parkOn)));
+        // v6.89.13 REGRESSION GUARD. A THROWER in its vomit windup pushes a
+        // SYNTHETIC line ENDING at the player, so lineCost(l, p.x, p.y) is a
+        // zero-distance hit and returns 1 — which made lineOnCorner permanently
+        // true and disabled the corner outright. Live probe: lineOnCorner true
+        // with roadLines length 0. Only real charge lanes (numeric `ang`) count.
+        global.gameTime = 6000;
+        global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375 };
+        global.roadLines = [];
+        global.enemies = [{ type: 'thrower', hp: 1e6, r: 14, speed: 3, x: 455, y: 455, vomitUntil: 1e9 }];
+        const thrower = T.planMove();
+        test('a thrower windup does NOT veto the corner', () =>
+            assert.ok(thrower.lineOnCorner === false && thrower.parkOn === true,
+                JSON.stringify({ lineOnCorner: thrower.lineOnCorner, park: thrower.parkOn })));
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

@@ -1420,8 +1420,28 @@
         // is precisely the window in which not to commit to a seat that is about
         // to become a kill zone. Breaking the corner hands the heading back to
         // lineCost's gradient, which drives the perpendicular step.
-        const laneCovers = (x, y) => th.lines.some(l => lineCost(l, x, y) > 0.15);
-        const lineOnCorner = laneCovers(cnrX, cnrY) || laneCovers(p.x, p.y);
+        //
+        // v6.89.13 REGRESSION FIX — THE CORNER WAS PERMANENTLY DISABLED.
+        // A live probe at gt 7622 returned `lineOnCorner: true` with
+        // `lines: 0` — zero roadLines in the game, yet the veto was firing.
+        //
+        // `th.lines` is not only roadLines. A THROWER in its vomit windup
+        // pushes a SYNTHETIC segment `{x1: e.x, y1: e.y, x2: p.x, y2: p.y}`
+        // (see the gather above) — a firing line drawn from the thrower TO THE
+        // PLAYER, so it can be pre-dodged. That segment ENDS at the player's
+        // exact position, so `lineCost(l, p.x, p.y)` is a zero-distance hit and
+        // returns 1 every single time. Any thrower winding up anywhere on the
+        // field therefore made `lineHere` true, which made `lineOnCorner` true,
+        // which switched the corner off — and at depth there is always a
+        // thrower winding up.
+        //
+        // Only REAL charge lanes may veto the corner. The source-verified
+        // roadLine shape carries a numeric `ang`; the synthetic thrower line
+        // does not, and it is already handled by laneUrgent and the flee terms.
+        const laneCovers = (x, y) => th.lines.some(l =>
+            l && typeof l.ang === 'number' && lineCost(l, x, y) > 0.15);
+        const lineHere = laneCovers(p.x, p.y);
+        const lineOnCorner = laneCovers(cnrX, cnrY) || lineHere;
         const cornerOn = !markHere && !lineOnCorner && !bossHunt &&
             (deepCorner || (!hpPanic && !flight)) &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
@@ -2179,6 +2199,38 @@
         let vx, vy;
         if (mag > 0.02) { vx = smoothVec.x / mag; vy = smoothVec.y / mag; }
         else { vx = best.dx; vy = best.dy; }   // mid-reversal: commit to the new heading
+
+        // ================== v6.90.0 DEEP PARK ==================
+        // The measured A/B, not a model. Bot ON: median run 22 minutes. Bot
+        // OFF, player parked in a corner at 258 enemies: 309/309 -> 306/309
+        // across 155 seconds, still going at 125 minutes. A player doing
+        // NOTHING outlives the bot by a factor of five.
+        //
+        // Sixty versions have tuned kiting, standoff, escape, flee, loot pulls
+        // and boss engagement. At depth the correct value of all of them is
+        // zero: they are what carries the bot out of the only stable position
+        // on the board. This does not re-weight them — it overrides them, which
+        // is the only faithful implementation of "what the stopped bot did".
+        //
+        // Walk to the corner; on arrival, STOP. Two exceptions, both handed
+        // straight back to the normal planner:
+        //   markHere      — a drop-mark overlapping us is the one thing worth
+        //                   moving for, and the corner is otherwise geometrically
+        //                   mark-immune (80.9 px against a 70 px reach).
+        //   lineOnCorner  — a charge lane is an unbounded RAY; no point in the
+        //                   arena is outside it, so the corner cannot defeat it.
+        const DHp = CONFIG.deepHell;
+        const parkArmor = (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
+        const parkRegen = (ownedLevels['WATER'] || 0) >= 4 || (ownedLevels['SIMPLE SYRUP'] || 0) >= 2;
+        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen &&
+            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1800) &&
+            !markHere && !lineOnCorner;
+        let parked = false;
+        if (parkOn) {
+            const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
+            if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
+            else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
+        }
         lastDir = { x: vx, y: vy };
 
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
@@ -2194,12 +2246,12 @@
             : true;
 
         return {
-            dx: vx, dy: vy, cornerward, markHere,
+            dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, lineHere, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
@@ -2226,6 +2278,6 @@
             // on screen said so — the only way to notice was to read the config.
             // A posture that cannot be observed cannot be tuned, so kite /
             // anchor / corner are reported live alongside the numbers.
-            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${parkOn ? (parked ? 'PARKED' : 'to-corner') : cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
         };
     }

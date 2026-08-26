@@ -624,6 +624,27 @@
             // off exactly when it was needed — the corner has effectively never
             // engaged at depth outside a time stop. Shallow hell keeps the old
             // vetoes, where fleeing still opens a gap.
+            // v6.90.0 DEEP PARK. Measured directly, not modelled: with the bot
+            // STOPPED and the player parked in a corner at 258 enemies, HP went
+            // 309/309 -> 306/309 across 155 seconds. Three points. The mitigation
+            // model predicted ~2400 over that window and was wrong by three
+            // orders of magnitude, because it assumed contact runs at the
+            // 38-frame invuln ceiling; in a corner the wall removes most of the
+            // approach arc and the auto-attack clears the rest.
+            //
+            // Against that, the bot's own median run is 22 minutes. A player
+            // doing NOTHING outlives it by a factor of five. So past the point
+            // where the defensive build makes the corner survivable, the correct
+            // movement policy is to walk to the corner and stop.
+            //
+            // Gated on the BUILD rather than a clock, which sequences itself:
+            // farm until armor and regen are in, then park. Nothing is given up
+            // by parking at that point — at 125 minutes everything was Lv6 and
+            // there was nothing left to buy.
+            park: true,             // live kill switch: pineBot.config.deepHell.park = false
+            parkFromS: 1800,        // never before 30 min, whatever the build says
+            parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
+            parkRadius: 26,         // "arrived": stop moving inside this radius
             deepCornerFromS: 2400,
             // v6.89.8 (user): "ultimate every time it's available, for that
             // invincibility and chance to kill a potential mob — for the item

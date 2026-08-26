@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.11
+// @version      6.90.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.11';
+    const SCRIPT_VERSION = '6.90.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -626,6 +626,27 @@
             // off exactly when it was needed — the corner has effectively never
             // engaged at depth outside a time stop. Shallow hell keeps the old
             // vetoes, where fleeing still opens a gap.
+            // v6.90.0 DEEP PARK. Measured directly, not modelled: with the bot
+            // STOPPED and the player parked in a corner at 258 enemies, HP went
+            // 309/309 -> 306/309 across 155 seconds. Three points. The mitigation
+            // model predicted ~2400 over that window and was wrong by three
+            // orders of magnitude, because it assumed contact runs at the
+            // 38-frame invuln ceiling; in a corner the wall removes most of the
+            // approach arc and the auto-attack clears the rest.
+            //
+            // Against that, the bot's own median run is 22 minutes. A player
+            // doing NOTHING outlives it by a factor of five. So past the point
+            // where the defensive build makes the corner survivable, the correct
+            // movement policy is to walk to the corner and stop.
+            //
+            // Gated on the BUILD rather than a clock, which sequences itself:
+            // farm until armor and regen are in, then park. Nothing is given up
+            // by parking at that point — at 125 minutes everything was Lv6 and
+            // there was nothing left to buy.
+            park: true,             // live kill switch: pineBot.config.deepHell.park = false
+            parkFromS: 1800,        // never before 30 min, whatever the build says
+            parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
+            parkRadius: 26,         // "arrived": stop moving inside this radius
             deepCornerFromS: 2400,
             // v6.89.8 (user): "ultimate every time it's available, for that
             // invincibility and chance to kill a potential mob — for the item
@@ -6706,8 +6727,28 @@
         // is precisely the window in which not to commit to a seat that is about
         // to become a kill zone. Breaking the corner hands the heading back to
         // lineCost's gradient, which drives the perpendicular step.
-        const laneCovers = (x, y) => th.lines.some(l => lineCost(l, x, y) > 0.15);
-        const lineOnCorner = laneCovers(cnrX, cnrY) || laneCovers(p.x, p.y);
+        //
+        // v6.89.13 REGRESSION FIX — THE CORNER WAS PERMANENTLY DISABLED.
+        // A live probe at gt 7622 returned `lineOnCorner: true` with
+        // `lines: 0` — zero roadLines in the game, yet the veto was firing.
+        //
+        // `th.lines` is not only roadLines. A THROWER in its vomit windup
+        // pushes a SYNTHETIC segment `{x1: e.x, y1: e.y, x2: p.x, y2: p.y}`
+        // (see the gather above) — a firing line drawn from the thrower TO THE
+        // PLAYER, so it can be pre-dodged. That segment ENDS at the player's
+        // exact position, so `lineCost(l, p.x, p.y)` is a zero-distance hit and
+        // returns 1 every single time. Any thrower winding up anywhere on the
+        // field therefore made `lineHere` true, which made `lineOnCorner` true,
+        // which switched the corner off — and at depth there is always a
+        // thrower winding up.
+        //
+        // Only REAL charge lanes may veto the corner. The source-verified
+        // roadLine shape carries a numeric `ang`; the synthetic thrower line
+        // does not, and it is already handled by laneUrgent and the flee terms.
+        const laneCovers = (x, y) => th.lines.some(l =>
+            l && typeof l.ang === 'number' && lineCost(l, x, y) > 0.15);
+        const lineHere = laneCovers(p.x, p.y);
+        const lineOnCorner = laneCovers(cnrX, cnrY) || lineHere;
         const cornerOn = !markHere && !lineOnCorner && !bossHunt &&
             (deepCorner || (!hpPanic && !flight)) &&
             (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
@@ -7465,6 +7506,38 @@
         let vx, vy;
         if (mag > 0.02) { vx = smoothVec.x / mag; vy = smoothVec.y / mag; }
         else { vx = best.dx; vy = best.dy; }   // mid-reversal: commit to the new heading
+
+        // ================== v6.90.0 DEEP PARK ==================
+        // The measured A/B, not a model. Bot ON: median run 22 minutes. Bot
+        // OFF, player parked in a corner at 258 enemies: 309/309 -> 306/309
+        // across 155 seconds, still going at 125 minutes. A player doing
+        // NOTHING outlives the bot by a factor of five.
+        //
+        // Sixty versions have tuned kiting, standoff, escape, flee, loot pulls
+        // and boss engagement. At depth the correct value of all of them is
+        // zero: they are what carries the bot out of the only stable position
+        // on the board. This does not re-weight them — it overrides them, which
+        // is the only faithful implementation of "what the stopped bot did".
+        //
+        // Walk to the corner; on arrival, STOP. Two exceptions, both handed
+        // straight back to the normal planner:
+        //   markHere      — a drop-mark overlapping us is the one thing worth
+        //                   moving for, and the corner is otherwise geometrically
+        //                   mark-immune (80.9 px against a 70 px reach).
+        //   lineOnCorner  — a charge lane is an unbounded RAY; no point in the
+        //                   arena is outside it, so the corner cannot defeat it.
+        const DHp = CONFIG.deepHell;
+        const parkArmor = (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
+        const parkRegen = (ownedLevels['WATER'] || 0) >= 4 || (ownedLevels['SIMPLE SYRUP'] || 0) >= 2;
+        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen &&
+            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1800) &&
+            !markHere && !lineOnCorner;
+        let parked = false;
+        if (parkOn) {
+            const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
+            if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
+            else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
+        }
         lastDir = { x: vx, y: vy };
 
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
@@ -7480,12 +7553,12 @@
             : true;
 
         return {
-            dx: vx, dy: vy, cornerward, markHere,
+            dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             danger: best.danger, gain: best.gain, hpRatio, panic, hpPanic, slowMul,
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, lineHere, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,
@@ -7512,7 +7585,7 @@
             // on screen said so — the only way to notice was to read the config.
             // A posture that cannot be observed cannot be tuned, so kite /
             // anchor / corner are reported live alongside the numbers.
-            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
+            diag: `hp ${(hpRatio * 100).toFixed(0)}%${shieldMax ? '(+' + Math.round(shield) + 'sh)' : ''} | ${th.enemies.length}e ${th.projectiles.length}p ${th.marks.length}m ${loot.length}L | danger ${best.danger.toFixed(1)} | ${th.rival ? 'CHASE! ' : ''}${panic ? 'PANIC' : 'normal'}${depth > 0 ? ' | deep ' + Math.round(depth * 100) + '%' : ''} | ${parkOn ? (parked ? 'PARKED' : 'to-corner') : cornerOn ? 'CORNER' : (anchor ? 'ANCHOR' : (kite ? (kiteSpacing ? 'space' : 'kite') : 'free'))}${kiteSpacing && (cornerOn || anchor) ? '+space' : ''}`
         };
     }
 
@@ -7576,9 +7649,34 @@
         // when the heading is a flee vector, so it is precisely when amplifying
         // it does the most damage. Escaping a blast or a mark still overrides —
         // that is the one hazard class a position change actually defeats.
-        const escaping = inBlastZone || blastImminent || plan.markHere === true;
-        const deepPanic = deepHell && (plan.panic === true || plan.hpPanic === true);
-        const cornerHeld = deepHell && plan.cornerAnchor === true;
+        // v6.89.12 THE PANIC GATE WAS NOT BITING (user: "still dashing away
+        // instead of anchoring when in panic mode"). Two independent leaks, and
+        // either alone was enough to defeat it.
+        //
+        // 1. THE DEPTH KEY WAS A 40-MINUTE CLOCK. `deepHell` is
+        //    `hellDetected && gameTime > 2400`, but the measured median run is
+        //    1325 s — twenty-two minutes. The MAJORITY of runs, and therefore of
+        //    deaths, never reached the gate at all.
+        //
+        //    The right key is not a clock, it is the same physics that governs
+        //    the kite: a dash is a 0.16 s movement burst with no i-frames, so if
+        //    the pack cannot be outrun, a burst cannot open a gap either.
+        //    `outrunnable` measures exactly that, live, per frame — and per the
+        //    source speed curve it turns false around minute eleven, not forty.
+        //
+        // 2. `inBlastZone` IS A DECAYING ACCUMULATOR, NOT A HAZARD TEST.
+        //    `dangerAccum` adds 0.25 per overlapping tick and decays x0.96, so
+        //    it sits near 6.25 while a mark is on us and takes ~35 ticks to fall
+        //    back under the 1.5 threshold. It answers "was there a mark on me
+        //    recently", which kept `escaping` true — and short-circuited the
+        //    whole suppression — long after the hazard had gone.
+        //
+        // Escaping now asks the instantaneous questions only: am I standing in
+        // a mark, in a lane, or under a blast that is about to land.
+        const escaping = blastImminent || plan.markHere === true || plan.lineHere === true;
+        const cornered = plan.outrunnable === false;
+        const deepPanic = cornered && (plan.panic === true || plan.hpPanic === true);
+        const cornerHeld = plan.cornerAnchor === true;
         const dashProductive = escaping ||
             (!deepPanic && (!cornerHeld || plan.cornerward === true));
         if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&

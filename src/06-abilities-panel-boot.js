@@ -58,9 +58,34 @@
         // when the heading is a flee vector, so it is precisely when amplifying
         // it does the most damage. Escaping a blast or a mark still overrides —
         // that is the one hazard class a position change actually defeats.
-        const escaping = inBlastZone || blastImminent || plan.markHere === true;
-        const deepPanic = deepHell && (plan.panic === true || plan.hpPanic === true);
-        const cornerHeld = deepHell && plan.cornerAnchor === true;
+        // v6.89.12 THE PANIC GATE WAS NOT BITING (user: "still dashing away
+        // instead of anchoring when in panic mode"). Two independent leaks, and
+        // either alone was enough to defeat it.
+        //
+        // 1. THE DEPTH KEY WAS A 40-MINUTE CLOCK. `deepHell` is
+        //    `hellDetected && gameTime > 2400`, but the measured median run is
+        //    1325 s — twenty-two minutes. The MAJORITY of runs, and therefore of
+        //    deaths, never reached the gate at all.
+        //
+        //    The right key is not a clock, it is the same physics that governs
+        //    the kite: a dash is a 0.16 s movement burst with no i-frames, so if
+        //    the pack cannot be outrun, a burst cannot open a gap either.
+        //    `outrunnable` measures exactly that, live, per frame — and per the
+        //    source speed curve it turns false around minute eleven, not forty.
+        //
+        // 2. `inBlastZone` IS A DECAYING ACCUMULATOR, NOT A HAZARD TEST.
+        //    `dangerAccum` adds 0.25 per overlapping tick and decays x0.96, so
+        //    it sits near 6.25 while a mark is on us and takes ~35 ticks to fall
+        //    back under the 1.5 threshold. It answers "was there a mark on me
+        //    recently", which kept `escaping` true — and short-circuited the
+        //    whole suppression — long after the hazard had gone.
+        //
+        // Escaping now asks the instantaneous questions only: am I standing in
+        // a mark, in a lane, or under a blast that is about to land.
+        const escaping = blastImminent || plan.markHere === true || plan.lineHere === true;
+        const cornered = plan.outrunnable === false;
+        const deepPanic = cornered && (plan.panic === true || plan.hpPanic === true);
+        const cornerHeld = plan.cornerAnchor === true;
         const dashProductive = escaping ||
             (!deepPanic && (!cornerHeld || plan.cornerward === true));
         if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
