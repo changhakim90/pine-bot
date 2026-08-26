@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.90.0
+// @version      6.90.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.90.0';
+    const SCRIPT_VERSION = '6.90.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -644,7 +644,23 @@
             // by parking at that point — at 125 minutes everything was Lv6 and
             // there was nothing left to buy.
             park: true,             // live kill switch: pineBot.config.deepHell.park = false
-            parkFromS: 1800,        // never before 30 min, whatever the build says
+            // v6.90.1: was 1800 (30 min), which put park PAST the phase that
+            // actually kills runs. incomeAudit over 207 runs:
+            //
+            //   min 20  lossPerSec 5.96   dtS 46841   <- the worst in the profile
+            //   min 70  lossPerSec 0.77
+            //   min 160 lossPerSec 9.99   (and gainPerSec 9.41 — balanced)
+            //
+            // Damage does NOT track the 30x enemy speed curve. The killing zone
+            // is HELL ENTRY, and `firstNegativeMin` is 20 — which is also the
+            // measured median run length. Park has to cover it or it cannot
+            // touch the median at all.
+            //
+            // 5.96/s divided by the 9.8 per-hit floor is ~0.61 hits/s at entry
+            // against ~0.08 at 70 minutes: the bot takes EIGHT TIMES the contact
+            // at hell entry, because that is where it is running around in the
+            // open with a surge on it instead of seated.
+            parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
             parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
             parkRadius: 26,         // "arrived": stop moving inside this radius
             deepCornerFromS: 2400,
@@ -653,7 +669,9 @@
             // drops." Past this depth every crowd/HP/harvest gate on the ult is
             // bypassed and it fires on availability. The retry gate is short
             // because callGame is a no-op while the game's own cooldown runs.
-            ultAlwaysFromS: 2400,
+            // v6.90.1: was 2400. The ult's invulnerability is worth most in the
+            // phase with the highest loss rate, and that is hell entry, not depth.
+            ultAlwaysFromS: 1200,
             ultAlwaysGateMs: 250,
             // v6.89.7: the spacing kite may never claim more than this SHARE of
             // the corner's own weight. Not a style preference — movement.kitePull
@@ -7529,8 +7547,15 @@
         const DHp = CONFIG.deepHell;
         const parkArmor = (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
         const parkRegen = (ownedLevels['WATER'] || 0) >= 4 || (ownedLevels['SIMPLE SYRUP'] || 0) >= 2;
-        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen &&
-            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1800) &&
+        // v6.90.1 adds the OFFENSIVE half of the equilibrium. A parked player
+        // survives because two things are true at once: armor and regen absorb
+        // what arrives, AND the auto-attack plus the SOUTH SIDE burn clear the
+        // swarm that gathers on the seat. With only the first half the bodies
+        // accumulate and the seat stops being safe — which is the real risk of
+        // parking early, when the offensive build is still thin.
+        const parkClear = zoner;   // SOUTH SIDE owned, or its super made
+        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
+            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner;
         let parked = false;
         if (parkOn) {

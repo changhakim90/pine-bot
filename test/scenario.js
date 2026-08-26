@@ -3108,13 +3108,23 @@ if (which === 'deep-park') {
         };
         // WITHOUT the defensive build, nothing changes — parking a fragile bot
         // in a corner is how you die there instead of somewhere else.
-        build({ 'OLIVE': 3, 'WATER': 6 });
+        build({ 'OLIVE': 3, 'WATER': 6, 'SOUTH SIDE': 3 });
         const thin = field(6000, 270, 270);
         test('a thin defensive build does NOT park', () =>
             assert.strictEqual(thin.parkOn, false,
                 JSON.stringify({ park: thin.parkOn, olive: 3 })));
         // WITH armor at the cap and a regen source, park engages.
-        build({ 'OLIVE': 6, 'WATER': 6 });
+        // v6.90.1: armor and regen alone are NOT enough. A parked seat survives
+        // because the swarm gathering on it is also being CLEARED — SOUTH SIDE's
+        // burn plus the auto-attack. Without that half the bodies accumulate.
+        // setOwned MERGES into the module's ownedLevels, so dropping a key needs
+        // an explicit 0 — the first draft of this assertion passed with SOUTH
+        // SIDE still set from the build above and proved nothing.
+        build({ 'OLIVE': 6, 'WATER': 6, 'SOUTH SIDE': 0 });
+        const noClear = field(6000, 270, 270);
+        test('armor and regen without SOUTH SIDE do NOT park', () =>
+            assert.strictEqual(noClear.parkOn, false, String(noClear.parkOn)));
+        build({ 'OLIVE': 6, 'WATER': 6, 'SOUTH SIDE': 3 });
         const away = field(6000, 270, 270);
         test('armor at cap plus regen engages park', () =>
             assert.strictEqual(away.parkOn, true, String(away.parkOn)));
@@ -3145,10 +3155,20 @@ if (which === 'deep-park') {
             assert.strictEqual(laned.parkOn, false,
                 JSON.stringify({ park: laned.parkOn, lineOnCorner: laned.lineOnCorner })));
         global.roadLines = [];
-        // Too early: the build can be complete before hell has gone anywhere.
-        const early = field(900, 533, 533);
-        test('park never engages before parkFromS', () =>
-            assert.strictEqual(early.parkOn, false, String(early.parkOn)));
+        // v6.90.1 THE KILLING ZONE IS HELL ENTRY. incomeAudit over 207 runs put
+        // lossPerSec at 5.96 in the minute-20 bucket — the worst in the whole
+        // profile, and 8x the 70-minute figure — with firstNegativeMin at 20,
+        // which is also the measured median run length. Park at 1800 sat PAST
+        // that entirely and could not touch the median.
+        const entry = field(1300, 533, 533);
+        test('park covers HELL ENTRY, the phase that actually kills runs', () =>
+            assert.ok(entry.parkOn === true && entry.parked === true,
+                JSON.stringify({ park: entry.parkOn, parked: entry.parked, gt: 1300 })));
+        // ...but not the day, where fleeing still opens a gap and the roster is
+        // still being assembled from things that must be walked to.
+        const day = field(900, 533, 533);
+        test('park never engages before hell entry', () =>
+            assert.strictEqual(day.parkOn, false, String(day.parkOn)));
         // v6.89.13 REGRESSION GUARD. A THROWER in its vomit windup pushes a
         // SYNTHETIC line ENDING at the player, so lineCost(l, p.x, p.y) is a
         // zero-distance hit and returns 1 — which made lineOnCorner permanently
@@ -3157,6 +3177,7 @@ if (which === 'deep-park') {
         global.gameTime = 6000;
         global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375 };
         global.roadLines = [];
+        build({ 'OLIVE': 6, 'WATER': 6, 'SOUTH SIDE': 3 });
         global.enemies = [{ type: 'thrower', hp: 1e6, r: 14, speed: 3, x: 455, y: 455, vomitUntil: 1e9 }];
         const thrower = T.planMove();
         test('a thrower windup does NOT veto the corner', () =>

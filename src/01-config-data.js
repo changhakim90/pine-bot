@@ -642,7 +642,23 @@
             // by parking at that point — at 125 minutes everything was Lv6 and
             // there was nothing left to buy.
             park: true,             // live kill switch: pineBot.config.deepHell.park = false
-            parkFromS: 1800,        // never before 30 min, whatever the build says
+            // v6.90.1: was 1800 (30 min), which put park PAST the phase that
+            // actually kills runs. incomeAudit over 207 runs:
+            //
+            //   min 20  lossPerSec 5.96   dtS 46841   <- the worst in the profile
+            //   min 70  lossPerSec 0.77
+            //   min 160 lossPerSec 9.99   (and gainPerSec 9.41 — balanced)
+            //
+            // Damage does NOT track the 30x enemy speed curve. The killing zone
+            // is HELL ENTRY, and `firstNegativeMin` is 20 — which is also the
+            // measured median run length. Park has to cover it or it cannot
+            // touch the median at all.
+            //
+            // 5.96/s divided by the 9.8 per-hit floor is ~0.61 hits/s at entry
+            // against ~0.08 at 70 minutes: the bot takes EIGHT TIMES the contact
+            // at hell entry, because that is where it is running around in the
+            // open with a surge on it instead of seated.
+            parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
             parkOliveLv: 6,         // defense = 5.832 x OLIVE, and OLIVE caps at 6
             parkRadius: 26,         // "arrived": stop moving inside this radius
             deepCornerFromS: 2400,
@@ -651,7 +667,9 @@
             // drops." Past this depth every crowd/HP/harvest gate on the ult is
             // bypassed and it fires on availability. The retry gate is short
             // because callGame is a no-op while the game's own cooldown runs.
-            ultAlwaysFromS: 2400,
+            // v6.90.1: was 2400. The ult's invulnerability is worth most in the
+            // phase with the highest loss rate, and that is hell entry, not depth.
+            ultAlwaysFromS: 1200,
             ultAlwaysGateMs: 250,
             // v6.89.7: the spacing kite may never claim more than this SHARE of
             // the corner's own weight. Not a style preference — movement.kitePull

@@ -2222,8 +2222,15 @@
         const DHp = CONFIG.deepHell;
         const parkArmor = (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
         const parkRegen = (ownedLevels['WATER'] || 0) >= 4 || (ownedLevels['SIMPLE SYRUP'] || 0) >= 2;
-        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen &&
-            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1800) &&
+        // v6.90.1 adds the OFFENSIVE half of the equilibrium. A parked player
+        // survives because two things are true at once: armor and regen absorb
+        // what arrives, AND the auto-attack plus the SOUTH SIDE burn clear the
+        // swarm that gathers on the seat. With only the first half the bodies
+        // accumulate and the seat stops being safe — which is the real risk of
+        // parking early, when the offensive build is still thin.
+        const parkClear = zoner;   // SOUTH SIDE owned, or its super made
+        const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
+            gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner;
         let parked = false;
         if (parkOn) {
