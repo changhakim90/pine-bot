@@ -193,6 +193,13 @@
             const spec = TUNABLE[k];
             const range = spec.max - spec.min;
             if (!isFinite(d.cem.mean[k])) d.cem.mean[k] = DEFAULT_PARAMS[k];
+            // v6.93.0: CLAMP THE STORED MEAN INTO THE CURRENT BOX. Only sigma
+            // was re-floored here, so narrowing a bound had no effect on a
+            // live store — the mean stayed outside it and every sample was
+            // drawn around an out-of-range centre. That is why the gen-36
+            // runaway (six dims pinned at their maxima) survived every
+            // version bump. Widening still behaves exactly as before.
+            d.cem.mean[k] = Math.min(spec.max, Math.max(spec.min, d.cem.mean[k]));
             if (!isFinite(d.cem.pc[k])) d.cem.pc[k] = 0;
             if (!isFinite(d.cem.sigma[k])) d.cem.sigma[k] = range * CONFIG.learning.sigmaInit;
             // When bounds widen between versions, old converged sigmas are too

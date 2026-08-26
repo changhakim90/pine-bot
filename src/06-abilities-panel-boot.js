@@ -826,6 +826,9 @@
                     chooseRoster, rosterUcb,
                     roadmap: () => ({ cocktails: PLAN_COCKTAILS.slice(), ingredients: PLAN_INGREDIENTS.slice() }),
                     computeRoadmap, superKey: c => SUPER_KEY_INGREDIENT[c],
+                    // v6.93.0: the CEM search box, so `runaway-guard` can test
+                    // the SPACE rather than only the optimiser's position in it.
+                    tunable: () => JSON.parse(JSON.stringify(TUNABLE)),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,

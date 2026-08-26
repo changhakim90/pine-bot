@@ -3732,7 +3732,60 @@ if (which === 'freeze-slot') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.93.0 — THE RUNAWAY GUARD. Written from a LIVE CEM read at gen 36, where
+// six movement dimensions sat pinned or within 3% of their maxima, all in the
+// caution direction, and 6.92.3 measured median 601 s / hellRate 0.05 /
+// 9-of-20 `line` deaths as a result. The box, not the optimiser, is the thing
+// under test here: a search space that permits a runaway will eventually
+// contain one.
+if (which === 'runaway-guard') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 500 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const TUN = T.tunable ? T.tunable() : null;
+    const C = pineBot.config;
+    const get = k => k.split('.').reduce((o, x) => o && o[x], C);
+
+    if (!TUN) { test('TUNABLE is reachable from the test surface', () => assert.ok(false, 'no accessor')); done(); }
+
+    // EVERY box must contain its own default. A default outside its box is
+    // silently clamped on load, so the documented value would never be played.
+    test('every tunable box contains its default', () => {
+        for (const k of Object.keys(TUN)) {
+            const d = get(k), spec = TUN[k];
+            assert.ok(typeof d === 'number', k + ' has no CONFIG default');
+            assert.ok(d >= spec.min && d <= spec.max,
+                k + ' default ' + d + ' outside [' + spec.min + ',' + spec.max + ']');
+        }
+    });
+
+    // THE SIX THAT RAN AWAY, with the values they were actually pinned at.
+    // Each max must now sit BELOW the measured runaway, so the clamp pulls the
+    // live mean back instead of leaving it parked at the ceiling.
+    const RAN_AWAY = {
+        'movement.standoff': 238.29, 'movement.standoffPull': 2.5,
+        'movement.panicHp': 0.7335, 'movement.lookaheadMs': 416.28,
+        'threat.enemyWeight': 3.305, 'threat.enemyRange': 318.81,
+        'threat.projWeight': 7.694, 'threat.projLookaheadMs': 1066.4
+    };
+    for (const k of Object.keys(RAN_AWAY))
+        test('the box no longer reaches the gen-36 runaway: ' + k, () =>
+            assert.ok(TUN[k].max < RAN_AWAY[k],
+                k + ' max ' + TUN[k].max + ' still admits ' + RAN_AWAY[k]));
+
+    // ...and no box may sit so far above its default that a pinned mean is a
+    // multiple of the documented value. 1.8x is the line: enemyWeight was at
+    // 2.2x of default when the row collapsed.
+    for (const k of Object.keys(RAN_AWAY))
+        test('...and its ceiling stays within 1.8x of the default: ' + k, () => {
+            const d = get(k);
+            assert.ok(TUN[k].max <= d * 1.8,
+                k + ' max ' + TUN[k].max + ' vs default ' + d);
+        });
+    done();
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.92.0 — THE ARMING CAP, written from a LIVE READ, not from theory.

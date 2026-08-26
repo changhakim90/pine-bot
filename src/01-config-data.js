@@ -1430,20 +1430,48 @@
     // =================================================================
     // TUNABLE PARAMETERS (auto-tuned across runs)
     // =================================================================
-    // Bounds widened at gen 73: the CEM means were PINNED at the old maxima
-    // on standoff / standoffPull / projWeight / panicHp (and near-pinned on
-    // enemyRange) — the learner wanted more caution than the box allowed.
+    // v6.93.0 — BOUNDS NARROWED. This REVERSES the "widened at gen 73"
+    // decision below, which was made on the reading that "the learner wanted
+    // more caution than the box allowed".
+    //
+    // MEASURED at gen 36 of the current store, six of these dimensions were
+    // pinned or within 3% of their maxima, all in the same direction:
+    //   standoffPull 2.50 / 2.5  PINNED      enemyRange   318.8 / 320  PINNED
+    //   lookaheadMs   416 / 420  PINNED      panicHp       0.73 / 0.75  97%
+    //   projLookahead 1066/1100  97%         enemyWeight   3.31 / 3.5   94%
+    //   standoff    238.3 / 260  92%         projWeight    7.69 / 9.0   85%
+    // Against defaults that is enemyWeight +120%, standoffPull +92%,
+    // projLookahead +64%, standoff +59%, enemyRange +59%, panicHp +33% —
+    // twelve sigma out on enemyWeight alone, with sigma collapsed to 0.15 so
+    // the optimiser can no longer explore back.
+    //
+    // The result measured in 6.92.3 (n=20): median 601 s, hellRate 0.05,
+    // meanDowns 3958 against 6.91.6's 11421, and 9 of 20 deaths to `line`.
+    // A bot that stands 238 px off and panics at 73% HP kills a third as
+    // much, never funds a build, and backs into hazards it is out-weighting.
+    //
+    // AND THE HILL IS NOT REAL. game-source-facts measures mobs at 20-33x the
+    // player's speed by minute 111; the crossover is at minute 11-16, before
+    // hell even starts. Evasion cannot buy separation in the phase that pays.
+    // The CEM has spent dozens of generations climbing a lever the game's own
+    // physics says does not exist, and every previous pin was answered by
+    // WIDENING the box and letting it climb further.
+    //
+    // So the maxima come back toward the defaults. The learner keeps room to
+    // explore; it no longer has room to run away. loadLearn() clamps a stored
+    // mean into the current box (v6.93.0), so this bites on the live store
+    // rather than only on a fresh one.
     const TUNABLE = {
         'movement.smoothing': { min: 0.2, max: 0.85 },
-        'movement.standoff': { min: 55, max: 260 },
-        'movement.standoffPull': { min: 0.0, max: 2.5 },
+        'movement.standoff': { min: 55, max: 190 },
+        'movement.standoffPull': { min: 0.0, max: 1.8 },
         'movement.lootPull': { min: 0.3, max: 2.0 },
-        'movement.panicHp': { min: 0.2, max: 0.75 },
-        'movement.lookaheadMs': { min: 140, max: 420 },
-        'threat.enemyWeight': { min: 0.5, max: 3.5 },
-        'threat.enemyRange': { min: 110, max: 320 },
-        'threat.projWeight': { min: 1.0, max: 9.0 },
-        'threat.projLookaheadMs': { min: 300, max: 1100 },
+        'movement.panicHp': { min: 0.2, max: 0.62 },
+        'movement.lookaheadMs': { min: 140, max: 380 },
+        'threat.enemyWeight': { min: 0.5, max: 2.2 },
+        'threat.enemyRange': { min: 110, max: 240 },
+        'threat.projWeight': { min: 1.0, max: 6.5 },
+        'threat.projLookaheadMs': { min: 300, max: 850 },
         'threat.markWeight': { min: 5.0, max: 20.0 },   // measured mark damage ~93: two landings can end a run
         'threat.lineWeight': { min: 2.0, max: 9.0 },
         // strategy weights — the win strategy itself evolves across runs
