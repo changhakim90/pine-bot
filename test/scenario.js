@@ -2898,6 +2898,37 @@ if (which === 'panic-anchor') {
         test('standing in a live mark still dashes out', () =>
             assert.ok(dashes > 0, 'dashes ' + dashes + ' — marks are what position DOES beat'));
         global.dropMarks = [];
+        // v6.89.11 — A CHARGE LANE BREAKS THE CORNER (user: "anchoring
+        // contradicting the linebacker boss"). The corner defeats drop-marks
+        // because they are bounded circles from a known spawn box. A Last Call
+        // Linebacker lane is an unbounded RAY killing 63 px to each side, so no
+        // point in the arena is outside it — corner position is worth nothing
+        // against one, and it removes three quarters of the escape directions.
+        // The gate had no lane term at all, and at depth `bossHunt` only fires
+        // for a FROZEN boss, so a live charging linebacker could not break it.
+        global.roadLines = [];
+        const clear = scene(6000, 60);
+        test('with no lanes the deep corner still engages', () =>
+            assert.strictEqual(clear.cornerAnchor, true, String(clear.cornerAnchor)));
+        // A ray through the player at 45 deg passes straight through the
+        // bottom-right corner seat: perpendicular distance 0.
+        global.roadLines = [{ x: 270, y: 270, ang: Math.PI / 4, armed: true, dmg: 50 }];
+        const laned = scene(6000, 60);
+        test('a charge lane through the corner breaks the anchor', () =>
+            assert.strictEqual(laned.cornerAnchor, false,
+                JSON.stringify({ corner: laned.cornerAnchor, lineOnCorner: laned.lineOnCorner })));
+        test('...and the gate is reported so the posture stays observable', () =>
+            assert.strictEqual(laned.lineOnCorner, true, String(laned.lineOnCorner)));
+        // A lane that misses the corner must NOT break it — otherwise any
+        // linebacker anywhere on the field disables the doctrine outright,
+        // which is the dead-gate mistake this project keeps making.
+        global.roadLines = [{ x: 0, y: 400, ang: Math.PI / 4, armed: true, dmg: 50 }];
+        const missed = scene(6000, 60);
+        test('a lane that misses the corner leaves the anchor alone', () =>
+            assert.strictEqual(missed.cornerAnchor, true,
+                JSON.stringify({ corner: missed.cornerAnchor, lineOnCorner: missed.lineOnCorner })));
+        global.roadLines = [];
+
         // NO SHALLOW-DASH ASSERTION, and the reason is recorded rather than
         // fudged. Two drafts tried to prove "shallow hell still dashes on the
         // same scene" and both measured ZERO dashes in the shallow arm — not
@@ -2989,4 +3020,43 @@ if (which === 'minguk-invuln') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+// v6.89.11 — A MARK IS GONE BY THE TIME ITS DAMAGE IS SEEN. 145 runs of
+// damageAudit put 161-162 point losses in `sole.contact`; 161.6 is exactly
+// `maxHp * 0.40`, the drop-mark formula. The mark detonates, the game removes
+// it, and the next tick finds nothing — so the classifier's default books it as
+// contact. The fix classifies against the PREVIOUS tick's marks as well.
+if (which === 'mark-ghost') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 3000, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        pineBot.resetDamageAudit();
+        const T = pineBot.test;
+        const tick = (hp, marks) => {
+            global.gameTime = 3000;
+            global.player = { x: 270, y: 270, r: 7.2, hp, maxHp: 400, speed: 2.375 };
+            global.enemies = [];            // nothing else can be blamed
+            global.dropMarks = marks;
+            T.planMove();
+        };
+        // Tick 1: a live mark on top of us. Establishes lastHpSample AND the
+        // mark snapshot the next tick will need.
+        tick(400, [{ x: 270, y: 270, r: 58, dmg: 72, tele: 0.6, at: 3000.3 }]);
+        // Tick 2: it detonated for maxHp * 0.40 and removed itself.
+        tick(240, []);
+        const a = pineBot.damageAudit();
+        test('the vanished mark is still blamed for its own damage', () =>
+            assert.ok((a.sole.mark || {}).n >= 1,
+                'sole.mark ' + JSON.stringify(a.sole)));
+        test('...and it is NOT booked as contact', () =>
+            assert.ok(!(a.sole.contact || {}).n,
+                'sole.contact ' + JSON.stringify(a.sole.contact)));
+        test('...nor left unattributed', () =>
+            assert.strictEqual(a.unattributed.n, 0, JSON.stringify(a.unattributed)));
+        test('and the full loss is recorded', () =>
+            assert.ok(a.hpLost >= 159 && a.hpLost <= 161, 'hpLost ' + a.hpLost));
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

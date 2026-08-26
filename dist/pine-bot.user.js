@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.89.10
+// @version      6.89.11
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.89.10';
+    const SCRIPT_VERSION = '6.89.11';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     const REWARD_EPOCH = 2;
@@ -1407,6 +1407,11 @@
     })();
     // Live cursors — deliberately NOT persisted: they describe the current run.
     const incCursor = { t: null, hp: null };
+    // v6.89.11: the previous tick's drop-marks, positions only. A mark removes
+    // itself on detonation, so by the time the HP loss is sampled it is gone and
+    // the classifier blames contact by default. See the audit block in
+    // 05-movement.js.
+    let lastMarkSnap = [];
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
@@ -6092,11 +6097,29 @@
         for (const l of th.lines) if (lineCost(l, p.x, p.y)) { dangerAccum.line += 0.25; break; }
         if (lastHpSample != null && hp < lastHpSample - 0.5) {
             const loss = lastHpSample - hp;
+            // v6.89.11 A MARK IS GONE BY THE TIME ITS DAMAGE IS SEEN.
+            //
+            // 145 runs of damageAudit showed 161-162 point losses sitting in
+            // `sole.contact` — and 161.6 is exactly `maxHp * 0.40`, the `again`
+            // drop-mark formula, on a 404 pool. The mark detonates, damage
+            // applies, the game removes it from `dropMarks`, and the next plan
+            // tick finds nothing there. Every one of those was booked as contact
+            // because contact is the chain's default.
+            //
+            // That inflated `sole.contact` (38%) and deflated `sole.mark` (7%),
+            // and is the likeliest explanation for `unattributed` at 24% with a
+            // bossD median of 205 and a near median of 1 — a mark landed, and by
+            // the time the loss was sampled there was nothing in range at all.
+            //
+            // Classify against the marks seen on the PREVIOUS tick as well as
+            // this one. A mark that existed a tick ago and has vanished is the
+            // single most likely author of a large loss.
+            const markPool = lastMarkSnap.length ? th.marks.concat(lastMarkSnap) : th.marks;
             let cls = 'contact';
             if (th.rival && th.rival.d < 150) cls = 'rival';
             else if (th.lines.some(l => l.armed === true && lineCost(l, p.x, p.y) > 0.15)) cls = 'line';
             else if (th.projectiles.some(q => Math.hypot(q.x - p.x, q.y - p.y) < q.r + 22)) cls = 'proj';
-            else if (th.marks.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 10)) cls = 'mark';
+            else if (markPool.some(m => Math.hypot(m.x - p.x, m.y - p.y) < m.r + 10)) cls = 'mark';
             dangerAccum[cls] = (dangerAccum[cls] || 0) + loss * 0.35;
 
             // v6.85.13 AUDIT — record the EVIDENCE, never a verdict. Same
@@ -6108,7 +6131,7 @@
             const nearestGap = (arr, f) => { let b = Infinity; for (const it of arr) { const v = f(it); if (v < b) b = v; } return b; };
             const gContact = nearestGap(th.enemies, e2 => Math.hypot(e2.x - p.x, e2.y - p.y) - e2.r);
             const gProj = nearestGap(th.projectiles, q => Math.hypot(q.x - p.x, q.y - p.y) - q.r);
-            const gMark = nearestGap(th.marks, m => Math.hypot(m.x - p.x, m.y - p.y) - m.r);
+            const gMark = nearestGap(markPool, m => Math.hypot(m.x - p.x, m.y - p.y) - m.r);
             const gBoss = nearestBossRef.v;   // field-wide, not capped at enemyRange
             const cands = [];
             if (th.rival && th.rival.d < 150) cands.push('rival');
@@ -6150,6 +6173,10 @@
             if (dmgAudit.ev.length > 300) dmgAudit.ev.shift();
         }
         lastHpSample = hp;
+        // v6.89.11: remember this tick's marks so the NEXT tick can still blame
+        // one that detonated and removed itself. Positions only — the objects
+        // belong to the game and may be recycled.
+        lastMarkSnap = th.marks.map(m => ({ x: m.x, y: m.y, r: m.r }));
 
         // v6.89.7 INCOME AUDIT. Both directions of the pool, integrated against
         // gameTime, bucketed by depth. `hp` here is the POOLED reading (raw HP
@@ -6649,14 +6676,41 @@
         // one time to move regardless — and so does `bossHunt`.
         const deepCorner = hellDetected &&
             gtCorner > (CONFIG.deepHell.deepCornerFromS != null ? CONFIG.deepHell.deepCornerFromS : 2400);
-        const cornerOn = !markHere && !bossHunt &&
-            (deepCorner || (!hpPanic && !flight)) &&
-            (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
+        // Corner coordinates, hoisted above the gate: v6.89.11 needs to ask
+        // whether the SEAT is safe, not only where the bot is standing.
         const fieldW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
         const fieldH = (typeof G.H === 'number' && G.H > 0) ? G.H : CONFIG.field.h;
         const pr = (typeof p.r === 'number' && p.r > 0) ? p.r : 12;
         const cnrX = (p.x < fieldW / 2) ? pr : fieldW - pr;
         const cnrY = (p.y < fieldH / 2) ? pr : fieldH - pr;
+        // v6.89.11 THE CORNER DOES NOT DEFEAT A CHARGE LANE (user: "anchoring
+        // contradicting the linebacker boss").
+        //
+        // The corner earns its place against DROP-MARKS, which are bounded
+        // circles from a known spawn box — the true corner sits 80.9 px from the
+        // nearest possible mark centre against a 70 px reach, so it is outside
+        // every mark that can exist. That argument does not transfer.
+        //
+        // A Last Call Linebacker charge lane is `{x, y, ang, armed, dmg}` — an
+        // unbounded RAY, killing 63 px to each side by perpendicular distance.
+        // No point in the arena is outside a ray. Corner position confers
+        // exactly zero protection, and it makes matters worse: escaping a lane
+        // means moving perpendicular to it, and a corner has removed three
+        // quarters of the directions available to do that.
+        //
+        // The gate had no lane term at all. It checked `markHere` and nothing
+        // else, and at depth `bossHunt` only fires for a FROZEN boss or a rival
+        // — so a live charging linebacker could not break the anchor either.
+        //
+        // Unarmed lanes count on purpose: `armed: false` is the telegraph, which
+        // is precisely the window in which not to commit to a seat that is about
+        // to become a kill zone. Breaking the corner hands the heading back to
+        // lineCost's gradient, which drives the perpendicular step.
+        const laneCovers = (x, y) => th.lines.some(l => lineCost(l, x, y) > 0.15);
+        const lineOnCorner = laneCovers(cnrX, cnrY) || laneCovers(p.x, p.y);
+        const cornerOn = !markHere && !lineOnCorner && !bossHunt &&
+            (deepCorner || (!hpPanic && !flight)) &&
+            (zonerCorner || ringHuge || gtCorner > (CONFIG.deepHell.cornerAnchorFromS || 9000));
         // USER-VERIFIED: Corpse Reviver zombies can hit NEITHER passouts NOR
         // no-booking walls — a CR-only build farms both at base-attack speed,
         // so the detour incentive is cut for each. (Hoisted out of the
@@ -7431,7 +7485,7 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
-            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
+            surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
             poCentroidDist: poN ? Math.round(Math.hypot(p.x - poCx, p.y - poCy)) : null,

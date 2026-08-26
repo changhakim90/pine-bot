@@ -1405,6 +1405,11 @@
     })();
     // Live cursors — deliberately NOT persisted: they describe the current run.
     const incCursor = { t: null, hp: null };
+    // v6.89.11: the previous tick's drop-marks, positions only. A mark removes
+    // itself on detonation, so by the time the HP loss is sampled it is gone and
+    // the classifier blames contact by default. See the audit block in
+    // 05-movement.js.
+    let lastMarkSnap = [];
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
