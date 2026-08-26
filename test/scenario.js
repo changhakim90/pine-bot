@@ -1557,10 +1557,15 @@ if (which === 'roster-cap') {
     // The substance of the old assertions is kept — NEGRONI is still carried,
     // the three super lines are still first, GIN TONIC and VODKA CRANBERRY are
     // still gone — and what changed is stated rather than deleted.
-    test('TWO keyless cocktails are now carried: NEGRONI and WHISKY SOUR', () => {
-        assert.ok(pat.cocktails.includes('NEGRONI'), 'NEGRONI missing');
-        assert.ok(pat.cocktails.includes('WHISKY SOUR'), 'WHISKY SOUR missing');
-        assert.strictEqual(pat.cocktails.length, 6, pat.cocktails.join(','));
+    // v6.92.2 — a THIRD keyless occupant. User, on the crown run: "Also had
+    // normal moscow mule or vodka cherry for knockback effect". MOSCOW MULE is
+    // the safe half of that pair (see KEYLESS_BOOST); VODKA CRANBERRY stays off
+    // because CRANBERRY is a PLAN_INGREDIENT the build MAXES for pickup radius,
+    // so carrying it would open a latent line for free.
+    test('THREE keyless cocktails are carried: NEGRONI, WHISKY SOUR, MOSCOW MULE', () => {
+        for (const c of ['NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'])
+            assert.ok(pat.cocktails.includes(c), c + ' missing');
+        assert.strictEqual(pat.cocktails.length, 7, pat.cocktails.join(','));
     });
     // v6.91.9 — GIN TONIC is back, and it is the CHEAPEST line on the board:
     // SUPER_KEY_INGREDIENT maps GIN TONIC and VODKA TONIC to the SAME key
@@ -1595,10 +1600,16 @@ if (which === 'roster-cap') {
     // A super needs its cocktail AND its key ingredient in the plan, and the
     // key must not be permanently banned (LEMON / ORANGE never unban;
     // GINGER BEER unbans in hell, so it counts).
+    // v6.92.2 — the GINGER BEER special case is GONE, on purpose. It read
+    // `|| key === 'GINGER BEER'` because applyHellUnban() used to open that key
+    // for a fifth line. `hellUnbanIngredients` is empty, maxSuperLines is 4,
+    // and the v6.92.0 arming cap refuses the level that would max it — so
+    // counting it as completable overstated the roster. The count now asks the
+    // real question: is the key one this build will ever take to Lv6?
     const NEVER = new Set(['LEMON', 'ORANGE']);
     const completable = r => r.cocktails.filter(c => {
         const key = pineBot.test.superKey(c);
-        return key && !NEVER.has(key) && (r.ingredients.includes(key) || key === 'GINGER BEER');
+        return key && !NEVER.has(key) && r.ingredients.includes(key);
     });
     const patN = completable(pat), mgN = completable(mg), joeN = completable(joe);
     test('the shared roster completes at most five supers — never the six-super gate', () =>
@@ -1624,8 +1635,19 @@ if (which === 'roster-cap') {
     // free and the gun gate out of reach.
     test('the crown roster gives FOUR completable super lines, not three', () =>
         assert.strictEqual(patN.length, 4, patN.join(',')));
-    test('...and the two keyless cocktails still contribute none', () => {
-        assert.ok(!patN.includes('NEGRONI') && !patN.includes('WHISKY SOUR'), patN.join(','));
+    test('...and the three keyless cocktails still contribute none', () => {
+        for (const c of ['NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'])
+            assert.ok(!patN.includes(c), c + ' opened a line: ' + patN.join(','));
+    });
+    // THE SAFETY PROPERTY for the third occupant, stated as an invariant:
+    // GINGER BEER must stay out of the plan AND stay arming-capped. If either
+    // changes, MOSCOW MULE becomes a fifth line and this must fail.
+    test('MOSCOW MULE is keyless because GINGER BEER is never maxed', () => {
+        const key = pineBot.test.superKey('MOSCOW MULE');
+        assert.strictEqual(key, 'GINGER BEER', String(key));
+        assert.ok(!pat.ingredients.includes(key), pat.ingredients.join(','));
+        assert.ok(pineBot.test.scoreCard({ n: key, type: 'passive', lv: 5, maxlv: 6 }, 0, []).score < -400,
+            'GINGER BEER @lv5 is pickable — the arming cap has a hole');
     });
     done();
 }
@@ -1667,8 +1689,13 @@ if (which === 'gun-path') {
     // v6.88.5 (user): "vodka cranberry and cranberry is important" — both stay,
     // and CRANBERRY is VODKA CRANBERRY's key, so the roster completes FIVE.
     // Five is still a full line under the six-maxed-super gun gate.
-    test('the cap is five super lines', () =>
-        assert.strictEqual(pineBot.config.maxSuperLines, 5));
+    // v6.92.1 — REVISED ON PURPOSE. VODKA CRANBERRY left the roster, so the
+    // plan completes FOUR lines off THREE keys (MINT; TONIC, shared by VODKA
+    // TONIC and GIN TONIC; SUGAR). Every gun guard is gated on nSupers >= CAP,
+    // so a cap of 5 left a full rogue line of slack the plan cannot use. At 4
+    // the guards arm the moment the intended plan finishes.
+    test('the cap is four super lines — exactly what the plan builds', () =>
+        assert.strictEqual(pineBot.config.maxSuperLines, 4));
     // OLD FASHIONED is off-plan and keyed by ANGOSTURA (junk). Hold the
     // cocktail near its cap so ANGOSTURA levels visibly walk toward a super.
     T.setOwned({ 'OLD FASHIONED': 6, 'ANGOSTURA': 5, 'COINTREAU': 1, 'GIMLET': 1, 'LIME': 1 });

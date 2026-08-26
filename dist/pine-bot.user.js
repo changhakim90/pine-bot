@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.92.0
+// @version      6.92.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.92.0';
+    const SCRIPT_VERSION = '6.92.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -232,7 +232,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -339,15 +339,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -370,7 +370,19 @@
         // RUNTIME half of the same rule, for the pools that offer things the
         // roster never planned for. A card that would open or finish a sixth
         // line is refused outright, whatever the pool looks like.
-        maxSuperLines: 5,
+        // v6.92.1 (user, naming the risk themselves): "There is a danger to
+        // reaching 6 supercocktails since tonic upgrades both gin and vodka
+        // tonic super upgrades but the slow from mob rush attacks could be
+        // worth having gin tonic."
+        //
+        // Exactly right, and the cap is the lever. The plan now completes
+        // FOUR lines (SOUTH SIDE/MINT, VODKA TONIC + GIN TONIC/TONIC,
+        // MOJITO/SUGAR) off THREE keys. Every gun guard is gated on
+        // `nSupers >= CAP`, so a cap of 5 leaves them silent until a rogue
+        // fifth line already exists — one whole line of slack that the plan
+        // does not want and cannot use. At 4 the guards arm the moment the
+        // intended plan is finished, and every further line is refused.
+        maxSuperLines: 4,
         // v6.87.4: how far an OFF-PLAN super line must already be before the
         // bot starts paying to avoid it. Below this, an off-plan cocktail is
         // just damage and is judged on merit; above it, the line is close
@@ -1037,7 +1049,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -1089,7 +1101,17 @@
     // NO GUN RISK: LEMON sits in AVOID_INGREDIENTS_BASE and never unbans, so
     // SUPER WHISKY SOUR is unreachable and this can never become the sixth super
     // line that summons the Rainbow Gun. That is what makes it safe to carry.
-    const KEYLESS_BOOST = ['NEGRONI', 'WHISKY SOUR'];
+    // v6.92.2 (user, on the crown run): "Also had normal moscow mule or vodka
+    // cherry for knockback effect". MOSCOW MULE is the SAFE half of that pair:
+    // its key GINGER BEER is arming-capped, while VODKA CRANBERRY's key
+    // CRANBERRY is a PLAN_INGREDIENT the build must MAX for pickup radius —
+    // taking VODKA CRANBERRY would open a latent fifth line for free.
+    // game-source-facts is blunt that the 17px shove itself is dead by minute
+    // 129 (0.13 frames of separation), but MOSCOW MULE and VODKA CRANBERRY are
+    // primary in four of the all-time top runs including 255:48, so something
+    // on that card works — lifesteal riding the kick, or the kbActive stun.
+    // Carried as a keyless occupant on that evidence, not on the shove theory.
+    const KEYLESS_BOOST = ['NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'];
     // ...and the four that DO carry a key must still outrank them, or the
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
@@ -1148,6 +1170,13 @@
     // LEMON, ORANGE, ANGOSTURA, COINTREAU, GINGER BEER, ABSINTHE.
     const SUPER_LINE_KEYS = new Set(SUPER_LINE_COCKTAILS.map(c => SUPER_KEY_INGREDIENT[c]).filter(Boolean));
     function armsOffPlanLine(name) {
+        // applyHellUnban() PUSHES its ingredients into PLAN_INGREDIENTS, which
+        // would otherwise exempt them from this cap by the clause below. That
+        // unban exists to open a FIFTH super line, which v6.92.1 stopped
+        // wanting (maxSuperLines 4). The list is empty today; this keeps the
+        // cap correct if it is ever re-armed.
+        if ((CONFIG.hellUnbanIngredients || []).includes(name))
+            return COCKTAILS.some(c => SUPER_KEY_INGREDIENT[c] === name);
         if (PLAN_INGREDIENTS.includes(name)) return false;
         if (SUPER_LINE_KEYS.has(name)) return false;
         return COCKTAILS.some(c => SUPER_KEY_INGREDIENT[c] === name);
@@ -1196,7 +1225,7 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR'
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
     ];   // v6.91.5 (user): "whisky sour should be in the planned cocktails".
          // LAST among the cocktails on purpose — the three super lines and the
          // keyless NEGRONI keep their order, and WHISKY SOUR is the fifth slot
@@ -4208,6 +4237,7 @@
         } catch (e) { return supersMade.size; }
     }
     // Would taking THIS card open a new super line we don't already have?
+    const CAP_LINES = () => CONFIG.maxSuperLines || 4;
     function opensNewSuperLine(type, name) {
         try {
             const sl = (G.player && G.player.superLv) || {};
@@ -4236,7 +4266,7 @@
         // one pick that can ever endanger the stall doctrine. At five
         // supers, any further super card is refused outright.
         {
-            const CAP = CONFIG.maxSuperLines || 5;
+            const CAP = CAP_LINES();
             const nSupers = Math.max(supersMade.size, liveSuperCount());
             // the sixth super IS the gun — refuse the unlock card...
             if (type === 'super' && nSupers >= CAP) add(-500, 'gun-guard');
@@ -4446,7 +4476,9 @@
         let gunRiskExempt = false;
         if (type === 'weapon' && /^(MOJITO|MANHATTAN)$/.test(name)) {
             const nS = Math.max(supersMade.size, liveSuperCount());
-            gunRiskExempt = nS < 5 && !opensNewSuperLine('weapon', name) &&
+            // v6.92.1: was a hardcoded 5 while the cap lived in CONFIG — the
+            // exemption outlived the cap it was meant to track.
+            gunRiskExempt = nS < CAP_LINES() && !opensNewSuperLine('weapon', name) &&
                 (ownedLevels[SUPER_KEY_INGREDIENT[name]] || 0) < 4;
         }
         let avoidJunk = false;

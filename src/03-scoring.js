@@ -1130,6 +1130,7 @@
         } catch (e) { return supersMade.size; }
     }
     // Would taking THIS card open a new super line we don't already have?
+    const CAP_LINES = () => CONFIG.maxSuperLines || 4;
     function opensNewSuperLine(type, name) {
         try {
             const sl = (G.player && G.player.superLv) || {};
@@ -1158,7 +1159,7 @@
         // one pick that can ever endanger the stall doctrine. At five
         // supers, any further super card is refused outright.
         {
-            const CAP = CONFIG.maxSuperLines || 5;
+            const CAP = CAP_LINES();
             const nSupers = Math.max(supersMade.size, liveSuperCount());
             // the sixth super IS the gun — refuse the unlock card...
             if (type === 'super' && nSupers >= CAP) add(-500, 'gun-guard');
@@ -1368,7 +1369,9 @@
         let gunRiskExempt = false;
         if (type === 'weapon' && /^(MOJITO|MANHATTAN)$/.test(name)) {
             const nS = Math.max(supersMade.size, liveSuperCount());
-            gunRiskExempt = nS < 5 && !opensNewSuperLine('weapon', name) &&
+            // v6.92.1: was a hardcoded 5 while the cap lived in CONFIG — the
+            // exemption outlived the cap it was meant to track.
+            gunRiskExempt = nS < CAP_LINES() && !opensNewSuperLine('weapon', name) &&
                 (ownedLevels[SUPER_KEY_INGREDIENT[name]] || 0) < 4;
         }
         let avoidJunk = false;
