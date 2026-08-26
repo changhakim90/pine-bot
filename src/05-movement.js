@@ -1269,6 +1269,7 @@
             if (e.frozen) frozenNear++; else movingNear++;
         }
         const pauseActive = frozenNear > 0 && movingNear <= Math.max(1, Math.round(frozenNear * 0.25));
+        if (hellDetected) { runHellTicks++; if (pauseActive) runPauseTicks++; }   // v6.91.4
         // v6.89.4 KITE DAMPING (user), computed here because it reads the pause.
         // The day is untouched: the funding phase still wants the pack dragged
         // through burn zones, and a thin early build has nothing else to do.
@@ -1777,7 +1778,7 @@
             for (const e of th.enemies) {
                 if (!e.boss || e.wall || !e.frozen || e.frozenLeft < 45) continue;
                 const dd = Math.hypot(e.x - p.x, e.y - p.y);
-                if (!stopBoss || dd < stopBoss.d) stopBoss = { x: e.x, y: e.y, d: dd, r: e.r, left: e.frozenLeft };
+                if (!stopBoss || dd < stopBoss.d) stopBoss = { x: e.x, y: e.y, d: dd, r: e.r, left: e.frozenLeft, id: e.id };
             }
         }
 
@@ -2467,6 +2468,27 @@
         // accumulate and the seat stops being safe — which is the real risk of
         // parking early, when the offensive build is still thin.
         const parkClear = zoner;   // SOUTH SIDE owned, or its super made
+        // v6.91.4 THE YIELD HAD TO BE BOUNDED, and the user's own description is
+        // why: WHISKY SOUR "just freezes the bosses always". 6.91.1 released park
+        // for ANY frozen boss, so a build carrying a permanent boss freeze would
+        // have suspended park for the whole run — silently undoing 6.91.2 and
+        // 6.91.3 for exactly the builds this version is meant to encourage.
+        //
+        // A boss that has been frozen for two minutes is not an opportunity, it
+        // is the background state. So the yield is ONE burn window per freeze
+        // episode, keyed on the boss id: take `parkYieldS` seconds at the
+        // stacking station, then go home and stay there until a different boss
+        // freezes. Keyed on `stopBoss` rather than `frozenBossHere` so park
+        // releases exactly when the tuned station will actually take the heading
+        // (hell + zoner + no live projectile + >= 45 frames left) and not
+        // otherwise.
+        const frozStation = stopBoss;
+        let parkYieldFrozen = false;
+        if (frozStation) {
+            const fid = frozStation.id != null ? frozStation.id : 'anon';
+            if (parkYieldId !== fid) { parkYieldId = fid; parkYieldAt = gtCorner; }
+            parkYieldFrozen = (gtCorner - parkYieldAt) <= (CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20);
+        } else { parkYieldId = null; parkYieldAt = 0; }
         // v6.91.1: park yields to a FROZEN boss, the same exception the corner
         // has carried since 6.89.8 — "a free kill is worth leaving the funnel
         // for at any depth". Park shipped in 6.90.0 without it and has been
@@ -2475,7 +2497,7 @@
         // a new one, so the tuned two-phase ring keeps doing the work.
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
-            !markHere && !lineOnCorner && !frozenBossHere;
+            !markHere && !lineOnCorner && !parkYieldFrozen;
         let parked = false, onPost = false;
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
@@ -2510,6 +2532,7 @@
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
             seat: { x: +cnrX.toFixed(1), y: +cnrY.toFixed(1) },
+            parkYieldFrozen, pauseShare: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
             armorLv: +armorLv.toFixed(2),
             hunting: huntOn, onPost, dormantBoss: !!huntTarget, huntVacate,
             huntFrozen: !!(huntTarget && huntTarget.frozen),

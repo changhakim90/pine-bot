@@ -6,6 +6,16 @@ const assert = require('assert');
 const makeEnv = require('./fake-env');
 const SCRIPT = path.join(__dirname, '..', 'dist', 'pine-bot.user.js');
 const pkg = require('../package.json');
+// v6.91.6: the CEM fixtures used to hardcode `rewardEpoch: 2`, so bumping the
+// epoch turned them red for the RIGHT reason (the bump clears reward-derived
+// baselines) against the WRONG intent — they test hall-of-fame repair, not
+// epoch migration. Read the live constant instead, so a future bump never
+// silently re-breaks them.
+const CUR_EPOCH = (() => {
+    const m = require('fs').readFileSync(SCRIPT, 'utf8').match(/const REWARD_EPOCH = (\d+)/);
+    if (!m) throw new Error('REWARD_EPOCH not found in the build');
+    return +m[1];
+})();
 let failed = 0;
 function test(name, fn) {
     try { fn(); console.log('  ok   ' + name); }
@@ -62,6 +72,33 @@ if (which === 'scoring') {
         const a = pineBot.test.hellTimeBonus(7200), b = pineBot.test.hellTimeBonus(14400), c = pineBot.test.hellTimeBonus(20000);
         assert.ok(a < b && b < c);
     });
+    // v6.91.6 THE REWARD MUST NOT MOVE WHEN THE BOARD DOES.
+    //
+    // hellTimeBonus divided the crown-progress term (weight 2.0, EIGHT TIMES
+    // hellDepth) by the LIVE #1 hell time. Seeding the user's own 62686s manual
+    // run into the board at 11:11 on 2026-08-26 therefore cut the dominant
+    // deep-run reward term by 4.1x mid-measurement, with no code change and no
+    // epoch bump: a 6000s run was worth 0.792 of crown progress on the 25th and
+    // 0.191 on the 26th. CEM compared batches across that boundary.
+    //
+    // The denominator is now a fixed reference. The live crown is still read for
+    // the STOP threshold, which is its correct use.
+    test('the reward is INDEPENDENT of the live crown board', () => {
+        const before = pineBot.test.hellTimeBonus(6000);
+        global.localStorage.setItem('paco_bdh_time', JSON.stringify([{ time: 62686 }]));
+        const after = pineBot.test.hellTimeBonus(6000);
+        global.localStorage.removeItem('paco_bdh_time');
+        assert.strictEqual(before, after,
+            JSON.stringify({ before: +before.toFixed(4), after: +after.toFixed(4) }));
+    });
+    test('...but the STOP threshold still tracks it', () => {
+        global.localStorage.setItem('paco_bdh_time', JSON.stringify([{ time: 62686 }]));
+        const live = pineBot.test.liveCrownTimeS();
+        global.localStorage.removeItem('paco_bdh_time');
+        assert.strictEqual(live, 62686, String(live));
+    });
+    test('the reward epoch was bumped for that scale change', () =>
+        assert.ok(CUR_EPOCH >= 3, 'epoch ' + CUR_EPOCH));
     done();
 }
 
@@ -929,7 +966,7 @@ if (which === 'learned') {
 // 22. v6.85.23: the CEM sanitizer heals NaN-poisoned state from 6.85.22.
 if (which === 'cem-heal') {
     const poisoned = {
-        runs: 200, bartender: 'minguk', rewardEpoch: 2,
+        runs: 200, bartender: 'minguk', rewardEpoch: CUR_EPOCH,
         cem: { mean: { 'movement.standoff': 120, 'patRing.early': NaN }, sigma: { 'movement.standoff': 20, 'patRing.early': NaN },
                pc: { 'movement.standoff': NaN }, ss: NaN, batch: [{ r: 1, p: { 'movement.standoff': 118, 'patRing.mid': NaN } }] },
         hof: [{ r: 3, p: { 'movement.standoff': 115, 'movement.killOrderDist': NaN } }],
@@ -973,7 +1010,7 @@ if (which === 'cem-lockup') {
     mean['strategy.deepFocusLv'] = 5.63;     // outside the tightened box
     const champ = { ...mean, 'movement.standoff': 121 };
     const locked = {
-        runs: 3373, bartender: 'minguk', rewardEpoch: 2,
+        runs: 3373, bartender: 'minguk', rewardEpoch: CUR_EPOCH,
         cem: { mean, sigma, pc: {}, ss: 0.616, gen: 425, batch: [] },
         // hof[0] and hof[1] byte-identical, as measured
         hof: [{ r: 9.9, p: { ...champ } }, { r: 9.9, p: { ...champ } }, { r: 8, p: { ...champ } },
@@ -1474,12 +1511,32 @@ if (which === 'roster-cap') {
             assert.ok(pat.ingredients.includes(k), k + ' missing');
     });
     test('...and the ones the user dropped are gone', () => {
-        for (const c of ['GIN TONIC', 'WHISKY SOUR', 'VODKA CRANBERRY'])
+        for (const c of ['GIN TONIC', 'VODKA CRANBERRY'])
             assert.ok(!pat.cocktails.includes(c), c + ' should be off the roster');
     });
-    test('NEGRONI is the only keyless cocktail carried', () => {
+    // v6.91.5 — REVISED ON PURPOSE, not made to pass. Both assertions below
+    // encoded the 6.89.3 decision ("for non super cocktails negroni is the only
+    // essential"), and the user has now overridden it directly: "whisky sour
+    // should be in the planned cocktails", because "it just freezes the bosses
+    // always" and is "crucial when time pause is not available and late level
+    // bosses can one hit the bot at early to mid hell".
+    //
+    // The substance of the old assertions is kept — NEGRONI is still carried,
+    // the three super lines are still first, GIN TONIC and VODKA CRANBERRY are
+    // still gone — and what changed is stated rather than deleted.
+    test('TWO keyless cocktails are now carried: NEGRONI and WHISKY SOUR', () => {
         assert.ok(pat.cocktails.includes('NEGRONI'), 'NEGRONI missing');
-        assert.strictEqual(pat.cocktails.length, 4, pat.cocktails.join(','));
+        assert.ok(pat.cocktails.includes('WHISKY SOUR'), 'WHISKY SOUR missing');
+        assert.strictEqual(pat.cocktails.length, 5, pat.cocktails.join(','));
+    });
+    // THE SAFETY PROPERTY that makes the fifth slot free: LEMON is permanently
+    // banned, so WHISKY SOUR can never complete a super and cannot move the
+    // roster toward the six-maxed-super Rainbow Gun gate. If this ever fails,
+    // the fifth slot has stopped being free and the pick has to be reconsidered.
+    test('...and the freeze slot adds NO completable super line', () => {
+        const key = pineBot.test.superKey('WHISKY SOUR');
+        assert.strictEqual(key, 'LEMON', String(key));
+        assert.ok(!pat.ingredients.includes('LEMON'), pat.ingredients.join(','));
     });
     test('CAMPARI and COSMOPOLITAN are out', () => {
         assert.ok(!pat.ingredients.includes('CAMPARI'), pat.ingredients.join(','));
@@ -2152,6 +2209,39 @@ if (which === 'slot-lockout') {
     // v6.89.0 — the claim is a PREFERENCE, not an override. At +250 it
     // outranked the whole survival order and two 6.88.6 runs died in the day
     // at 596s and 484s with seven level-1 weapons and no armour.
+    // v6.91.5 THE DAY ORDER IS THE FUNDING PHASE, and it must not be inverted.
+    // (user: "whisky sour should be in the planned cocktails".) Adding it to
+    // PLAN_COCKTAILS gives it a roadmap rank — fifth, last among the cocktails.
+    // The first draft ALSO gave it the keyless-core boost in the day, and that
+    // put it at 201 against VODKA TONIC 172 and NEGRONI 168: ahead of two of the
+    // three super lines in the phase that pays for everything. The keyless boost
+    // and the freeze bonus are now hell-only. This scene is a real day — gameTime
+    // 500, hell never latched — unlike the freeze-slot scenario, whose env sets
+    // hell:true and where the first version of this assertion proved nothing.
+    // It carries a real DAY_ORDER rank — fifteenth overall, last among the
+    // cocktails. Asserted on the tag, which names the rank, because two softer
+    // forms of this check were toothless: a `/roadmap|day-order/` regex passed
+    // with WHISKY SOUR removed from PLAN_COCKTAILS entirely, and beating an
+    // off-roster GIN TONIC passed for unrelated reasons. `day-order16` can only
+    // appear if the name is in DAY_ORDER at that position.
+    // (PLAN_COCKTAILS membership is guarded by `roster-cap`, which does fail
+    // when it is removed — this one guards the ordering list.)
+    test('WHISKY SOUR carries a real DAY_ORDER rank (16th, last cocktail)', () =>
+        assert.ok(/day-order16/.test(T.scoreCard({ n: 'WHISKY SOUR', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || ''),
+            T.scoreCard({ n: 'WHISKY SOUR', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why));
+    // ...and it sits LAST among the five. This is an INVARIANT guard, not a
+    // guard on this change: it does not fail when the roster edit is reverted,
+    // but it fails the moment any future boost pushes the freeze ahead of a
+    // super line during the funding phase.
+    test('...and it ranks LAST of the five planned cocktails in the day', () => {
+        const ws = sc('WHISKY SOUR', 'weapon', 0);
+        const others = { ss: sc('SOUTH SIDE', 'weapon', 0), vt: sc('VODKA TONIC', 'weapon', 0),
+                         mo: sc('MOJITO', 'weapon', 0), ne: sc('NEGRONI', 'weapon', 0) };
+        for (const k of Object.keys(others))
+            assert.ok(others[k] > ws, JSON.stringify(Object.assign({ ws: Math.round(ws) },
+                Object.fromEntries(Object.entries(others).map(([a, b]) => [a, Math.round(b)])))));
+    });
+
     test('OLIVE still outranks an unclaimed plan cocktail', () =>
         assert.ok(sc('OLIVE', 'passive', 5) > sc('SOUTH SIDE', 'weapon', 0),
             'OLIVE ' + Math.round(sc('OLIVE', 'passive', 5)) + ' vs SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0))));
@@ -3460,4 +3550,84 @@ if (which === 'dormant-hunt') {
     setTimeout(() => done(), 60);
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+
+// 61. v6.91.4 THE FREEZE EARNS ITS SLOT (user: "whisky sour seems crucial when
+// time pause is not available and late level bosses can one hit the bot at early
+// to mid hell" / "whisky sour doesn't need to be a super cocktail to be useful"
+// / "as it just freezes the bosses always").
+if (which === 'freeze-slot') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 1500, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.handleScreens();
+        pineBot.test.applyDefaults();
+        const T = pineBot.test;
+        const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
+        const why = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).why || '';
+
+        global.gameTime = 1500;
+        // KEYLESS SLOT. This is the list for cocktails whose base effect pays for
+        // the slot with no super key behind it. 6.89.3 removed WHISKY SOUR from
+        // it because LEMON is off-plan — but off-plan is the PREMISE of the list,
+        // not an objection to membership.
+        test('WHISKY SOUR is carried on its own merit, no super key needed', () =>
+            assert.ok(/keyless-core/.test(why('WHISKY SOUR', 'weapon', 0)),
+                why('WHISKY SOUR', 'weapon', 0)));
+        // ...and the freeze bonus is worth enough to move a pick. The flat +12 it
+        // replaced could not: an ingredient opens around 65 and a new cocktail
+        // around +12, so the old bonus was decorative in the regime it named.
+        test('...and it outscores a top ingredient at hell entry', () =>
+            assert.ok(sc('WHISKY SOUR', 'weapon', 0) > sc('CRANBERRY', 'passive', 0),
+                'WS ' + Math.round(sc('WHISKY SOUR', 'weapon', 0)) +
+                ' vs CRANBERRY ' + Math.round(sc('CRANBERRY', 'passive', 0))));
+        // ORDERING PRESERVED: the keyed super lines still sit above it, or this
+        // change would quietly demote the super plan it is meant to sit beneath.
+        test('...but a keyed super line still outranks it', () =>
+            assert.ok(sc('SOUTH SIDE', 'weapon', 0) > sc('WHISKY SOUR', 'weapon', 0),
+                'SS ' + Math.round(sc('SOUTH SIDE', 'weapon', 0)) +
+                ' vs WS ' + Math.round(sc('WHISKY SOUR', 'weapon', 0))));
+        // PHASE. The median run is 1325s against a 1200s hell entrance, so the
+        // window where armour has not capped and a boss hit is lethal is where
+        // the freeze is worth double.
+        const atEntry = sc('WHISKY SOUR', 'weapon', 0);
+        global.gameTime = 5200;
+        const atDepth = sc('WHISKY SOUR', 'weapon', 0);
+        test('the freeze is worth more at hell entry than at depth', () =>
+            assert.ok(atEntry > atDepth,
+                JSON.stringify({ entry: Math.round(atEntry), depth: Math.round(atDepth) })));
+        test('...and the reason is tagged, not buried in a total', () =>
+            assert.ok(/freeze-scarce/.test(why('WHISKY SOUR', 'weapon', 0)),
+                why('WHISKY SOUR', 'weapon', 0)));
+
+        // THE REGRESSION THIS VERSION ALMOST SHIPPED. 6.91.1 released DEEP PARK
+        // for ANY frozen boss. The user's own description of WHISKY SOUR — "it
+        // just freezes the bosses always" — means that build would have
+        // suspended park for the entire run, silently undoing 6.91.2 and 6.91.3
+        // for exactly the builds this version encourages.
+        global.frame = 1000;
+        const owned = {};
+        const build = (o) => { for (const k in owned) delete owned[k]; Object.assign(owned, o); T.setOwned(owned); };
+        build({ 'SOUTH SIDE': 3, 'WHISKY SOUR': 4 });
+        const scene = (gt) => {
+            global.gameTime = gt;
+            global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375,
+                defense: 34.992, regenBonus: 2.218 };
+            global.dropMarks = []; global.roadLines = [];
+            // a boss frozen for an hour: the background state, not an opportunity
+            global.enemies = [{ id: 'b9', type: 'boss', hp: 1e7, maxHp: 1e7, r: 60, reach: 200,
+                speed: 0.4, moving: true, x: 300, y: 300, frozenUntil: 1000 + 216000 }];
+            return T.planMove();
+        };
+        const first = scene(6000);
+        test('a newly frozen boss DOES suspend park — one burn window', () =>
+            assert.ok(first.parkYieldFrozen === true && first.parkOn === false,
+                JSON.stringify({ yield: first.parkYieldFrozen, park: first.parkOn })));
+        const later = scene(6030);
+        test('...but a permanently frozen boss does NOT hold park off forever', () =>
+            assert.ok(later.parkYieldFrozen === false && later.parkOn === true,
+                JSON.stringify({ yield: later.parkYieldFrozen, park: later.parkOn, gt: 6030 })));
+    }, 0);
+    setTimeout(() => done(), 60);
+}
+
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }

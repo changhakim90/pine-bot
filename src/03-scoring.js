@@ -811,9 +811,29 @@
         // WHISKY SOUR (user): the freeze beam pins bosses — a stopped boss
         // deals no contact damage, so it is a DEFENSIVE pick, valued higher
         // whenever bosses are the live threat.
-        if (!atCap && /WHISKY\s*SOUR/i.test(name) &&
-            (enemyMix.boss > 0.5 || hellDetected || (lastPlan && lastPlan.boss)))
-            add(12, 'boss-freeze');
+        // v6.91.4 THE FREEZE IS WORTH WHAT IT IS SCARCE (user: "crucial when
+        // time pause is not available"). The flat +12 could not move a pick: an
+        // ingredient scores ~65 and a new cocktail opens around +12, so the
+        // bonus was decorative in the exact regime the user is describing.
+        //
+        // Two multipliers, both keyed to that sentence:
+        //   SCARCITY — measured pause uptime across this run's hell ticks. If the
+        //     field is stopped often, TIME STOP is doing the job and WHISKY SOUR
+        //     is redundant. `pauseShareRun()` is null before ~5s of hell samples,
+        //     and null is treated as SCARCE on purpose: hell entry is where no
+        //     evidence exists yet and where the user says the pick decides runs.
+        //   PHASE — doubled through the hell-entry window. The median run is
+        //     1325s against a 1200s entrance, so this is where runs are lost, and
+        //     it is also where armour has not capped and a boss hit is lethal.
+        // Hell-only for the same reason: the day has bosses, but not the ones
+        // that one-hit a bot whose armour has not capped.
+        if (!atCap && hellDetected && /WHISKY\s*SOUR/i.test(name)) {
+            const shareW = pauseShareRun();
+            const scarce = (shareW == null) ? 1 : Math.max(0, 1 - shareW);
+            const gtW = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            const entryW = hellDetected && gtW < (CONFIG.deepHell.freezeEntryToS || 2400);
+            add(Math.round(22 * (0.3 + 0.7 * scarce) * (entryW ? 2 : 1)), 'freeze-scarce');
+        }
 
         // =============================================================
         // v6.88.4 PHASE ORDER (user: "the ordering of everything matters")
@@ -941,6 +961,19 @@
         // none of them supered. WHISKY SOUR's LEMON and NEGRONI's CAMPARI are
         // off-plan; VODKA CRANBERRY's key is planned as a STAT (pickup radius),
         // not as a super path.
+        // v6.91.5: WHISKY SOUR joins this list on the same terms as NEGRONI —
+        // no hell gate, because the freeze has to be IN HAND before the 1200s
+        // entrance, and a hell-only boost would delay acquisition to exactly
+        // after the point it is needed.
+        //
+        // RETRACTED MID-BUILD: I first restricted this to hell, on the reading
+        // that the boost inverted the day order (WHISKY SOUR 201 vs VODKA TONIC
+        // 172, NEGRONI 168). Those numbers came from the `freeze-slot` scenario,
+        // whose env sets hell:true — they were never day numbers. In a real day
+        // scene the order is SOUTH SIDE 359, NEGRONI 276, VODKA TONIC 263,
+        // WHISKY SOUR 226: last among the planned cocktails, exactly as its
+        // roadmap rank intends. There was no inversion to fix, and the "fix"
+        // would have delayed the pick past the phase it exists for.
         if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
             add(46 + (hellDetected ? 20 : 0), 'keyless-core');
         }

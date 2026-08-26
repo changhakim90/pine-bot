@@ -133,7 +133,17 @@
     const SCRIPT_VERSION = '6.83.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
-    const REWARD_EPOCH = 2;
+    // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
+    //   1. Seeding the 6.74.0 crown row at 11:11 on 2026-08-26 put the user's
+    //      own 62686s (17.4h) manual run into `paco_bdh_time`. hellTimeBonus
+    //      divided by that live number, so the dominant deep-run reward term
+    //      (crownProgress, weight 2.0 — eight times hellDepth) was cut 4.1x
+    //      MID-MEASUREMENT, with no epoch bump and no code change. A 6000s run
+    //      was worth 0.792 of crown progress on 25 Aug and 0.191 on 26 Aug.
+    //   2. This version decouples that term from the live board (below).
+    // Either alone requires the bump; the first one had already happened
+    // silently, which is exactly what the epoch counter exists to prevent.
+    const REWARD_EPOCH = 3;
 
     // =================================================================
     // CONFIG
@@ -220,7 +230,7 @@
         // so the six-super rainbow gate can NEVER trigger and level-up pools
         // keep offering the time-pause extensions instead.
         userRoadmap: {
-            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
+            cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
             ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
         },
 
@@ -327,15 +337,15 @@
         // opens a sixth line toward the Rainbow Gun gate.
         charRoadmap: {
             pat: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             joe: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             },
             minguk: {
-                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'],
+                cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'],
                 ingredients: ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS']
             }
         },
@@ -669,6 +679,8 @@
             // (the fallback) — against a 70 px mark reach. Anything above ~10
             // puts the seat inside every mark that can spawn.
             cornerInset: 0,
+            freezeEntryToS: 2400,   // v6.91.4: the window where a freeze is worth double
+            parkYieldS: 20,         // v6.91.4: seconds park may be suspended per frozen-boss episode
             // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
             // the damage circle of the boss is also outside of the canvas, the
             // bot needs to hunt it down somehow before it wakes up and does huge
@@ -807,7 +819,16 @@
         // is no ceiling above it.
         // v6.86.9: `rainbow` was worth +0.5 of a ~2.0 reward — the optimiser
         // was being PAID for the thing the scoring vetoes. Zeroed.
-        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0, hellDepth: 0.25, crownProgress: 2.0 },
+        // v6.91.6: `crownRefS` is the DENOMINATOR of the crown-progress term. It
+        // is deliberately a FIXED reference, not the live crown. The term exists
+        // to give unbounded LINEAR gradient at every second of a run; tying it to
+        // an external number the user can move means the optimiser's incentive
+        // silently rescales whenever a manual run lands on the board — which is
+        // precisely what happened on 26 Aug. 15150 is the old board time, i.e.
+        // the horizon the bot is actually competing in (its best ever is 15390).
+        // The LIVE crown is still read for the STOP threshold, which is its
+        // correct use: knowing when a run has actually won.
+        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0, hellDepth: 0.25, crownProgress: 2.0, crownRefS: 15150 },
 
         hellModeRegex: /\bHELL\b/i,
         stopOnHellRecord: true,
@@ -1014,7 +1035,7 @@
     // mule, so the bot picks it more often — but the source numbers are the
     // only evidence on the cranberry's side. Judge on mark/contact death share
     // and p60, and be ready to revert.
-    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI'];
+    let PLAN_COCKTAILS = ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR'];
     let PLAN_INGREDIENTS = ['MINT', 'TONIC', 'OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'TOMATO JUICE', 'CRANBERRY', 'SUGAR', 'WATER', 'COFFEE BEANS'];
 
     // USER AVOID LIST: never pick these UNLESS the pool offers nothing else
@@ -1044,7 +1065,26 @@
     // v6.89.3 (user): "for non super cocktails negroni is the only essential."
     // WHISKY SOUR and VODKA CRANBERRY are off the roster now, so boosting them
     // would be boosting cards the plan no longer wants a slot spent on.
-    const KEYLESS_BOOST = ['NEGRONI'];
+    // v6.91.4 (user): "whisky sour doesn't need to be a super cocktail to be
+    // useful" — and "whisky sour seems crucial when time pause is not available
+    // and late level bosses can one hit the bot at early to mid hell".
+    //
+    // That is the whole point of this list, and 6.89.3 removed WHISKY SOUR from
+    // it on the reasoning that its LEMON key is off-plan. Off-plan is the
+    // PREMISE here, not the objection: these are cocktails whose base effect
+    // pays for the slot on its own.
+    //
+    // The freeze is the only hard counter to a boss that one-hits, and it is the
+    // only freeze the BUILD can carry — TIME STOP is a pickup, not something the
+    // roster owns. Everything downstream already understands it: `frozen` is
+    // `e.frozenUntil > frame` (WHISKY SOUR, per enemy) OR `player.timeStopUntil`
+    // (TIME STOP, global), so the stacking station, the corner release and
+    // 6.91.1's hunt all fire on a WHISKY SOUR freeze with no further work.
+    //
+    // NO GUN RISK: LEMON sits in AVOID_INGREDIENTS_BASE and never unbans, so
+    // SUPER WHISKY SOUR is unreachable and this can never become the sixth super
+    // line that summons the Rainbow Gun. That is what makes it safe to carry.
+    const KEYLESS_BOOST = ['NEGRONI', 'WHISKY SOUR'];
     // ...and the four that DO carry a key must still outrank them, or the
     // keyless boost quietly demotes the super plan it was meant to sit beneath.
     // (Caught on first measurement: SOUTH SIDE fell to 97 against NEGRONI 136.)
@@ -1095,8 +1135,14 @@
     const DAY_ORDER = [
         'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
         'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
-        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI'
-    ];   // v6.89.3: GIN TONIC / WHISKY SOUR / VODKA CRANBERRY dropped — the
+        'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'NEGRONI', 'WHISKY SOUR'
+    ];   // v6.91.5 (user): "whisky sour should be in the planned cocktails".
+         // LAST among the cocktails on purpose — the three super lines and the
+         // keyless NEGRONI keep their order, and WHISKY SOUR is the fifth slot
+         // rather than a competitor for the first four. It still lands well
+         // before the 1200s hell entrance, which is the point: the freeze has to
+         // be in hand BEFORE the bosses that one-hit arrive.
+         // v6.89.3: GIN TONIC / VODKA CRANBERRY dropped — the
          // ingredient order above is UNCHANGED, per the user: "for ingredients
          // the roster should stay with the priorities."
     // THREE ADDITIONS TO THE USER'S LIST, each flagged rather than assumed:
@@ -1481,6 +1527,9 @@
     // v6.91.0 dormant-boss hunt budget (gameTime seconds; reset per run)
     let huntStartS = null;
     let huntRestUntilS = 0;
+    // v6.91.4: one park-suspension window per frozen-boss episode (see 05-movement)
+    let parkYieldId = null;
+    let parkYieldAt = 0;
     // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
     // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
     // all is unknown, and this project's recurring cost is acting on models that
@@ -1509,6 +1558,39 @@
     // depth, with the quantity that actually decides the doctrine: the margin
     // between the seat and the mark's edge. A negative `worstMargin` means a
     // mark covered the seat.
+    // v6.91.4 IS THE FIELD EVER ACTUALLY STOPPED? (user: "whisky sour seems
+    // crucial when time pause is not available and late level bosses can one hit
+    // the bot at early to mid hell".)
+    //
+    // Every freeze mechanism in this bot — the stacking station, the corner
+    // release, 6.91.1's hunt — keys on `frozen`, which is
+    // `e.frozenUntil > frame` (WHISKY SOUR, per enemy) OR
+    // `player.timeStopUntil > frame` (TIME STOP, global). The second is not
+    // something the build owns: it arrives as a pickup. WHISKY SOUR is the only
+    // freeze the bot can BRING. If the field is rarely stopped, the whole freeze
+    // half of the doctrine is dead weight unless WHISKY SOUR is in the build.
+    //
+    // That premise is measured rather than assumed: pause uptime across hell,
+    // per run and pooled. If `share` comes back high, TIME STOP is plentiful and
+    // the scoring tilt below is wrong.
+    const PAUSE_AUDIT_KEY = 'pineBotPauseAudit';
+    let runHellTicks = 0, runPauseTicks = 0;
+    let pauseAudit = (() => {
+        const blank = { runs: 0, hellTicks: 0, pauseTicks: 0 };
+        try {
+            const raw = JSON.parse(localStorage.getItem(PAUSE_AUDIT_KEY) || 'null');
+            if (raw && typeof raw.hellTicks === 'number') return Object.assign(blank, raw);
+        } catch (e) { }
+        return blank;
+    })();
+    // Fraction of THIS run's hell ticks with the field stopped. null until there
+    // is enough of a sample to mean anything — the scorer treats null as
+    // "scarce", because the window it fires in (hell entry) is precisely where
+    // no evidence has accumulated yet and where the user says the pick matters.
+    function pauseShareRun() {
+        return runHellTicks >= 300 ? runPauseTicks / runHellTicks : null;
+    }
+
     const MARK_AUDIT_KEY = 'pineBotMarkAudit';
     let markAudit = (() => {
         const blank = { buckets: {}, runs: 0 };

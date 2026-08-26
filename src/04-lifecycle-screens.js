@@ -29,8 +29,9 @@
         const ms = CONFIG.milestones;
         const t = Math.max(0, timeS || 0);
         const depth = ms.hellDepth * Math.log2(1 + Math.max(0, (t - 1200) / 1800));
-        const crown = (typeof liveCrownTimeS === 'function' ? liveCrownTimeS() : 0) || CONFIG.crownTimeS || 14025;
-        return depth + ms.crownProgress * (t / crown);
+        // v6.91.6: a FIXED reference, not the live crown. See milestones.crownRefS.
+        const ref = ms.crownRefS || 15150;
+        return depth + ms.crownProgress * (t / ref);
     }
 
     function computeReward(stats) {
@@ -87,6 +88,8 @@
         lastHpSample = null;
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
+        parkYieldId = null; parkYieldAt = 0;     // v6.91.4
+        runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
         AVOID_INGREDIENTS = new Set(AVOID_INGREDIENTS_BASE);   // day rules until hell is latched
@@ -217,6 +220,14 @@
         try {
             markAudit.runs = (markAudit.runs || 0) + 1;
             localStorage.setItem(MARK_AUDIT_KEY, JSON.stringify(markAudit));
+        } catch (e) { }
+        try {
+            if (runHellTicks > 0) {
+                pauseAudit.runs = (pauseAudit.runs || 0) + 1;
+                pauseAudit.hellTicks = (pauseAudit.hellTicks || 0) + runHellTicks;
+                pauseAudit.pauseTicks = (pauseAudit.pauseTicks || 0) + runPauseTicks;
+                localStorage.setItem(PAUSE_AUDIT_KEY, JSON.stringify(pauseAudit));
+            }
         } catch (e) { }
         learn.history.push(reward);
         if (learn.history.length > 60) learn.history.shift();

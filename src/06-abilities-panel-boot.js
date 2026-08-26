@@ -861,7 +861,8 @@
                     activeChar: () => activeChar,
                     nextRotationChar, chooseBartender,
                     resetUltGate: () => { lastUlt = 0; }, resetPoTracking,
-                    reloadLearn: () => { learn = loadLearn(); }
+                    reloadLearn: () => { learn = loadLearn(); },
+                    liveCrownTimeS   // v6.91.6: so the test can prove the STOP threshold still tracks the board
                 }
             };
             // v6.85.12: pineBot.bossHitRange() — the measured boss damage ring.
@@ -995,6 +996,25 @@
                     seatGeometry: 'true corner (0,0) is 80.92px from the nearest spawnable mark centre (52,62); the seat used before 6.91.3 was (p.r,p.r) = 70.78px, and its 12px fallback was 64.03 — inside a 70px mark.',
                     note: 'worstMargin <= 0 in any bucket means the corner is NOT mark-immune at that depth. rMax rising across buckets means mark radius scales with time, which would retire the corner as the answer to marks.'
                 };
+            };
+            // v6.91.4: pineBot.pauseAudit() — is the field ever actually stopped?
+            // The WHISKY SOUR tilt assumes TIME STOP is scarce. If `share` comes
+            // back high, that assumption is wrong and the tilt should go.
+            window.pineBot.pauseAudit = () => {
+                const a = pauseAudit || {};
+                const h = a.hellTicks || 0;
+                return {
+                    runs: a.runs || 0, hellTicks: h, pauseTicks: a.pauseTicks || 0,
+                    share: h ? +((a.pauseTicks || 0) / h).toFixed(3) : null,
+                    thisRun: (() => { const s = pauseShareRun(); return s == null ? null : +s.toFixed(3); })(),
+                    note: 'share = fraction of hell planner ticks with the field stopped (WHISKY SOUR per-enemy freeze OR a TIME STOP pickup). A high share means freezes are plentiful and the WHISKY SOUR keyless slot is redundant; a low one is the premise it was added on.'
+                };
+            };
+            window.pineBot.resetPauseAudit = () => {
+                pauseAudit = { runs: 0, hellTicks: 0, pauseTicks: 0 };
+                runHellTicks = 0; runPauseTicks = 0;
+                try { localStorage.removeItem(PAUSE_AUDIT_KEY); } catch (e) { }
+                return 'pause audit cleared';
             };
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
