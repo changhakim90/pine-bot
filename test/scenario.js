@@ -3793,7 +3793,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -3808,6 +3808,9 @@ if (which === 'po-harvest') {
     pineBot.stop();
     pineBot.test.applyDefaults();
     pineBot.test.setChar('pat');
+    // v6.94.1: the farm gate now requires an owned weapon (the joe suicide
+    // runs died with build null) — arm the scene.
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
     const mkPo = (x, y) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 40 });
     const scene = (px, py, poX, poY, ultReadyAt, extraP, extraE) => {
         global.player = Object.assign({ x: px, y: py, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
@@ -3904,6 +3907,7 @@ if (which === 'flame-passout') {
     pineBot.stop();
     pineBot.test.applyDefaults();
     pineBot.test.setChar('pat');
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });   // v6.94.1: the farm gate requires a weapon
     const mkPo = (x, y) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 60 });
     const boss = { type: 'boss', x: 250, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 0, moving: false, id: 61 };
 
@@ -3960,10 +3964,30 @@ if (which === 'flame-passout') {
     test('the aim takes the RAY through three passouts over a nearer lone one', () =>
         assert.ok(pl.flameAimPo === true && pl.flameAim != null && pl.flameAim >= 100,
             JSON.stringify({ po: pl.flameAimPo, d: pl.flameAim })));
-    test('...and the heading leans along that line, sweeping the pierce through it', () =>
-        assert.ok(pl.dx > 0.3, 'dx ' + pl.dx + ' dy ' + pl.dy));
+    // v6.94.0 — REVISED: the original assertion expected a walk toward the
+    // 3-passout centroid. The stand-point search found something BETTER: a
+    // slightly diagonal corridor from the lone passout at (150,180) clips
+    // ALL FOUR bodies within the 42px beam width, so the bot heads for THAT
+    // line's outside end (up-left of the anchor), not into the pile middle.
+    test('...the stand search finds the FOUR-passout line', () =>
+        assert.strictEqual(pl.flameLine, 4, 'flameLine ' + pl.flameLine));
+    test('...and the heading goes to the line END, outside the pile', () =>
+        assert.ok(pl.harvesting === true && pl.dx < -0.3 && pl.dy < -0.5,
+            'dx ' + pl.dx + ' dy ' + pl.dy));
+    // ...and once AT the stand, the bot CREEPS down the line so the facing
+    // stays locked along it — the pile blocks the walk, costing nothing.
+    global.player = { x: 67, y: 141, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+    global.gameTime = 700;
+    pl = pineBot.test.planMove();
+    test('...and at the stand it creeps ALONG the line, not to a stop', () =>
+        assert.ok(pl.harvesting === true && pl.dx > 0.7 && pl.dy > 0.2,
+            'dx ' + pl.dx + ' dy ' + pl.dy));
 
     // CARRY: an active burn triggers the harvest walk even with the ult cold.
+    global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+    global.gameTime = 700;
     global.enemies = [mkPo(380, 270)];
     pl = pineBot.test.planMove();
     test('an active burn is CARRIED to the pile (harvest override, ult cold)', () =>
@@ -3977,6 +4001,121 @@ if (which === 'flame-passout') {
     pl = pineBot.test.planMove();
     test('joe carries the burn to the pile as well', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    done();
+}
+
+// v6.94.0 — THE DAY TREK, override form (user: "clear day with killing all
+// the bosses - no booking mobs, passouts, and mobile bosses to get maximum
+// preparation of upgrades in weapons and ingredients going into hell mode").
+// v6.85.10's FIELD TREK was a PULL — the third instance of the 6.89.11
+// lesson. Priority: roaming boss (tips = roster upgrades) > oldest far
+// passout (FIFO despawn) > wall cluster. Transport only: releases at
+// trekReleasePx and hands over to the combat machinery.
+if (which === 'day-trek') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');
+    const mkPo = (x, y, id) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: id || 70 });
+    const mkBoss = (x, y) => ({ type: 'boss', x, y, r: 30, hp: 4e4, maxHp: 4e4, speed: 1.2, moving: true, id: 71 });
+    const mkWall = (x, y) => ({ type: 'runner', wall: true, noBooking: true, x, y, r: 34, hp: 2e5, maxHp: 2e5, speed: 0, id: 72 });
+    const scene = (enemies, gt) => {
+        global.player = { x: 100, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
+        global.enemies = enemies;
+        global.gameTime = gt || 700;
+        return pineBot.test.planMove();
+    };
+
+    // PRIORITY 1: a roaming boss across the field, empty local — WALK.
+    let pl = scene([mkBoss(460, 270)]);
+    test('an empty local field + a distant roaming boss = trek to the boss', () =>
+        assert.ok(pl.trekking === true && pl.trekKind === 'boss' && pl.dx > 0.9,
+            JSON.stringify({ t: pl.trekking, k: pl.trekKind, dx: pl.dx })));
+    // ...and the boss OUTRANKS a far passout: tips are roster upgrades.
+    pl = scene([mkBoss(460, 270), Object.assign(mkPo(100, 500), { far: true })]);
+    test('the boss outranks a far passout (tips first)', () =>
+        assert.ok(pl.trekKind === 'boss', String(pl.trekKind)));
+    // PRIORITY 3: a wall cluster when nothing else is left.
+    pl = scene([mkWall(460, 270)]);
+    test('a distant wall is trekked to when nothing else is left', () =>
+        assert.ok(pl.trekking === true && pl.trekKind === 'wall' && pl.dx > 0.9,
+            JSON.stringify({ t: pl.trekking, k: pl.trekKind, dx: pl.dx })));
+
+    // RELEASE: a boss already local is NOT a trek — combat machinery owns it.
+    pl = scene([mkBoss(240, 270)]);
+    test('a local boss releases the trek (transport, not combat)', () =>
+        assert.ok(!pl.trekking, JSON.stringify({ t: pl.trekking, k: pl.trekKind })));
+
+    // v6.94.1 (user): "kill the passouts that landed first as soon as
+    // possible" — in the EARLY window the FIFO passout outranks the boss:
+    // its HP was priced at landing time and it funds the next set.
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    pl = scene([mkBoss(460, 270), Object.assign(mkPo(460, 400, 7), { far: true })], 400);
+    test('EARLY (gt<600): the first-landed passout outranks the boss trek', () =>
+        assert.ok(pl.trekking === true && pl.trekKind === 'po',
+            JSON.stringify({ t: pl.trekking, k: pl.trekKind })));
+    pl = scene([mkBoss(460, 270), Object.assign(mkPo(460, 400, 7), { far: true })], 700);
+    test('LATE (gt>600): the boss tip resumes the lead', () =>
+        assert.ok(pl.trekKind === 'boss', String(pl.trekKind)));
+    // ...and the readiness gate is the WEAPON, not just the clock: the joe
+    // suicide runs died at 72s with build null.
+    pineBot.test.setOwned({ 'SOUTH SIDE': 0 });
+    pl = scene([mkBoss(460, 270)], 400);
+    test('no weapon, no trek — whatever the clock says', () =>
+        assert.ok(!pl.trekking, 'trekking weaponless'));
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+
+    // GATES, each with teeth:
+    pl = scene([mkBoss(460, 270)], 60);
+    test('no trek before the run has legs (farmFromS)', () =>
+        assert.ok(!pl.trekking, 'trekking at gt 60'));
+    global.player = { x: 100, y: 270, hp: 40, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
+    global.enemies = [mkBoss(460, 270)]; global.gameTime = 700;
+    pl = pineBot.test.planMove();
+    test('a hurt bot does not trek', () => assert.ok(!pl.trekking, 'trekking hurt'));
+    done();
+}
+
+// v6.94.0 — JOE'S PIERCE ALIGNMENT. Source-verified: the barspoon pierces 8
+// bodies and fireBase aims at the NEAREST enemy, so whatever stands BEHIND
+// the target is hit too. This was luck; now it is positioning: candidates
+// whose base-attack ray continues into passouts are preferred.
+if (which === 'joe-pierce') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('joe');
+    const mkPo = (x, y, id) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id });
+    // a mob with TWO passouts due south of it: standing NORTH of the mob
+    // lines the volley through all three. Flee-from-mob alone points
+    // north-WEST-ish from the start position; the alignment term must pull
+    // the chosen heading onto the firing line.
+    global.player = { x: 300, y: 200, hp: 95, maxHp: 100, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+    global.enemies = [
+        { type: 'drunk', x: 330, y: 270, r: 10, hp: 60, maxHp: 60, speed: 1.5, id: 80 },
+        mkPo(330, 350, 81), mkPo(330, 430, 82)
+    ];
+    global.gameTime = 700;
+    const pl = pineBot.test.planMove();
+    // The measured behaviour: at 16/hit joe HOLDS a 1-hit firing line
+    // (stand-still, zero exposure) instead of fleeing broadside to 0 hits.
+    // A 2-hit line exists but costs a walk toward the mob — holding the
+    // free line is the right trade, so the assertion is >= 1.
+    test('joe\'s chosen candidate keeps a firing line through the pile', () =>
+        assert.ok((pl.pierceLine || 0) >= 1, 'pierceLine ' + pl.pierceLine));
+    // TEETH, in-scenario: zeroing the weight must return to broadside flight.
+    pineBot.config.movement.pierceAlignValue = 0;
+    const pl0 = pineBot.test.planMove();
+    test('...and zeroing pierceAlignValue loses the line (the term has teeth)', () =>
+        assert.strictEqual(pl0.pierceLine || 0, 0, 'pierceLine ' + pl0.pierceLine));
+    pineBot.config.movement.pierceAlignValue = 16;
+    // ...and the term is joe\'s alone: pat has no pierce to aim.
+    pineBot.test.setChar('pat');
+    global.player = { x: 300, y: 200, hp: 170, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
+    global.gameTime = 700;
+    const pl2 = pineBot.test.planMove();
+    test('pat, pierceless, gets no alignment term', () =>
+        assert.strictEqual(pl2.pierceLine || 0, 0, 'pat pierceLine ' + pl2.pierceLine));
     done();
 }
 

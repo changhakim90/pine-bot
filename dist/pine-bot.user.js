@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.93.3
+// @version      6.94.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.93.3';
+    const SCRIPT_VERSION = '6.94.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -526,6 +526,35 @@
             harvestRestS: 20,      // rest before the next attempt
             harvestUntilS: 2700,   // the window: day + hell entry + early hell (user's stated gap)
             harvestMarkSoakHp: 0.65,   // v6.93.3: above this HP ratio a boss mark (40% maxHp) is an affordable toll on the way to the pile
+            // v6.94.0 FARM READINESS — the 6.93.2+joe row (n=6, median 167s,
+            // deaths at 72s/101s with no cocktail picked) says a 100-HP joe
+            // beelining to piles from the opening seconds is a corpse, not a
+            // farmer. No approach override until the run has legs.
+            farmFromS: 90,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+            trekPoFirstS: 600, // v6.94.1 (user): first-landed passouts outrank boss treks this early — their HP is priced at landing time
+            // v6.94.0 DAY TREK — the FIELD TREK below (v6.85.10) was a PULL,
+            // the third instance of the 6.89.11 lesson (overrides beat
+            // pulls). Now an override, with the target set widened to the
+            // user's day campaign: "clear day with killing all the bosses -
+            // no booking mobs, passouts, and mobile bosses". Priority:
+            // roaming boss FIRST (tips carry roster upgrades - the highest-
+            // leverage loot), then oldest far passout (FIFO despawn), then
+            // wall cluster. Transport only: it walks until the target is
+            // local (trekReleasePx) and hands over to the normal combat
+            // machinery. Day only, healthy only, time-boxed like the hunt.
+            trekOverride: true,
+            trekS: 12, trekRestS: 20, trekReleasePx: 190,
+            // v6.94.0 JOE PIERCE ALIGNMENT — stand so the base-attack ray
+            // (through the NEAREST enemy) continues into passouts/walls
+            // behind it. Every ordinary volley then mines the pile.
+            pierceAlignValue: 16,
+            // v6.94.0 flame stance: stand this far outside the near END of
+            // the best pierce line, facing down it — standing at the pile
+            // CENTROID wastes the half of the burn behind the bot.
+            flameStandOff: 55,
+            // fireCrossBonus (user, 2026-08-28): the +duration upgrades
+            // appear LATE IN HELL when items are nearly maxed — not a day
+            // tool. Do not build day doctrine around burn duration.
             // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
             // every 3 frames along the aim vector, speed 9-11, rainbow-gun
             // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
@@ -981,7 +1010,12 @@
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
                   kiteChasers: 2, fleeNear: 3,
-                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false },
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false,
+                  // v6.94.0: source-verified — joe's barspoon pierces 8
+                  // bodies. fireBase aims at the NEAREST enemy, so whatever
+                  // stands BEHIND the target is also hit; the pierce-align
+                  // term in 05 turns that from luck into positioning.
+                  pierce: 8 },
         // Minguk's whole doctrine is "outrun everything on natural speed":
         // 2.375 with a nuke that needs no positioning at all. Kiting and
         // fleeing are his primary tools, not his last resorts, so he keeps the
@@ -1683,6 +1717,9 @@
     // unreachable pile cannot deadlock the planner.
     let harvStartS = null;
     let harvRestUntilS = 0;
+    // v6.94.0 day-trek clock (gameTime seconds; reset per run)
+    let trekStartS = null;
+    let trekRestUntilS = 0;
     // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
     // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
     // all is unknown, and this project's recurring cost is acting on models that
@@ -5006,6 +5043,7 @@
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         harvStartS = null; harvRestUntilS = 0;   // v6.93.1: so is the harvest-approach clock
+        trekStartS = null; trekRestUntilS = 0;   // v6.94.0: and the day-trek clock
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
@@ -7747,6 +7785,46 @@
                 const sc = rayCount(po.x, po.y) * 3 + 3 / (1 + d / 200);
                 if (sc > bestF) { bestF = sc; flameTarget = { x: po.x, y: po.y, d, po: true }; }
             }
+            // v6.94.0 THE STAND POINT. The rays above run from the bot's
+            // CURRENT position — fine for aiming a burn mid-fight, wrong for
+            // choosing where to stand: from broadside, no ray through one
+            // passout crosses another, and walking to the pile CENTROID puts
+            // bodies on both sides of a stream that fires one way. So the
+            // stand is chosen from the pile's own geometry: for each ordered
+            // pair (A,B), count passouts inside the 42px corridor along
+            // A->B; stand flameStandOff px OUTSIDE A, facing down the line.
+            // The harvest override walks there and then keeps CREEPING along
+            // the line — the passout body blocks the walk (obstacles deal no
+            // contact damage) and the push keeps the facing locked down it.
+            if (flameTarget && poList.length >= 1) {
+                let bS = -Infinity, stand = null;
+                const off = M.flameStandOff != null ? M.flameStandOff : 55;
+                for (const A of poList) {
+                    for (const B of poList) {
+                        let ldx, ldy;
+                        if (B === A) {
+                            if (poList.length > 1) continue;
+                            const dpa = Math.hypot(A.x - p.x, A.y - p.y) || 1;
+                            ldx = (A.x - p.x) / dpa; ldy = (A.y - p.y) / dpa;
+                        } else {
+                            const L2 = Math.hypot(B.x - A.x, B.y - A.y) || 1;
+                            ldx = (B.x - A.x) / L2; ldy = (B.y - A.y) / L2;
+                        }
+                        let n = 0;
+                        for (const q of poList) {
+                            const qx = q.x - A.x, qy = q.y - A.y;
+                            const proj = qx * ldx + qy * ldy;
+                            if (proj < -1) continue;
+                            if (Math.abs(qx * ldy - qy * ldx) <= 42) n++;
+                        }
+                        const sx = A.x - ldx * ((A.r || 37) + off);
+                        const sy = A.y - ldy * ((A.r || 37) + off);
+                        const sc2 = n * 3 - Math.hypot(p.x - sx, p.y - sy) / 400;
+                        if (sc2 > bS) { bS = sc2; stand = { sx, sy, ldx, ldy, line: n }; }
+                    }
+                }
+                if (stand) Object.assign(flameTarget, stand);
+            }
             // v6.93.3: while any passout is in aim range it is the ONLY
             // target class (the old 3 vs 2.5/2/1 weights let a close boss
             // outbid a farther passout through the falloff). Mobs, walls and
@@ -7808,11 +7886,31 @@
             // asked whether the player was nearer the passout than the MOBS
             // were, which is a different and usually unwinnable condition
             // when a mob is chasing us and the passout is parked.)
-            let candNearestLive = Infinity;
+            let candNearestLive = Infinity, candNearestE = null;
             for (const e of th.enemies) {
                 if (e.wall || e.dormant) continue;   // v6.91.0
                 const de = Math.hypot(nx - e.x, ny - e.y) - (e.r || 0);
-                if (de < candNearestLive) candNearestLive = de;
+                if (de < candNearestLive) { candNearestLive = de; candNearestE = e; }
+            }
+            // v6.94.0 PIERCE ALIGNMENT (joe). fireBase aims at the NEAREST
+            // enemy and joe's barspoon pierces 8 bodies, so whatever stands
+            // BEHIND his target is hit too — but only if aligned, which was
+            // left to luck. Prefer candidates whose base-attack ray continues
+            // into passouts (the one target class base attacks always hurt).
+            // The 6.93.0 audit flagged candNearestLive as computed-but-never-
+            // read dead code; it is now this term's input.
+            let pierceHits = 0;
+            if ((charOf().pierce || 0) >= 4 && candNearestE && th.passouts.length) {
+                const bdx = candNearestE.x - nx, bdy = candNearestE.y - ny;
+                const bL = Math.hypot(bdx, bdy) || 1;
+                const bux = bdx / bL, buy = bdy / bL;
+                for (const q of th.passouts) {
+                    if (q.far) continue;
+                    const qx = q.x - nx, qy = q.y - ny;
+                    const proj = qx * bux + qy * buy;
+                    if (proj < bL || proj > bL + 300) continue;    // behind the target, within pierce reach
+                    if (Math.abs(qx * buy - qy * bux) <= 42 && pierceHits < 3) pierceHits++;
+                }
             }
 
             let danger = 0;
@@ -8309,6 +8407,8 @@
                 const tl = Math.max(1, flameTarget.d);
                 gain += M.flameAimValue * ((dx * (flameTarget.x - p.x) + dy * (flameTarget.y - p.y)) / tl);
             }
+            // v6.94.0: joe's pierce-line preference (see the computation above)
+            if (pierceHits) gain += (M.pierceAlignValue != null ? M.pierceAlignValue : 7) * pierceHits;
 
             // v6.86.4 HARVEST WINDOW. The demo's whole passout economy is
             // positional: the human drifts onto the pile as the ult comes off
@@ -8347,7 +8447,7 @@
             else gain -= (zoner ? 2.4 : 1.0);                              // standing still is rarely right (and wastes burn zones)
 
             const value = gain - danger;
-            if (!best || value > best.value) best = { dx, dy, value, danger, gain };
+            if (!best || value > best.value) best = { dx, dy, value, danger, gain, pierceHits };
         }
 
         if (!best) return null;
@@ -8429,7 +8529,73 @@
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner && !parkYieldFrozen;
-        let parked = false, onPost = false, harvesting = false;
+        let parked = false, onPost = false, harvesting = false, trekking = false;
+        // v6.94.0 DAY TREK (override form of v6.85.10's FIELD TREK — see the
+        // config comment). Selection runs here so it can see the same gather;
+        // trekPo (the old pull's target) stays as the passout candidate.
+        let trekT = null, trekOn = false;
+        {
+            const MH2 = CONFIG.movement;
+            const gtT = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            const relPx = MH2.trekReleasePx != null ? MH2.trekReleasePx : 190;
+            const trekGates = MH2.trekOverride !== false && !hellDetected && gtT < 1200 &&
+                gtT >= (MH2.farmFromS != null ? MH2.farmFromS : 150) &&
+                !hpPanic && !th.rival && !rainbowRecent && !flight;
+            if (trekGates) {
+                // v6.94.1 (user): in the EARLY game the first-landed passouts
+                // outrank everything — their HP is priced at landing time, so
+                // they are the only bodies the early roster can actually
+                // convert to loot, and that loot is what makes the NEXT set
+                // killable. Before trekPoFirstS the FIFO passout leads; after
+                // it, the boss tip (a roster upgrade) resumes the lead.
+                const poFirst = gtT < (MH2.trekPoFirstS != null ? MH2.trekPoFirstS : 600);
+                let cand = null, kind = null, bestD = Infinity;
+                if (poFirst && trekPo) { cand = trekPo; kind = 'po'; }
+                // roaming boss, unless one is already local — the tip is
+                // the highest-leverage loot in the game.
+                if (!kind) {
+                    let localBoss = false; bestD = Infinity;
+                    for (const e of th.enemies) {
+                        if (!e.boss || e.wall || e.frozen) continue;
+                        const dB = Math.hypot(e.x - p.x, e.y - p.y);
+                        if (dB < relPx) { localBoss = true; cand = null; break; }
+                        if (dB < bestD) { bestD = dB; cand = e; }
+                    }
+                    if (cand) kind = 'boss';
+                }
+                // the FIFO passout trek (already gated on an empty local
+                // pile by the trekPo selection above)
+                if (!kind && trekPo) { cand = trekPo; kind = 'po'; }
+                // 3) a wall cluster, if no wall is already local. Distant
+                //    walls never reach th.enemies (the gather range-caps
+                //    non-boss bodies), so scan the RAW list the way the
+                //    passout gather does.
+                if (!kind && !wallFocus) {
+                    cand = null; bestD = Infinity;
+                    const raw = safe(() => enemies, null) || [];
+                    for (const e of raw) {
+                        if (!e || typeof e.x !== 'number') continue;
+                        const isW = e.wall === true || /nobook/i.test(String(e.bossChar || '') + ' ' + String(e.type || ''));
+                        if (!isW || e.contested) continue;
+                        const dW = Math.hypot(e.x - p.x, e.y - p.y);
+                        if (dW >= relPx && dW < bestD) { bestD = dW; cand = e; }
+                    }
+                    if (cand) kind = 'wall';
+                }
+                if (kind) trekT = { x: cand.x, y: cand.y, kind };
+            }
+            if (!trekT) {
+                trekStartS = null;
+            } else if (gtT >= trekRestUntilS) {
+                if (trekStartS == null || trekStartS > gtT) trekStartS = gtT;
+                if (gtT - trekStartS <= (MH2.trekS != null ? MH2.trekS : 12)) {
+                    trekOn = true;
+                } else {
+                    trekStartS = null;
+                    trekRestUntilS = gtT + (MH2.trekRestS != null ? MH2.trekRestS : 20);
+                }
+            }
+        }
         // v6.93.1 HARVEST APPROACH (user: "Joe and Pat still can't clear
         // passouts for fast rewards... minguk seems to be able to clear 120
         // minutes with consistency"). Minguk needs no walk — his nuke is
@@ -8458,7 +8624,19 @@
         // clock, any character — the cross is not a melee ult, so the
         // meleeUlt gate applies only to the ult arm.
         const flameHarvest = flameOn && !hpPanic && (!markHere || markSoak) && !projHere;
-        const harvWant = MH.harvestApproach !== false && harvWindow &&
+        // v6.94.0 FARM READINESS: the 6.93.2+joe row (median 167s, deaths at
+        // 72s with no cocktail yet) says approach overrides before the run
+        // has legs are suicide walks. Applies to harvest AND trek.
+        // v6.94.1 (user): "they need to kill the passouts that landed first
+        // as soon as possible to have the potential for loot and weapon and
+        // ingredient upgrades to kill the next set of passouts." Passout HP
+        // scales with LANDING time, so every second of delay prices the
+        // first bodies up — the flat 150s gate was fighting the snowball.
+        // The real suicide marker in the joe row was BUILD NULL (no weapon
+        // at 72s), so the gate is now the weapon itself, plus a short floor.
+        const farmReady = ownedCocktailCount() >= 1 &&
+            gtHarv >= (MH.farmFromS != null ? MH.farmFromS : 90);
+        const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
             ((meleeUlt && ultHarvest) || flameHarvest) &&
             poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
@@ -8490,10 +8668,25 @@
         } else if (harvOn && poW) {
             // walk to the pile; ultHarvest's own gates (!hpPanic, !markHere,
             // !projHere) already cleared, and harvWant bounded the range.
-            const dPo = Math.hypot(p.x - poCx, p.y - poCy);
-            if (dPo <= (MH.harvestStopPx || 72)) { vx = 0; vy = 0; }
-            else { vx = (poCx - p.x) / dPo; vy = (poCy - p.y) / dPo; }
+            // v6.94.0: with a live burn and a computed stand point, go to the
+            // END of the pierce line instead of the centroid, then CREEP down
+            // the line so the facing stays locked along it (the pile itself
+            // blocks the walk — passouts deal no contact damage).
+            let tx = poCx, ty = poCy, creep = null;
+            if (flameHarvest && flameTarget && flameTarget.sx != null) {
+                tx = flameTarget.sx; ty = flameTarget.sy;
+                creep = { x: flameTarget.ldx, y: flameTarget.ldy };
+            }
+            const dPo = Math.hypot(p.x - tx, p.y - ty);
+            if (dPo <= (MH.harvestStopPx || 72)) {
+                if (creep) { vx = creep.x; vy = creep.y; }
+                else { vx = 0; vy = 0; }
+            } else { vx = (tx - p.x) / dPo; vy = (ty - p.y) / dPo; }
             harvesting = true;
+        } else if (trekOn && trekT) {
+            const dT = Math.hypot(p.x - trekT.x, p.y - trekT.y);
+            vx = (trekT.x - p.x) / dT; vy = (trekT.y - p.y) / dT;
+            trekking = true;
         }
         // v6.91.8: record the entrance build and the first park engagement. Both
         // are per-run and cost nothing; see PARK_AUDIT_KEY.
@@ -8560,6 +8753,9 @@
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
             flameAimPo: flameTarget ? flameTarget.po === true : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
+            trekking, trekKind: trekT ? trekT.kind : null,
+            pierceLine: best ? (best.pierceHits || 0) : 0,
+            flameLine: flameTarget && flameTarget.line != null ? flameTarget.line : null,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             kiteAt, fleeNear, contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),

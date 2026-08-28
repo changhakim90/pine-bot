@@ -524,6 +524,35 @@
             harvestRestS: 20,      // rest before the next attempt
             harvestUntilS: 2700,   // the window: day + hell entry + early hell (user's stated gap)
             harvestMarkSoakHp: 0.65,   // v6.93.3: above this HP ratio a boss mark (40% maxHp) is an affordable toll on the way to the pile
+            // v6.94.0 FARM READINESS — the 6.93.2+joe row (n=6, median 167s,
+            // deaths at 72s/101s with no cocktail picked) says a 100-HP joe
+            // beelining to piles from the opening seconds is a corpse, not a
+            // farmer. No approach override until the run has legs.
+            farmFromS: 90,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+            trekPoFirstS: 600, // v6.94.1 (user): first-landed passouts outrank boss treks this early — their HP is priced at landing time
+            // v6.94.0 DAY TREK — the FIELD TREK below (v6.85.10) was a PULL,
+            // the third instance of the 6.89.11 lesson (overrides beat
+            // pulls). Now an override, with the target set widened to the
+            // user's day campaign: "clear day with killing all the bosses -
+            // no booking mobs, passouts, and mobile bosses". Priority:
+            // roaming boss FIRST (tips carry roster upgrades - the highest-
+            // leverage loot), then oldest far passout (FIFO despawn), then
+            // wall cluster. Transport only: it walks until the target is
+            // local (trekReleasePx) and hands over to the normal combat
+            // machinery. Day only, healthy only, time-boxed like the hunt.
+            trekOverride: true,
+            trekS: 12, trekRestS: 20, trekReleasePx: 190,
+            // v6.94.0 JOE PIERCE ALIGNMENT — stand so the base-attack ray
+            // (through the NEAREST enemy) continues into passouts/walls
+            // behind it. Every ordinary volley then mines the pile.
+            pierceAlignValue: 16,
+            // v6.94.0 flame stance: stand this far outside the near END of
+            // the best pierce line, facing down it — standing at the pile
+            // CENTROID wastes the half of the burn behind the bot.
+            flameStandOff: 55,
+            // fireCrossBonus (user, 2026-08-28): the +duration upgrades
+            // appear LATE IN HELL when items are nearly maxed — not a day
+            // tool. Do not build day doctrine around burn duration.
             // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
             // every 3 frames along the aim vector, speed 9-11, rainbow-gun
             // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
@@ -979,7 +1008,12 @@
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
                   kiteChasers: 2, fleeNear: 3,
-                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false },
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false,
+                  // v6.94.0: source-verified — joe's barspoon pierces 8
+                  // bodies. fireBase aims at the NEAREST enemy, so whatever
+                  // stands BEHIND the target is also hit; the pierce-align
+                  // term in 05 turns that from luck into positioning.
+                  pierce: 8 },
         // Minguk's whole doctrine is "outrun everything on natural speed":
         // 2.375 with a nuke that needs no positioning at all. Kiting and
         // fleeing are his primary tools, not his last resorts, so he keeps the
@@ -1681,6 +1715,9 @@
     // unreachable pile cannot deadlock the planner.
     let harvStartS = null;
     let harvRestUntilS = 0;
+    // v6.94.0 day-trek clock (gameTime seconds; reset per run)
+    let trekStartS = null;
+    let trekRestUntilS = 0;
     // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
     // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
     // all is unknown, and this project's recurring cost is acting on models that
