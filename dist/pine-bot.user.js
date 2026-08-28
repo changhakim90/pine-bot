@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.95.1
+// @version      6.95.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.95.1';
+    const SCRIPT_VERSION = '6.95.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -764,7 +764,23 @@
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
             parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
-            parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
+            parkDefense: 30,
+            // v6.95.2 THE ENTRY SEAT (user: "needs more consistency in
+            // building up to this setup in day mode and early hell"). The
+            // 195-minute recording shows the SEATED state winning; the 6.94.1
+            // digest shows death six seconds after entry, mid-field. The ramp
+            // now ends where the winning posture begins: farm until
+            // farmUntilS (1100), re-harden, then WALK TO THE SEAT before the
+            // entry surge spawns, and hold it through early hell until the
+            // real park (armor+regen gated) takes over. If the park gates
+            // have not passed by entrySeatUntilS, the seat releases and the
+            // normal early-hell doctrine resumes — the bridge is a WINDOW,
+            // not a promise the corner is safe forever without armor.
+            entrySeat: true,
+            entryPrepS: 1140,      // day: start walking to the seat here
+            entryDayMaxS: 1320,    // day upper bound (hell never latched -> release)
+            entrySeatUntilS: 1290, // hell: hand over to park (or release) by here
+        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
             // v6.91.3: how far in from the TRUE corner the seat sits. The
@@ -4240,6 +4256,16 @@
         // would have delayed the pick past the phase it exists for.
         if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
             add(46 + (hellDetected ? 20 : 0), 'keyless-core');
+        }
+        // v6.95.2 ENTRY-REGEN CHECKPOINT: the proven deep seat runs on armor
+        // AND regen (park gates on regenRate >= 1.0), but only armor had a
+        // late-day checkpoint. If measured regen is behind by late day, WATER
+        // (and the SIMPLE SYRUP it crafts into) jumps the queue so the park
+        // gates pass at entry instead of forty minutes into hell.
+        {
+            const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
+                !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
         }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat
@@ -8646,7 +8672,17 @@
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner && !parkYieldFrozen;
-        let parked = false, onPost = false, harvesting = false, trekking = false;
+        let parked = false, onPost = false, harvesting = false, trekking = false, seated = false;
+        // v6.95.2 ENTRY SEAT — see the config comment. Below hunt and park in
+        // precedence (park with its gates passed IS the seat, better armed);
+        // above harvest/trek, which must not yank the bot to a pile while the
+        // entry surge is queueing.
+        const gtSeatW = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const seatWindow = CONFIG.deepHell.entrySeat !== false && (
+            (!hellDetected && gtSeatW >= (CONFIG.deepHell.entryPrepS != null ? CONFIG.deepHell.entryPrepS : 1140) &&
+                              gtSeatW < (CONFIG.deepHell.entryDayMaxS != null ? CONFIG.deepHell.entryDayMaxS : 1320)) ||
+            (hellDetected && gtSeatW < (CONFIG.deepHell.entrySeatUntilS != null ? CONFIG.deepHell.entrySeatUntilS : 1290)));
+        const seatOn = seatWindow && !markHere && !lineOnCorner && !flight && !th.rival && hpRatio > 0.4;
         // v6.94.0 DAY TREK (override form of v6.85.10's FIELD TREK — see the
         // config comment). Selection runs here so it can see the same gather;
         // trekPo (the old pull's target) stays as the passout candidate.
@@ -8791,6 +8827,11 @@
             const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
+        } else if (seatOn) {
+            const dSeat = Math.hypot(p.x - cnrX, p.y - cnrY);
+            if (dSeat <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; }
+            else { vx = (cnrX - p.x) / dSeat; vy = (cnrY - p.y) / dSeat; }
+            seated = true;
         } else if (harvOn && poW) {
             // walk to the pile; ultHarvest's own gates (!hpPanic, !markHere,
             // !projHere) already cleared, and harvWant bounded the range.
@@ -8842,7 +8883,12 @@
                     def: dEnt == null ? 0 : +dEnt.toFixed(1),
                     regen: +regenRate().toFixed(2),
                     supers: (typeof supersThisRun === 'number' ? supersThisRun : 0),
-                    zoner: !!zoner
+                    zoner: !!zoner,
+                    // v6.95.2: the two consistency numbers the entry ramp is
+                    // FOR — was the bot in the seat when hell arrived, and
+                    // how far had the ult levelled.
+                    seated: !!(parked || seated),
+                    ultLv: safe(() => player.ultLevel, 0) || 0
                 };
             }
             if (parkOn) { parkOnTicks++; if (parkFirstS == null) parkFirstS = Math.round(gtCorner); }
@@ -8897,7 +8943,7 @@
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
             flameAimPo: flameTarget ? flameTarget.po === true : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
-            trekking, trekKind: trekT ? trekT.kind : null, farmStance: farmRef.v,
+            trekking, trekKind: trekT ? trekT.kind : null, farmStance: farmRef.v, seated,
             pierceLine: best ? (best.pierceHits || 0) : 0,
             flameLine: flameTarget && flameTarget.line != null ? flameTarget.line : null,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
@@ -9730,6 +9776,16 @@
                 version: SCRIPT_VERSION, tag: scriptTag(),
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
+                // v6.95.2 (user: "I can't die on this run without purposefully
+                // overriding the bot... what should I do to save the data
+                // while killing the bot on my own?"): book the run NOW with a
+                // live snapshot, then stop driving — the user is free to die,
+                // quit, or close the tab without losing the row.
+                endRun: () => {
+                    deathSnapshot = deathSnapshot || snapshotStats();
+                    finishRun(); releaseAll(); stopBot('user-end');
+                    return 'run booked + bot stopped — die or quit freely';
+                },
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
                 demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording

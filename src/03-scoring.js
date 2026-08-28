@@ -985,6 +985,16 @@
         if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
             add(46 + (hellDetected ? 20 : 0), 'keyless-core');
         }
+        // v6.95.2 ENTRY-REGEN CHECKPOINT: the proven deep seat runs on armor
+        // AND regen (park gates on regenRate >= 1.0), but only armor had a
+        // late-day checkpoint. If measured regen is behind by late day, WATER
+        // (and the SIMPLE SYRUP it crafts into) jumps the queue so the park
+        // gates pass at entry instead of forty minutes into hell.
+        {
+            const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
+            if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
+                !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
+        }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat
         // digest the roster's NEGRONI arrived at gt 752. Joe cannot wait 12

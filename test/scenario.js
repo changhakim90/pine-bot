@@ -3835,7 +3835,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4303,6 +4303,89 @@ if (which === 'joe-guard') {
     test('...and not for pat', () =>
         assert.ok(!/joe-shield/.test(why('NEGRONI')), why('NEGRONI')));
     done();
+}
+
+// v6.95.2 — THE ENTRY SEAT. The 195-minute recording shows the SEATED state
+// winning; the 6.94.1 digest shows death 6s after entry, mid-field. The ramp
+// now ends where the winning posture begins: pre-seat from entryPrepS, hold
+// through early hell until the armed park takes over or the window closes.
+if (which === 'entry-seat') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1150 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    const scene = (gt, extraP) => {
+        global.player = Object.assign({ x: 200, y: 200, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                                        ultReadyAt: 1e9, defense: 35 }, extraP || {});
+        global.enemies = [];
+        global.gameTime = gt;
+        let pl; for (let i = 0; i < 3; i++) pl = pineBot.test.planMove();
+        return pl;
+    };
+
+    // DAY, past entryPrepS: walk to the seat (nearest corner from (200,200)
+    // is (0,0) — heading up-left), and HOLD there.
+    let pl = scene(1150);
+    test('at gt 1150 the bot walks to the corner seat', () =>
+        assert.ok(pl.seated === true && pl.dx < -0.5 && pl.dy < -0.5,
+            JSON.stringify({ s: pl.seated, dx: pl.dx, dy: pl.dy })));
+    pl = scene(1150, { x: 8, y: 8 });
+    test('...and at the seat it HOLDS', () =>
+        assert.ok(pl.seated === true && pl.dx === 0 && pl.dy === 0,
+            JSON.stringify({ s: pl.seated, dx: pl.dx, dy: pl.dy })));
+    // BEFORE the window: no seat (the farm stance owns 90-1100).
+    pl = scene(1000);
+    test('at gt 1000 the day belongs to the farm, not the seat', () =>
+        assert.ok(!pl.seated, 'seated at 1000'));
+    // ENTRY-REGEN CHECKPOINT: regen behind by late day -> WATER jumps.
+    global.gameTime = 800;
+    const wWhy = () => pineBot.test.scoreCard({ n: 'WATER', type: 'passive', lv: 2, maxlv: 6 }, 0, []).why || '';
+    test('late day with regen behind, WATER carries entry-regen', () =>
+        assert.ok(/entry-regen/.test(wWhy()), wWhy()));
+    pineBot.test.setOwned({ 'SIMPLE SYRUP': 2 });   // 1.024 HP/s >= the park gate
+    test('...and with the gate met the checkpoint stands down', () =>
+        assert.ok(!/entry-regen/.test(wWhy()), wWhy()));
+    pineBot.test.setOwned({ 'SIMPLE SYRUP': 0 });
+
+    // A mark on the seat releases it — the corner doctrine, unchanged.
+    global.dropMarks = [{ x: 20, y: 20, r: 58, dmg: 72, tele: 0.6, at: 1155 }];
+    pl = scene(1150, { x: 8, y: 8 });
+    test('a mark on the seat releases it', () => assert.ok(!pl.seated, 'seated under a mark'));
+    global.dropMarks = [];
+    done();
+}
+
+// ...and the HELL side of the window, in a hell-latched env.
+if (which === 'entry-seat-hell') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 1250, hell: true } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        pineBot.test.setChar('pat');
+        pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+        const scene = (gt, extraP) => {
+            global.player = Object.assign({ x: 200, y: 200, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                                            ultReadyAt: 1e9 }, extraP || {});
+            global.enemies = [];
+            global.gameTime = gt;
+            let pl; for (let i = 0; i < 3; i++) pl = pineBot.test.planMove();
+            return pl;
+        };
+        // EARLY HELL, park gates NOT passed (no defense): the seat bridges.
+        let pl = scene(1250);
+        test('early hell without park gates: the seat BRIDGES', () =>
+            assert.ok(pl.seated === true, JSON.stringify({ s: pl.seated, park: pl.parkOn })));
+        // ...and the window closes at entrySeatUntilS — the bridge is a
+        // window, not a promise the corner is safe forever unarmored.
+        pl = scene(1400);
+        test('past entrySeatUntilS the bridge releases', () =>
+            assert.ok(!pl.seated, 'seated at 1400'));
+        // endRun exists and books safely even with no run active.
+        test('pineBot.endRun is callable and idempotent', () =>
+            assert.ok(typeof pineBot.endRun === 'function' && /booked/.test(String(pineBot.endRun()))));
+        done();
+    }, 700);
 }
 
 // v6.92.0 — THE ARMING CAP, written from a LIVE READ, not from theory.

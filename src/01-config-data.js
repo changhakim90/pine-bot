@@ -762,7 +762,23 @@
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
             parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
-            parkDefense: 30,        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
+            parkDefense: 30,
+            // v6.95.2 THE ENTRY SEAT (user: "needs more consistency in
+            // building up to this setup in day mode and early hell"). The
+            // 195-minute recording shows the SEATED state winning; the 6.94.1
+            // digest shows death six seconds after entry, mid-field. The ramp
+            // now ends where the winning posture begins: farm until
+            // farmUntilS (1100), re-harden, then WALK TO THE SEAT before the
+            // entry surge spawns, and hold it through early hell until the
+            // real park (armor+regen gated) takes over. If the park gates
+            // have not passed by entrySeatUntilS, the seat releases and the
+            // normal early-hell doctrine resumes — the bridge is a WINDOW,
+            // not a promise the corner is safe forever without armor.
+            entrySeat: true,
+            entryPrepS: 1140,      // day: start walking to the seat here
+            entryDayMaxS: 1320,    // day upper bound (hell never latched -> release)
+            entrySeatUntilS: 1290, // hell: hand over to park (or release) by here
+        // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
             // v6.91.3: how far in from the TRUE corner the seat sits. The

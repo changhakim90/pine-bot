@@ -811,6 +811,16 @@
                 version: SCRIPT_VERSION, tag: scriptTag(),
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
+                // v6.95.2 (user: "I can't die on this run without purposefully
+                // overriding the bot... what should I do to save the data
+                // while killing the bot on my own?"): book the run NOW with a
+                // live snapshot, then stop driving — the user is free to die,
+                // quit, or close the tab without losing the row.
+                endRun: () => {
+                    deathSnapshot = deathSnapshot || snapshotStats();
+                    finishRun(); releaseAll(); stopBot('user-end');
+                    return 'run booked + bot stopped — die or quit freely';
+                },
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
                 demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording
