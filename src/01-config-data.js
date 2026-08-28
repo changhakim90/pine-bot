@@ -495,6 +495,19 @@
             // BANKED, and the ult is dropped into the pile when it comes up.
             ultHarvestLeadS: 15,   // start positioning this long before the ult is ready
             ultHarvestPull: 60,    // pull toward the cluster centroid while harvesting
+            // v6.93.1 HARVEST APPROACH — the pull above measurably cannot
+            // deliver pat/joe to the pile: it competes in the same gain field
+            // as the per-enemy repulsion, and the crowd that makes a passout
+            // unshootable (fireBase targets nearest) is the same crowd that
+            // outbids the pull. OVERRIDES BEAT PULLS (6.89.11, z=-0.06), so
+            // when the melee ult is ready and the window is early, the walk
+            // to the pile is an override like hunt/park, not a bid.
+            harvestApproach: true,
+            harvestRangePx: 300,   // approach piles this close; farther is not worth the walk
+            harvestStopPx: 72,     // stand this close before casting (demo: humans detonate 44-109px)
+            harvestS: 12,          // time-box one approach
+            harvestRestS: 20,      // rest before the next attempt
+            harvestUntilS: 2700,   // the window: day + hell entry + early hell (user's stated gap)
             // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
             // every 3 frames along the aim vector, speed 9-11, rainbow-gun
             // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
@@ -1422,6 +1435,7 @@
     // Pickup value. `health` scales up as the player gets hurt.
     const PICKUP_VALUE = {
         ingredient: 34, bottle: 30, tip: 26, timestop: 24, firecross: 22, magnet: 22,
+        tequila: 22,   // v6.93.1 (audit A8): was missing -> classified filler and halved near passouts, the opposite of the hell doctrine
         xp: 26, gem: 26, exp: 26, star: 20,   // XP-style drops: levels are the build engine
         // gold funds weapon upgrades (user-verified: vital) — never trash-tier
         bill: 22, coin: 14, health: 14, _default: 16
@@ -1646,6 +1660,11 @@
     // v6.91.4: one park-suspension window per frozen-boss episode (see 05-movement)
     let parkYieldId = null;
     let parkYieldAt = 0;
+    // v6.93.1 harvest-approach clock (gameTime seconds; reset per run) — the
+    // walk TO the passout pile is time-boxed exactly like the hunt, so an
+    // unreachable pile cannot deadlock the planner.
+    let harvStartS = null;
+    let harvRestUntilS = 0;
     // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
     // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
     // all is unknown, and this project's recurring cost is acting on models that

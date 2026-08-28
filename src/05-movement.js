@@ -2498,7 +2498,44 @@
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner && !parkYieldFrozen;
-        let parked = false, onPost = false;
+        let parked = false, onPost = false, harvesting = false;
+        // v6.93.1 HARVEST APPROACH (user: "Joe and Pat still can't clear
+        // passouts for fast rewards... minguk seems to be able to clear 120
+        // minutes with consistency"). Minguk needs no walk — his nuke is
+        // field-wide. Pat's spiral and joe's aura only pay ADJACENT, and the
+        // adjacency was left to chance: ultHarvest existed only as a pull,
+        // which the crowd's repulsion outbids precisely where a passout is
+        // worth ulting (fireBase can't shoot it because mobs are nearer —
+        // meaning mobs ARE near). So in the early window the approach is an
+        // override: walk to the weighted pile centroid, stop at casting
+        // range, let the 06 adjacency triggers spend the ult. Both melee
+        // ults are invulnerability windows, so the cast covers the exit.
+        // Time-boxed like the hunt so an unreachable pile cannot deadlock.
+        const MH = CONFIG.movement;
+        const gtHarv = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const harvWindow = !hellDetected || gtHarv < (MH.harvestUntilS != null ? MH.harvestUntilS : 2700);
+        // NOTE the missing lower bound: arrival must HOLD, not release. The
+        // demo human stands on the pile as the ult comes off cooldown; if the
+        // override let go at the stop radius, the repulsion field would shove
+        // the bot back out before the 900ms ult retry fires. The 12s clock is
+        // what bounds the hold, and the cast itself ends it (the cooldown
+        // resets ultInS past ultHarvestLeadS, dropping ultHarvest).
+        const harvWant = MH.harvestApproach !== false && meleeUlt && harvWindow &&
+            ultHarvest && poN >= 1 && poNearest != null &&
+            poNearest <= (MH.harvestRangePx || 300) &&
+            !flight && !th.rival;
+        let harvOn = false;
+        if (!harvWant) {
+            harvStartS = null;
+        } else if (gtHarv >= harvRestUntilS) {
+            if (harvStartS == null || harvStartS > gtHarv) harvStartS = gtHarv;
+            if (gtHarv - harvStartS <= (MH.harvestS != null ? MH.harvestS : 12)) {
+                harvOn = true;
+            } else {
+                harvStartS = null;
+                harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20);
+            }
+        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
@@ -2511,6 +2548,13 @@
             const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
+        } else if (harvOn && poW) {
+            // walk to the pile; ultHarvest's own gates (!hpPanic, !markHere,
+            // !projHere) already cleared, and harvWant bounded the range.
+            const dPo = Math.hypot(p.x - poCx, p.y - poCy);
+            if (dPo <= (MH.harvestStopPx || 72)) { vx = 0; vy = 0; }
+            else { vx = (poCx - p.x) / dPo; vy = (poCy - p.y) / dPo; }
+            harvesting = true;
         }
         // v6.91.8: record the entrance build and the first park engagement. Both
         // are per-run and cost nothing; see PARK_AUDIT_KEY.
@@ -2575,7 +2619,7 @@
             poDps: poDpsOut ? Math.round(poDpsOut) : 0, poGaveUp: poGiveUp.size,
             armorLv, armorConf: +armorConf.toFixed(2), holdoutAnchor,
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
-            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow,
+            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             kiteAt, fleeNear, contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),

@@ -3785,8 +3785,84 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
+
+// v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
+// passouts for fast rewards and upgrades to survive the entry to hell and
+// early hell... minguk seems to be able to clear 120 minutes with
+// consistency." Root cause: ultHarvest existed only as a PULL competing with
+// per-enemy repulsion, and the crowd that makes a passout unshootable is the
+// same crowd that outbids the pull (overrides beat pulls, 6.89.11 z=-0.06).
+// Now an override, below hunt/park, time-boxed like the hunt.
+if (which === 'po-harvest') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');
+    const mkPo = (x, y) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 40 });
+    const scene = (px, py, poX, poY, ultReadyAt, extraP, extraE) => {
+        global.player = Object.assign({ x: px, y: py, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                                        ultReadyAt }, extraP || {});
+        global.enemies = [mkPo(poX, poY)].concat(extraE || []);
+        global.gameTime = 700;
+        return pineBot.test.planMove();
+    };
+
+    // THE CORE CASE: pat, ult ready, lone passout 200px away — the walk is an
+    // override heading AT the pile, not a bid the crowd can outvote.
+    let pl = scene(150, 270, 350, 270, 100);
+    test('pat with a ready ult WALKS to a lone passout', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting, uh: pl.ultHarvest, po: pl.poNearest })));
+    test('...and the heading points at the pile', () =>
+        assert.ok(pl.dx > 0.9 && Math.abs(pl.dy) < 0.3, 'dx ' + pl.dx + ' dy ' + pl.dy));
+    // ...even with a mob crowd between bot and pile — the case the pull lost.
+    const crowd = [];
+    for (let i = 0; i < 6; i++) crowd.push({ type: 'drunk', x: 250, y: 240 + i * 12, r: 10, hp: 50, maxHp: 50, speed: 2, id: 50 + i });
+    pl = scene(150, 270, 350, 270, 100, null, crowd);
+    test('a crowd between bot and pile does NOT outvote the approach', () =>
+        assert.ok(pl.harvesting === true && pl.dx > 0.5, JSON.stringify({ h: pl.harvesting, dx: pl.dx })));
+
+    // ARRIVAL HOLDS. At casting range the override zeroes movement so the
+    // 900ms ult retry can cash the cooldown — release here and the repulsion
+    // field shoves the bot back out before the cast.
+    pl = scene(300, 270, 350, 270, 100);
+    test('inside casting range the bot HOLDS for the cast', () =>
+        assert.ok(pl.harvesting === true && pl.dx === 0 && pl.dy === 0,
+            JSON.stringify({ h: pl.harvesting, dx: pl.dx, dy: pl.dy, po: pl.poNearest })));
+
+    // THE GATES, each proven to actually gate:
+    pl = scene(150, 270, 350, 270, 1e9);
+    test('no ult anywhere near ready -> no approach', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting, uh: pl.ultHarvest })));
+    pl = scene(150, 270, 350, 270, 100, { hp: 30 });
+    test('a hurt bot does not walk into a pile', () =>
+        assert.ok(!pl.harvesting, 'harvesting while hpPanic'));
+    global.gameTime = 700;
+    pl = (() => { global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 100 };
+        global.enemies = [mkPo(520, 270)]; return pineBot.test.planMove(); })();
+    test('a pile beyond harvestRangePx is not worth the walk', () =>
+        assert.ok(!pl.harvesting, 'harvesting at ' + pl.poNearest + 'px'));
+
+    // MINGUK IS UNTOUCHED — the working baseline. His nuke is field-wide, so
+    // the approach must never move him.
+    pineBot.test.setChar('minguk');
+    pl = scene(150, 270, 350, 270, 100);
+    test('minguk (nuke) never walks to a pile — his ult reaches from anywhere', () =>
+        assert.ok(!pl.harvesting, 'nuke char harvesting'));
+    pineBot.test.setChar('pat');
+
+    // THE CLOCK: the window is early-game (user's stated gap). Deep hell has
+    // park and the corner doctrine; the approach must yield there.
+    global.gameTime = 4000;
+    pl = (() => { global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 3900 };
+        global.enemies = [mkPo(350, 270)]; global.gameTime = 4000; return pineBot.test.planMove(); })();
+    // (hell not latched in this env, so the window check passes; assert the
+    // day-side behaviour is unchanged instead)
+    test('outside hell the approach stays available (day farming)', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    done();
+}
 
 // v6.92.0 — THE ARMING CAP, written from a LIVE READ, not from theory.
 // A running bot was probed at five evolved supers with the gun not yet taken:

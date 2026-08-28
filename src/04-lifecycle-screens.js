@@ -88,6 +88,7 @@
         lastHpSample = null;
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
+        harvStartS = null; harvRestUntilS = 0;   // v6.93.1: so is the harvest-approach clock
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run

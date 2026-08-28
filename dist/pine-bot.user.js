@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.93.0
+// @version      6.93.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.93.0';
+    const SCRIPT_VERSION = '6.93.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -497,6 +497,19 @@
             // BANKED, and the ult is dropped into the pile when it comes up.
             ultHarvestLeadS: 15,   // start positioning this long before the ult is ready
             ultHarvestPull: 60,    // pull toward the cluster centroid while harvesting
+            // v6.93.1 HARVEST APPROACH — the pull above measurably cannot
+            // deliver pat/joe to the pile: it competes in the same gain field
+            // as the per-enemy repulsion, and the crowd that makes a passout
+            // unshootable (fireBase targets nearest) is the same crowd that
+            // outbids the pull. OVERRIDES BEAT PULLS (6.89.11, z=-0.06), so
+            // when the melee ult is ready and the window is early, the walk
+            // to the pile is an override like hunt/park, not a bid.
+            harvestApproach: true,
+            harvestRangePx: 300,   // approach piles this close; farther is not worth the walk
+            harvestStopPx: 72,     // stand this close before casting (demo: humans detonate 44-109px)
+            harvestS: 12,          // time-box one approach
+            harvestRestS: 20,      // rest before the next attempt
+            harvestUntilS: 2700,   // the window: day + hell entry + early hell (user's stated gap)
             // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
             // every 3 frames along the aim vector, speed 9-11, rainbow-gun
             // class, 5s + fireCrossBonus). Pointing it is the whole skill, so
@@ -1424,6 +1437,7 @@
     // Pickup value. `health` scales up as the player gets hurt.
     const PICKUP_VALUE = {
         ingredient: 34, bottle: 30, tip: 26, timestop: 24, firecross: 22, magnet: 22,
+        tequila: 22,   // v6.93.1 (audit A8): was missing -> classified filler and halved near passouts, the opposite of the hell doctrine
         xp: 26, gem: 26, exp: 26, star: 20,   // XP-style drops: levels are the build engine
         // gold funds weapon upgrades (user-verified: vital) — never trash-tier
         bill: 22, coin: 14, health: 14, _default: 16
@@ -1648,6 +1662,11 @@
     // v6.91.4: one park-suspension window per frozen-boss episode (see 05-movement)
     let parkYieldId = null;
     let parkYieldAt = 0;
+    // v6.93.1 harvest-approach clock (gameTime seconds; reset per run) — the
+    // walk TO the passout pile is time-boxed exactly like the hunt, so an
+    // unreachable pile cannot deadlock the planner.
+    let harvStartS = null;
+    let harvRestUntilS = 0;
     // v6.91.1 THE HUNT MEASURES ITSELF. The live probe returned a boss with
     // 6,026,060,983 hp at 46 minutes. Whether our weapons move that number at
     // all is unknown, and this project's recurring cost is acting on models that
@@ -4970,6 +4989,7 @@
         lastHpSample = null;
         lastMarkSnap = [];
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
+        harvStartS = null; harvRestUntilS = 0;   // v6.93.1: so is the harvest-approach clock
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
@@ -8333,7 +8353,44 @@
         const parkOn = DHp.park !== false && hellDetected && parkArmor && parkRegen && parkClear &&
             gtCorner > (DHp.parkFromS != null ? DHp.parkFromS : 1200) &&
             !markHere && !lineOnCorner && !parkYieldFrozen;
-        let parked = false, onPost = false;
+        let parked = false, onPost = false, harvesting = false;
+        // v6.93.1 HARVEST APPROACH (user: "Joe and Pat still can't clear
+        // passouts for fast rewards... minguk seems to be able to clear 120
+        // minutes with consistency"). Minguk needs no walk — his nuke is
+        // field-wide. Pat's spiral and joe's aura only pay ADJACENT, and the
+        // adjacency was left to chance: ultHarvest existed only as a pull,
+        // which the crowd's repulsion outbids precisely where a passout is
+        // worth ulting (fireBase can't shoot it because mobs are nearer —
+        // meaning mobs ARE near). So in the early window the approach is an
+        // override: walk to the weighted pile centroid, stop at casting
+        // range, let the 06 adjacency triggers spend the ult. Both melee
+        // ults are invulnerability windows, so the cast covers the exit.
+        // Time-boxed like the hunt so an unreachable pile cannot deadlock.
+        const MH = CONFIG.movement;
+        const gtHarv = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const harvWindow = !hellDetected || gtHarv < (MH.harvestUntilS != null ? MH.harvestUntilS : 2700);
+        // NOTE the missing lower bound: arrival must HOLD, not release. The
+        // demo human stands on the pile as the ult comes off cooldown; if the
+        // override let go at the stop radius, the repulsion field would shove
+        // the bot back out before the 900ms ult retry fires. The 12s clock is
+        // what bounds the hold, and the cast itself ends it (the cooldown
+        // resets ultInS past ultHarvestLeadS, dropping ultHarvest).
+        const harvWant = MH.harvestApproach !== false && meleeUlt && harvWindow &&
+            ultHarvest && poN >= 1 && poNearest != null &&
+            poNearest <= (MH.harvestRangePx || 300) &&
+            !flight && !th.rival;
+        let harvOn = false;
+        if (!harvWant) {
+            harvStartS = null;
+        } else if (gtHarv >= harvRestUntilS) {
+            if (harvStartS == null || harvStartS > gtHarv) harvStartS = gtHarv;
+            if (gtHarv - harvStartS <= (MH.harvestS != null ? MH.harvestS : 12)) {
+                harvOn = true;
+            } else {
+                harvStartS = null;
+                harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20);
+            }
+        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
@@ -8346,6 +8403,13 @@
             const dCnr = Math.hypot(p.x - cnrX, p.y - cnrY);
             if (dCnr <= (DHp.parkRadius || 26)) { vx = 0; vy = 0; parked = true; }
             else { vx = (cnrX - p.x) / dCnr; vy = (cnrY - p.y) / dCnr; }
+        } else if (harvOn && poW) {
+            // walk to the pile; ultHarvest's own gates (!hpPanic, !markHere,
+            // !projHere) already cleared, and harvWant bounded the range.
+            const dPo = Math.hypot(p.x - poCx, p.y - poCy);
+            if (dPo <= (MH.harvestStopPx || 72)) { vx = 0; vy = 0; }
+            else { vx = (poCx - p.x) / dPo; vy = (poCy - p.y) / dPo; }
+            harvesting = true;
         }
         // v6.91.8: record the entrance build and the first park engagement. Both
         // are per-run and cost nothing; see PARK_AUDIT_KEY.
@@ -8410,7 +8474,7 @@
             poDps: poDpsOut ? Math.round(poDpsOut) : 0, poGaveUp: poGiveUp.size,
             armorLv, armorConf: +armorConf.toFixed(2), holdoutAnchor,
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
-            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow,
+            ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             kiteAt, fleeNear, contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
             wallNear: th.enemies.some(e => e.wall && Math.hypot(e.x - p.x, e.y - p.y) < 190),
