@@ -252,7 +252,15 @@
         const ultAlways = hellDetected &&
             gtU > (DH.ultAlwaysFromS != null ? DH.ultAlwaysFromS : 2400);
         if (ultAlways) ultGate = Math.min(ultGate, DH.ultAlwaysGateMs || 250);
-        if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
+        // v6.96.0 THE RUN CAP: past runCapS the movement layer is walking the
+        // bot into the crowd to die on purpose (see the config comment). The
+        // ult's invulnerability window — pat's spiral, joe's Untouchable — is
+        // the one tool that could carry a full build through that dive alive,
+        // so past the cap it stays holstered no matter what else is true.
+        // This deliberately outranks ultAlways, ultChain and every emergency
+        // clause: they all serve survival, and survival is no longer the job.
+        const capDive = (DH.runCapS || 0) > 0 && gtU >= DH.runCapS;
+        if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
                 ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally

@@ -220,7 +220,18 @@
         // clamp applies per store on load, so whatever state the pat/joe
         // stores are in, their means are pulled into the current box the
         // first time they load.
-        preferredBartender: null,
+        //
+        // v6.96.0 (user): "since we know pat can do this strategy now more
+        // consistently, can we try to just optimize for joe only". Pat's
+        // deep-hell doctrine is PROVEN — run 4589 on 6.95.0 booked 13,244 s
+        // (220 min, ₩219.6M, ended only by the user's own hand) — so pat
+        // stops consuming sample rate and the whole run budget goes to the
+        // character the doctrine has NOT yet carried. Joe's 6.95.1 fragile
+        // profile and the 6.95.2 entry ramp have exactly 1 booked run
+        // between them; a pin is how that reaches n=20 fastest. The
+        // rotation list stays intact below — restoring pat/joe is this
+        // same one-line change back, as it was for minguk.
+        preferredBartender: 'joe',
         bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
@@ -778,6 +789,25 @@
             entryPrepS: 1140,      // day: start walking to the seat here
             entryDayMaxS: 1320,    // day upper bound (hell never latched -> release)
             entrySeatUntilS: 1290, // hell: hand over to park (or release) by here
+            // v6.96.0 THE RUN CAP (user): "we need to add a kill itself
+            // feature as we have established it can't die once the full set
+            // up is complete ... or have some cap of runs ... to stop at the
+            // 200 minute mark." The 6.95.0 marathon proved it literally: the
+            // parked full build sat at 469/469 HP against 256 enemies and the
+            // run only ended because the user overrode the bot by hand. An
+            // immortal run books NOTHING until it ends, so past this many
+            // game-seconds the bot ends it the only way the game offers — it
+            // walks into the crowd and dies. The movement layer dives at the
+            // nearest live enemy (top of the override chain: outranks hunt,
+            // park, seat, harvest, trek) and the abilities layer holsters the
+            // ult, whose invulnerability window is the one thing that could
+            // keep a full build alive through the dive. Death then books the
+            // run through the normal over() path — stats, CEM reward, top-5
+            // row — and the auto-restart begins the next run unattended.
+            // Purely gt-based, no hellDetected guard: day ends at ~1320 s so
+            // only a hell run can reach it, and a run that somehow got here
+            // with detection broken should STILL be capped. 0 disables.
+            runCapS: 12000,
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius

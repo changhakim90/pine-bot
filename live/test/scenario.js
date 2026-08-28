@@ -214,8 +214,8 @@ if (which === 'hell-unban') {
 }
 
 // 4. v6.85.2 Pat calibration: profile fields, falling-passout drop tag,
-//    and the hell boss-ring floor. The fake env boots with no
-//    preferredBartender, so activeChar falls to bartenderRotation[0] = 'pat'.
+//    and the hell boss-ring floor. v6.96.0: the env now boots with the JOE
+//    pin, so pat must be (and is) selected explicitly below.
 if (which === 'pat-profile') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
@@ -1043,11 +1043,12 @@ if (which === 'cem-heal') {
         enemyTypeMul: { mob: 2.2, bomber: 2.0 }
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
-        // v6.93.2: the rotation boots on PAT now, so the poisoned store is
-        // seeded under BOTH keys — this scenario tests store healing, and it
-        // must not silently pass against a fresh store when the character
-        // selection changes again.
-        storage: { pineBotUCB_v5: JSON.stringify(poisoned), pineBotUCB_v5_pat: JSON.stringify(poisoned) } });
+        // v6.93.2: seeded under the per-char key so this tests store
+        // healing, not a fresh store. v6.96.0: the joe pin flipped the boot
+        // character and this went red exactly as the comment above warned —
+        // now seeded under ALL the keys a selection change can reach.
+        storage: { pineBotUCB_v5: JSON.stringify(poisoned), pineBotUCB_v5_pat: JSON.stringify(poisoned),
+                   pineBotUCB_v5_joe: JSON.stringify(poisoned) } });
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -1092,7 +1093,8 @@ if (which === 'cem-lockup') {
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
         // v6.93.2: seeded under both keys — see cem-heal's note.
-        storage: { pineBotUCB_v5: JSON.stringify(locked), pineBotUCB_v5_pat: JSON.stringify(locked) } });
+        storage: { pineBotUCB_v5: JSON.stringify(locked), pineBotUCB_v5_pat: JSON.stringify(locked),
+                   pineBotUCB_v5_joe: JSON.stringify(locked) } });
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -1424,29 +1426,39 @@ if (which === 'rotation') {
     const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
     const T = pineBot.test;
-    // v6.93.2 — REVISED ON PURPOSE, not made to pass. The old assertions
-    // encoded the 6.87.1 minguk pin ("the whole sample rate goes to him").
-    // The user has now overridden it directly: "Let's try to rotate between
-    // pat and joe in the latest build instead of minguk" — the two
-    // characters the 6.93.1 harvest approach was built for. The substance
-    // is kept: the rotation must actually alternate, persist its position,
-    // and the pin machinery must still work when re-set.
-    test('no bartender is pinned — selection goes to the rotation', () =>
-        assert.strictEqual(pineBot.config.preferredBartender, null));
-    test('the rotation is pat and joe (minguk rests, not deleted)', () =>
+    // v6.96.0 — REVISED ON PURPOSE, again, and for the same kind of reason
+    // as the 6.93.2 revision it replaces. That revision encoded the user's
+    // pat/joe rotation; the user has now overridden THAT directly: "since we
+    // know pat can do this strategy now more consistently, can we try to
+    // just optimize for joe only." Pat's proof is run 4589 (13,244 s, ended
+    // only by hand), so the pin sends the whole sample rate to joe. The
+    // substance of every earlier revision is kept below: the pin must
+    // actually pin, the rotation machinery must still alternate and persist
+    // when the pin is lifted, and re-pinning must work — the 6.85.0
+    // rotation-that-never-rotated failure stays covered in both directions.
+    test('joe is pinned — the whole sample rate goes to him', () =>
+        assert.strictEqual(pineBot.config.preferredBartender, 'joe'));
+    test('the rotation list survives the pin (restore = one line)', () =>
         assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'joe']));
+    const pinnedJoe = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
+    test('the pin actually pins: every run is joe', () =>
+        assert.deepStrictEqual(pinnedJoe, ['joe', 'joe', 'joe'], pinnedJoe.join(',')));
+    test('a pinned choice never advances the rotation index', () =>
+        assert.strictEqual(store.pineBotRotIdx, undefined, 'idx ' + store.pineBotRotIdx));
+    // Lift the pin: the underlying rotation must still work, or restoring
+    // pat/joe later silently stops rotating — the 6.85.0 failure.
+    pineBot.config.preferredBartender = null;
     const seq = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
-    test('the rotation actually alternates pat and joe', () =>
+    test('unpinned, the rotation still alternates pat and joe', () =>
         assert.deepStrictEqual(seq, ['pat', 'joe', 'pat', 'joe'], seq.join(',')));
     test('the position is persisted, so a reload resumes mid-sequence', () =>
         assert.strictEqual(String(store.pineBotRotIdx), '0', 'idx ' + store.pineBotRotIdx));
-    // The pin machinery must survive being switched off, or re-pinning
-    // minguk later silently does nothing — the 6.85.0 failure inverted.
+    // The pin machinery must survive being re-set to someone else too.
     pineBot.config.preferredBartender = 'minguk';
     const pinned = [T.chooseBartender(), T.chooseBartender()];
     test('re-pinning minguk still works and holds run after run', () =>
         assert.deepStrictEqual(pinned, ['minguk', 'minguk'], pinned.join(',')));
-    pineBot.config.preferredBartender = null;
+    pineBot.config.preferredBartender = 'joe';   // leave the shipped pin in place
     done();
 }
 
@@ -3835,7 +3847,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4384,6 +4396,72 @@ if (which === 'entry-seat-hell') {
         // endRun exists and books safely even with no run active.
         test('pineBot.endRun is callable and idempotent', () =>
             assert.ok(typeof pineBot.endRun === 'function' && /booked/.test(String(pineBot.endRun()))));
+        done();
+    }, 700);
+}
+
+// v6.96.0 — THE RUN CAP (user): "we need to add a kill itself feature as we
+// have established it can't die once the full set up is complete ... or have
+// some cap of runs ... to stop at the 200 minute mark." Past runCapS the
+// movement layer dives at the nearest live enemy over the top of the whole
+// override chain, and the abilities layer holsters the ult. Both halves are
+// asserted with the config's own teeth: zero the cap and the same state must
+// flip back to normal doctrine.
+if (which === 'run-cap') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 12050 } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        const T = pineBot.test;
+        const scene = (gt) => {
+            global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            // one live body due east, inside the 200px gather range; the
+            // dive should head straight at it — a fast chaser joe would
+            // otherwise kite away from, which is what makes it the teeth of
+            // the below-cap arm too.
+            global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
+            global.gameTime = gt;
+            let pl; for (let i = 0; i < 4; i++) pl = T.planMove();
+            return pl;
+        };
+        // 1. Past the cap: the plan says so, and the heading is INTO the body.
+        let pl = scene(12050);
+        test('past the cap the plan declares the dive', () =>
+            assert.strictEqual(pl.capDive, true, JSON.stringify({ capDive: pl.capDive })));
+        test('...and the heading is straight at the nearest enemy', () =>
+            assert.ok(pl.dx > 0.7 && Math.abs(pl.dy) < 0.5, 'dx ' + pl.dx.toFixed(2) + ' dy ' + pl.dy.toFixed(2)));
+        // 2. Below the cap the same field is fled, not embraced.
+        pl = scene(11900);
+        test('below the cap there is no dive', () =>
+            assert.strictEqual(pl.capDive, false));
+        // 3. THE CONFIG'S TEETH: zero the cap and 12050 s is an ordinary tick.
+        pineBot.config.deepHell.runCapS = 0;
+        pl = scene(12050);
+        test('runCapS = 0 disables the dive entirely', () =>
+            assert.strictEqual(pl.capDive, false));
+        pineBot.config.deepHell.runCapS = 12000;
+        // 4. THE ULT STAYS HOLSTERED. Same plan state fires below the cap and
+        //    must not fire past it — the invulnerability window is the one
+        //    tool that could carry a full build through the dive alive.
+        const fire = (gt) => {
+            global.gameTime = gt;
+            let n = 0; global.useUltimate = () => { n++; };
+            T.resetUltGate();
+            T.maybeAbilities({ hpRatio: 0.9, hpPanic: false, panic: false, danger: 0, dx: 0, dy: 0,
+                               near: 2, adjacent: 18, contactImminent: true, toughness: 1,
+                               passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999 });
+            return n;
+        };
+        test('below the cap the same emergency fires the ult', () =>
+            assert.ok(fire(11900) >= 1, 'ult did not fire below the cap'));
+        test('past the cap the ult is holstered', () =>
+            assert.strictEqual(fire(12050), 0));
+        // ...and the holster is the CAP's doing, not a side effect: zero the
+        // cap and the same past-12000 state fires again.
+        pineBot.config.deepHell.runCapS = 0;
+        test('runCapS = 0 re-arms the ult at 12050s', () =>
+            assert.ok(fire(12050) >= 1, 'ult still holstered with the cap disabled'));
+        pineBot.config.deepHell.runCapS = 12000;
         done();
     }, 700);
 }

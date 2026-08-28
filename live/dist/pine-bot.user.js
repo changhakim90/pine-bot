@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.95.2
+// @version      6.96.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.95.2';
+    const SCRIPT_VERSION = '6.96.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -222,7 +222,18 @@
         // clamp applies per store on load, so whatever state the pat/joe
         // stores are in, their means are pulled into the current box the
         // first time they load.
-        preferredBartender: null,
+        //
+        // v6.96.0 (user): "since we know pat can do this strategy now more
+        // consistently, can we try to just optimize for joe only". Pat's
+        // deep-hell doctrine is PROVEN — run 4589 on 6.95.0 booked 13,244 s
+        // (220 min, ₩219.6M, ended only by the user's own hand) — so pat
+        // stops consuming sample rate and the whole run budget goes to the
+        // character the doctrine has NOT yet carried. Joe's 6.95.1 fragile
+        // profile and the 6.95.2 entry ramp have exactly 1 booked run
+        // between them; a pin is how that reaches n=20 fastest. The
+        // rotation list stays intact below — restoring pat/joe is this
+        // same one-line change back, as it was for minguk.
+        preferredBartender: 'joe',
         bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
@@ -780,6 +791,25 @@
             entryPrepS: 1140,      // day: start walking to the seat here
             entryDayMaxS: 1320,    // day upper bound (hell never latched -> release)
             entrySeatUntilS: 1290, // hell: hand over to park (or release) by here
+            // v6.96.0 THE RUN CAP (user): "we need to add a kill itself
+            // feature as we have established it can't die once the full set
+            // up is complete ... or have some cap of runs ... to stop at the
+            // 200 minute mark." The 6.95.0 marathon proved it literally: the
+            // parked full build sat at 469/469 HP against 256 enemies and the
+            // run only ended because the user overrode the bot by hand. An
+            // immortal run books NOTHING until it ends, so past this many
+            // game-seconds the bot ends it the only way the game offers — it
+            // walks into the crowd and dies. The movement layer dives at the
+            // nearest live enemy (top of the override chain: outranks hunt,
+            // park, seat, harvest, trek) and the abilities layer holsters the
+            // ult, whose invulnerability window is the one thing that could
+            // keep a full build alive through the dive. Death then books the
+            // run through the normal over() path — stats, CEM reward, top-5
+            // row — and the auto-restart begins the next run unattended.
+            // Purely gt-based, no hellDetected guard: day ends at ~1320 s so
+            // only a hell run can reach it, and a run that somehow got here
+            // with detection broken should STILL be capped. 0 disables.
+            runCapS: 12000,
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -8815,11 +8845,34 @@
                 harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20);
             }
         }
+        // v6.96.0 THE RUN CAP DIVE (see the runCapS config comment). Past the
+        // cap the run's one remaining job is to END so it books. The dive is
+        // the top of the override chain on purpose: park and seat are the
+        // overrides that MAKE the build immortal, so anything below them
+        // would sit in the corner forever. Straight at the nearest live
+        // body, no stop radius, no panic, no escape — the candidate loop's
+        // whole output is overwritten, which is the same mechanism (and the
+        // same reason) as park itself: a pull competing with gain terms
+        // moves nothing; an override moves everything.
+        const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
+        let capTarget = null;
+        if (capDive) {
+            let capD = Infinity;
+            for (const e of th.enemies) {
+                if (e.dormant || e.distant) continue;   // a body that cannot hit back cannot kill us
+                const d = Math.hypot(e.x - p.x, e.y - p.y);
+                if (d < capD) { capD = d; capTarget = e; }
+            }
+        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
-        if (huntOn && huntPost) {
+        if (capDive && capTarget) {
+            const dC = Math.hypot(capTarget.x - p.x, capTarget.y - p.y) || 1;
+            vx = (capTarget.x - p.x) / dC; vy = (capTarget.y - p.y) / dC;
+        } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
             else { vx = (huntPost.x - p.x) / dPost; vy = (huntPost.y - p.y) / dPost; }
@@ -8910,6 +8963,7 @@
 
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
+            capDive,   // v6.96.0: the run is being ended on purpose
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
@@ -9217,7 +9271,15 @@
         const ultAlways = hellDetected &&
             gtU > (DH.ultAlwaysFromS != null ? DH.ultAlwaysFromS : 2400);
         if (ultAlways) ultGate = Math.min(ultGate, DH.ultAlwaysGateMs || 250);
-        if (A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
+        // v6.96.0 THE RUN CAP: past runCapS the movement layer is walking the
+        // bot into the crowd to die on purpose (see the config comment). The
+        // ult's invulnerability window — pat's spiral, joe's Untouchable — is
+        // the one tool that could carry a full build through that dive alive,
+        // so past the cap it stays holstered no matter what else is true.
+        // This deliberately outranks ultAlways, ultChain and every emergency
+        // clause: they all serve survival, and survival is no longer the job.
+        const capDive = (DH.runCapS || 0) > 0 && gtU >= DH.runCapS;
+        if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
                 ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally

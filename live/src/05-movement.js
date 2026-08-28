@@ -2822,11 +2822,34 @@
                 harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20);
             }
         }
+        // v6.96.0 THE RUN CAP DIVE (see the runCapS config comment). Past the
+        // cap the run's one remaining job is to END so it books. The dive is
+        // the top of the override chain on purpose: park and seat are the
+        // overrides that MAKE the build immortal, so anything below them
+        // would sit in the corner forever. Straight at the nearest live
+        // body, no stop radius, no panic, no escape — the candidate loop's
+        // whole output is overwritten, which is the same mechanism (and the
+        // same reason) as park itself: a pull competing with gain terms
+        // moves nothing; an override moves everything.
+        const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
+        let capTarget = null;
+        if (capDive) {
+            let capD = Infinity;
+            for (const e of th.enemies) {
+                if (e.dormant || e.distant) continue;   // a body that cannot hit back cannot kill us
+                const d = Math.hypot(e.x - p.x, e.y - p.y);
+                if (d < capD) { capD = d; capTarget = e; }
+            }
+        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
-        if (huntOn && huntPost) {
+        if (capDive && capTarget) {
+            const dC = Math.hypot(capTarget.x - p.x, capTarget.y - p.y) || 1;
+            vx = (capTarget.x - p.x) / dC; vy = (capTarget.y - p.y) / dC;
+        } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
             else { vx = (huntPost.x - p.x) / dPost; vy = (huntPost.y - p.y) / dPost; }
@@ -2917,6 +2940,7 @@
 
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
+            capDive,   // v6.96.0: the run is being ended on purpose
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
