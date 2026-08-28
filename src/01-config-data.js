@@ -1318,7 +1318,14 @@
     // safest thing on a forced pool. Scored beneath every planned card and
     // beneath the hell-safe junk, above true junk (CORPSE REVIVER No.2 and
     // ABSINTHE, which cannot damage holdouts at all).
-    const LAST_RESORT = ['MOSCOW MULE'];
+    // v6.94.2 — EMPTIED, on demo evidence (audit A1 confirmed live). The
+    // clamp silently discarded every mule bonus 6.92.2/6.92.3 added: the
+    // 6.94.1 pat digest shows VODKA CRANBERRY taken at gt 43 — the game's
+    // mutual exclusion then closed MOSCOW MULE for the whole run, spending
+    // the exclusive slot on the one latent line the arming cap cannot touch
+    // (CRANBERRY is a plan ingredient). With the clamp gone the mule scores
+    // its intended keyless-core + mule-lockout and claims the slot FIRST.
+    const LAST_RESORT = [];
     // Measured band, not a guess. It must sit BELOW the hell-safe junk
     // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
     // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE

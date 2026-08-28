@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.94.1
+// @version      6.94.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.94.1';
+    const SCRIPT_VERSION = '6.94.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -1320,7 +1320,14 @@
     // safest thing on a forced pool. Scored beneath every planned card and
     // beneath the hell-safe junk, above true junk (CORPSE REVIVER No.2 and
     // ABSINTHE, which cannot damage holdouts at all).
-    const LAST_RESORT = ['MOSCOW MULE'];
+    // v6.94.2 — EMPTIED, on demo evidence (audit A1 confirmed live). The
+    // clamp silently discarded every mule bonus 6.92.2/6.92.3 added: the
+    // 6.94.1 pat digest shows VODKA CRANBERRY taken at gt 43 — the game's
+    // mutual exclusion then closed MOSCOW MULE for the whole run, spending
+    // the exclusive slot on the one latent line the arming cap cannot touch
+    // (CRANBERRY is a plan ingredient). With the clamp gone the mule scores
+    // its intended keyless-core + mule-lockout and claims the slot FIRST.
+    const LAST_RESORT = [];
     // Measured band, not a guess. It must sit BELOW the hell-safe junk
     // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
     // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE
@@ -4130,6 +4137,14 @@
             //     silently delete the four-line plan the order exists to build.
             if (type === 'ult') add(240, 'day-ult-first');
             else if (type === 'base') add(220, 'day-base-second');
+            // v6.94.2 (user): "early upgrades to ultimate are key". The demo
+            // digest shows why in numbers: pat's ult DOUBLES per level
+            // (dmg*9.6*2^(lv-1)) while passout HP is priced at landing time —
+            // lv2 arrived at gt 505 and by gt 600 the piles had outgrown the
+            // cast (poHpAfter > poHpBefore from gt 656). At +240 the ult card
+            // LOST to OLIVE (402) whenever both were offered. Until lv3 it
+            // outranks everything; from lv3 the armor doctrine resumes.
+            if (type === 'ult' && ((safe(() => player.ultLevel, 0) || 0) < 3)) add(200, 'ult-early');
         }
         // HELL: the plan is BUILT. The job is no longer to assemble it but to
         // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk
@@ -4310,16 +4325,17 @@
         }
 
         if (CROWN) {
-            // CROWN RULES (6.74) — HELL PREP: NEGRONI must be a SUPER cocktail
-            // before the finale — the hell boss rush shreds unprepared builds
-            // (observed: a 0-super hell entry died in 50s). From mid-day on,
-            // if SUPER NEGRONI doesn't exist yet, everything on its path jumps
-            // the queue: NEGRONI levels, CAMPARI (its key), and the super card.
-            if (!hellDetected && ![...supersMade].some(n => /NEGRONI/i.test(n)) && gamePhase() !== 'early') {
-                if (type === 'weapon' && name === 'NEGRONI' && !atCap) add(14, 'hell-prep');
-                if (type === 'passive' && name === 'CAMPARI' && !atCap) add(20, 'hell-prep');
-                if (type === 'super' && /NEGRONI/i.test(name)) add(30, 'hell-prep');
-            }
+            // v6.94.2 — THE 6.74 HELL-PREP BLOCK IS DEAD, and it was the gun
+            // leak. It paid +14 NEGRONI / +20 CAMPARI / +30 for the SUPER
+            // NEGRONI card — actively walking the line the whole lockout
+            // doctrine forbids. This is HOW the live run evolved NEGRONI
+            // (audit A2), and it is what the user was watching: "the bot
+            // seems to be picking up upgrades for rainbow gun more often."
+            // NEGRONI is a KEYLESS occupant by doctrine (its key CAMPARI is
+            // arming-capped and avoid-listed since 6.92.0); the refusal that
+            // guarded exactly this sat in the OTHER profile's dead branch.
+            // Hoisted here so the live branch refuses it too.
+            if (type === 'super' && /NEGRONI/i.test(name)) add(-400, 'negroni-super-noop');
         } else {
             // 6.79 RULES — SOURCE-VERIFIED (read live from the game's
             // fireCocktail / recalcStats / hurtPlayer):
@@ -6455,6 +6471,11 @@
                 // bosses die to the whole roster — spending the one tool that
                 // works on targets everything works on is pure waste.
                 if (kind === 'firecross') {
+                    // v6.94.2 (user): "early upgrades to ultimate are key but
+                    // if they don't come up, then flame crosses are the best
+                    // alternative." When the ult is still under lv3 — the
+                    // level band where the digest shows piles outgrowing the
+                    // cast — a cross on a passout field is worth more.
                     // v6.93.3b: read the passout field from THIS tick's gather,
                     // not lastPlan — the old read lagged a tick in live play
                     // and was simply absent when planMove ran outside the loop.
@@ -6465,6 +6486,7 @@
                         const gtF = typeof G.gameTime === 'number' ? G.gameTime : 0;
                         const day = gtF < 1200 && !hellDetected;
                         v += day ? 55 : 35;
+                        if ((safe(() => player.ultLevel, 0) || 0) < 3) v += 22;   // the stated alternative while the ult lags
                     } else {
                         v = 4;
                     }

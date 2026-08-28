@@ -86,7 +86,41 @@ if (which === 'scoring') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
     pineBot.stop();
     const sup = pineBot.test.scoreCard({ n: 'SUPER NEGRONI', type: 'super', lv: 0, maxlv: 6 }, 0, []);
-    test('crown profile does not refuse SUPER NEGRONI', () => assert.ok(sup.score > 200, 'score ' + sup.score));
+    // v6.94.2 — INVERTED ON PURPOSE. This test froze the 6.74 hell-prep
+    // doctrine ("NEGRONI must be a SUPER before the finale"). That block was
+    // the gun leak: audit A2 traced the live run's evolved NEGRONI to its
+    // +20 CAMPARI / +30 super payments, and the user watched the drift
+    // ("picking up upgrades for rainbow gun more often"). NEGRONI is a
+    // KEYLESS occupant by doctrine; the crown branch now refuses its super
+    // exactly like the 6.79 branch always did.
+    // (the noop nets against the generic super bonuses to just below zero —
+    // the same net the 6.79 branch always produced; any real pick beats it)
+    test('crown profile REFUSES SUPER NEGRONI (the keyless occupant stays keyless)', () =>
+        assert.ok(sup.score < 0 && /negroni-super-noop/.test(sup.why), sup.score + ' ' + sup.why));
+    // v6.94.2 (user): "early upgrades to ultimate are key" — until lv3 the
+    // ULTIMATE card outranks even OLIVE (the day-order king at ~402); from
+    // lv3 the armor doctrine resumes. Both directions asserted.
+    global.player = Object.assign({}, global.player, { ultLevel: 1 });
+    const ultC = () => pineBot.test.scoreCard({ n: 'ULTIMATE UP', type: 'ult', lv: 0, maxlv: 9 }, 0, []);
+    const oliveC = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 0, maxlv: 6 }, 0, []).score;
+    // (writing this test CORRECTED the diagnosis: the ult card already
+    // outranked OLIVE — ultimate+320 + day-ult-first+240 — so scoring was
+    // never why lv2 came at gt 505. OFFER FREQUENCY is the constraint the
+    // picker cannot fix. ult-early stays as explicit margin for the user's
+    // doctrine, asserted as the tag and the delta it adds under lv3.)
+    let uLow;
+    test('under lv3, ULTIMATE UP carries ult-early AND outranks OLIVE', () => {
+        uLow = ultC();
+        assert.ok(/ult-early/.test(uLow.why) && uLow.score > oliveC(),
+            Math.round(uLow.score) + ' vs OLIVE ' + Math.round(oliveC()) + ' | ' + uLow.why);
+    });
+    global.player = Object.assign({}, global.player, { ultLevel: 3 });
+    test('at lv3 the ult-early margin is withdrawn', () => {
+        const u = ultC();
+        assert.ok(!/ult-early/.test(u.why) && uLow.score - u.score >= 190,
+            'delta ' + Math.round(uLow.score - u.score) + ' | ' + u.why);
+    });
+    global.player = Object.assign({}, global.player, { ultLevel: 1 });
     const pool = [{ n: 'GINGER BEER', type: 'passive', lv: 0, maxlv: 6 }, { n: 'OLIVE', type: 'passive', lv: 3, maxlv: 6 }];
     const gb = pineBot.test.scoreCard(pool[0], 0, pool);
     test('GINGER BEER banned during the day', () => assert.ok(gb.score < 0 && /user-avoid/.test(gb.why), gb.why));
@@ -146,17 +180,25 @@ if (which === 'hell-unban') {
         // super and open the gun gate. This test asserted the OLD behaviour.
         test('GINGER BEER stays banned even in hell', () =>
             assert.ok(gb.score < 0 && /user-avoid/.test(gb.why), gb.why));
+        // v6.94.2 — REVISED ON PURPOSE. These two tests froze the 6.88.5
+        // LAST_RESORT clamp, which silently discarded every mule bonus
+        // 6.92.2/6.92.3 added: the 6.94.1 pat digest caught VODKA CRANBERRY
+        // taken at gt 43, closing MOSCOW MULE for the run by the game's own
+        // exclusion and spending the slot on the one latent line the arming
+        // cap cannot touch. The mule's SAFETY never came from the clamp —
+        // it comes from GINGER BEER being banned and arming-capped, which
+        // the assertions below keep. Its PRIORITY is now its real score, so
+        // it claims the exclusive slot before a forced pool hands it away.
         test('so MOSCOW MULE can never complete a super', () => {
             const mule = pineBot.test.scoreCard({ n: 'MOSCOW MULE', type: 'weapon', lv: 5, maxlv: 6 }, 0, []);
             assert.ok(mule.score > 0, 'refused outright: ' + mule.why);
-            assert.ok(/last-resort/.test(mule.why), mule.why);
+            assert.ok(!/last-resort/.test(mule.why), 'still clamped: ' + mule.why);
         });
-        // the whole point of the band: never sought, always preferred to junk
         const sc = (n, t) => pineBot.test.scoreCard({ n, type: t, lv: 1, maxlv: 6 }, 0, []).score;
-        test('the mule loses to every hell-safe junk pick', () => {
+        test('the mule now OUTRANKS the junk tier — it is a planned occupant', () => {
             const mule = sc('MOSCOW MULE', 'weapon');
             for (const [n, t] of [['COFFEE BEANS', 'passive'], ['LIME', 'passive'], ['SODA WATER', 'passive']])
-                assert.ok(sc(n, t) > mule, n + ' ' + Math.round(sc(n, t)) + ' vs mule ' + Math.round(mule));
+                assert.ok(mule > sc(n, t), n + ' ' + Math.round(sc(n, t)) + ' vs mule ' + Math.round(mule));
         });
         test('...and beats true junk, so a junk-only pool eats the mule', () => {
             const mule = sc('MOSCOW MULE', 'weapon');

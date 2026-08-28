@@ -546,6 +546,11 @@
                 // bosses die to the whole roster — spending the one tool that
                 // works on targets everything works on is pure waste.
                 if (kind === 'firecross') {
+                    // v6.94.2 (user): "early upgrades to ultimate are key but
+                    // if they don't come up, then flame crosses are the best
+                    // alternative." When the ult is still under lv3 — the
+                    // level band where the digest shows piles outgrowing the
+                    // cast — a cross on a passout field is worth more.
                     // v6.93.3b: read the passout field from THIS tick's gather,
                     // not lastPlan — the old read lagged a tick in live play
                     // and was simply absent when planMove ran outside the loop.
@@ -556,6 +561,7 @@
                         const gtF = typeof G.gameTime === 'number' ? G.gameTime : 0;
                         const day = gtF < 1200 && !hellDetected;
                         v += day ? 55 : 35;
+                        if ((safe(() => player.ultLevel, 0) || 0) < 3) v += 22;   // the stated alternative while the ult lags
                     } else {
                         v = 4;
                     }

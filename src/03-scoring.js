@@ -916,6 +916,14 @@
             //     silently delete the four-line plan the order exists to build.
             if (type === 'ult') add(240, 'day-ult-first');
             else if (type === 'base') add(220, 'day-base-second');
+            // v6.94.2 (user): "early upgrades to ultimate are key". The demo
+            // digest shows why in numbers: pat's ult DOUBLES per level
+            // (dmg*9.6*2^(lv-1)) while passout HP is priced at landing time —
+            // lv2 arrived at gt 505 and by gt 600 the piles had outgrown the
+            // cast (poHpAfter > poHpBefore from gt 656). At +240 the ult card
+            // LOST to OLIVE (402) whenever both were offered. Until lv3 it
+            // outranks everything; from lv3 the armor doctrine resumes.
+            if (type === 'ult' && ((safe(() => player.ultLevel, 0) || 0) < 3)) add(200, 'ult-early');
         }
         // HELL: the plan is BUILT. The job is no longer to assemble it but to
         // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk
@@ -1096,16 +1104,17 @@
         }
 
         if (CROWN) {
-            // CROWN RULES (6.74) — HELL PREP: NEGRONI must be a SUPER cocktail
-            // before the finale — the hell boss rush shreds unprepared builds
-            // (observed: a 0-super hell entry died in 50s). From mid-day on,
-            // if SUPER NEGRONI doesn't exist yet, everything on its path jumps
-            // the queue: NEGRONI levels, CAMPARI (its key), and the super card.
-            if (!hellDetected && ![...supersMade].some(n => /NEGRONI/i.test(n)) && gamePhase() !== 'early') {
-                if (type === 'weapon' && name === 'NEGRONI' && !atCap) add(14, 'hell-prep');
-                if (type === 'passive' && name === 'CAMPARI' && !atCap) add(20, 'hell-prep');
-                if (type === 'super' && /NEGRONI/i.test(name)) add(30, 'hell-prep');
-            }
+            // v6.94.2 — THE 6.74 HELL-PREP BLOCK IS DEAD, and it was the gun
+            // leak. It paid +14 NEGRONI / +20 CAMPARI / +30 for the SUPER
+            // NEGRONI card — actively walking the line the whole lockout
+            // doctrine forbids. This is HOW the live run evolved NEGRONI
+            // (audit A2), and it is what the user was watching: "the bot
+            // seems to be picking up upgrades for rainbow gun more often."
+            // NEGRONI is a KEYLESS occupant by doctrine (its key CAMPARI is
+            // arming-capped and avoid-listed since 6.92.0); the refusal that
+            // guarded exactly this sat in the OTHER profile's dead branch.
+            // Hoisted here so the live branch refuses it too.
+            if (type === 'super' && /NEGRONI/i.test(name)) add(-400, 'negroni-super-noop');
         } else {
             // 6.79 RULES — SOURCE-VERIFIED (read live from the game's
             // fireCocktail / recalcStats / hurtPlayer):
