@@ -1035,7 +1035,19 @@
                   // bodies. fireBase aims at the NEAREST enemy, so whatever
                   // stands BEHIND the target is also hit; the pierce-align
                   // term in 05 turns that from luck into positioning.
-                  pierce: 8 },
+                  pierce: 8,
+                  // v6.95.1 THE FRAGILE PROFILE (user chose to keep joe in
+                  // the rotation; the data demanded a doctrine). Joe is the
+                  // only bartender with ZERO innate regen (source-verified:
+                  // the base term is pat||minguk), on 100 HP with no splash.
+                  // Every chip hit is PERMANENT until a heal drops, which is
+                  // why n=31 on 6.94.1 read median 360s with 25/31 contact
+                  // deaths. His doctrine: approach overrides (harvest/trek)
+                  // only with MEASURED armor >= 23 (the 4-OLIVE floor where
+                  // flat 22.4 contact nearly zeroes) AND hp >= 80%; a boss
+                  // mark is soakable only behind a real NEGRONI shield; and
+                  // heals turn VITAL at 75% instead of 60%.
+                  approachDefense: 23, approachHp: 0.8, markShield: 30, healVital: 0.75 },
         // Minguk's whole doctrine is "outrun everything on natural speed":
         // 2.375 with a nuke that needs no positioning at all. Kiting and
         // fleeing are his primary tools, not his last resorts, so he keeps the

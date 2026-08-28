@@ -3835,7 +3835,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4036,9 +4036,12 @@ if (which === 'flame-passout') {
         assert.ok(pl.harvesting === true && pl.dx > 0.5,
             JSON.stringify({ h: pl.harvesting, dx: pl.dx, po: pl.poNearest })));
     // ...and joe carries it too — the flame arm has no meleeUlt gate.
+    // (v6.95.1: joe's fragile profile armor-gates all approaches, so the
+    // scene arms him at the 4-OLIVE floor — an unarmored joe staying home
+    // is now joe-guard's asserted behaviour, not a flame regression.)
     pineBot.test.setChar('joe');
     global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
-                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+                      ultReadyAt: 1e9, fireCrossUntil: 9999, defense: 25 };
     global.enemies = [mkPo(380, 270)];
     pl = pineBot.test.planMove();
     test('joe carries the burn to the pile as well', () =>
@@ -4222,6 +4225,83 @@ if (which === 'farm-stance') {
     test('...and without the stance the hold stays centred', () =>
         assert.ok(pl.harvesting === true && Math.abs(pl.dx) < 0.2,
             JSON.stringify({ h: pl.harvesting, dx: pl.dx })));
+    done();
+}
+
+// v6.95.1 — THE JOE DOCTRINE (user kept pat+joe; the data demanded this).
+// Joe: zero innate regen (source-verified: the base term is pat||minguk),
+// 100 HP, no splash. 6.94.1 n=31: median 360s, 25/31 contact deaths — every
+// chip hit is permanent until a heal drops. Approaches are armor-gated,
+// marks are soakable only behind a shield, heals turn vital earlier, and
+// NEGRONI (his regen substitute) jumps the day queue.
+if (which === 'joe-guard') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 800 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('joe');
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    const mkPo = (x, y) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 40 });
+    const scene = (extraP) => {
+        global.player = Object.assign({ x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                                        ultReadyAt: 100, defense: 25 }, extraP || {});
+        global.enemies = [mkPo(350, 270)];
+        global.gameTime = 800;
+        return pineBot.test.planMove();
+    };
+
+    // APPROACHES ARE ARMOR-GATED for joe: same scene, only defense differs.
+    let pl = scene({ defense: 12 });
+    test('an unarmored joe does NOT walk to the pile — even with the ult ready', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    pl = scene();
+    test('at the 4-OLIVE armor floor the walk opens', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    pl = scene({ hp: 75 });
+    test('at 75% HP (below his 80% floor) joe stays home', () =>
+        assert.ok(!pl.harvesting, 'harvesting at 75%'));
+
+    // ...and PAT is untouched by the fragile profile: same unarmored scene.
+    pineBot.test.setChar('pat');
+    global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                      ultReadyAt: 100, defense: 12 };
+    global.enemies = [mkPo(350, 270)]; global.gameTime = 800;
+    pl = pineBot.test.planMove();
+    test('pat (180 HP + regen) still harvests unarmored — the gate is joe\'s alone', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    pineBot.test.setChar('joe');
+
+    // MARKS: a healthy joe does NOT soak a mark on raw HP...
+    global.dropMarks = [{ x: 160, y: 270, r: 58, dmg: 40, tele: 0.6, at: 810 }];
+    pl = scene();
+    test('a mark stops an unshielded joe — 40 permanent HP is not a toll', () =>
+        assert.ok(!pl.harvesting, 'harvesting under a mark, no shield'));
+    pl = scene({ shield: 60, shieldMax: 60 });
+    test('...but behind a NEGRONI shield the walk proceeds', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    global.dropMarks = [];
+
+    // HEALS: vital fires at 75% for joe (60% for the others).
+    global.player = { x: 150, y: 270, hp: 72, maxHp: 100, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+    global.enemies = []; global.pickups = [{ kind: 'health', x: 300, y: 270 }];
+    global.gameTime = 800;
+    let th = pineBot.test.gatherThreats(global.player);
+    let L = pineBot.test.gatherLoot(global.player, 0.72, th) || [];
+    test('a heal is VITAL for joe at 72%', () =>
+        assert.ok(L[0] && L[0].vital === true, JSON.stringify(L[0] || null)));
+    pineBot.test.setChar('pat');
+    th = pineBot.test.gatherThreats(global.player);
+    L = pineBot.test.gatherLoot(global.player, 0.72, th) || [];
+    test('...and merely valuable for pat at the same ratio', () =>
+        assert.ok(L[0] && L[0].vital === false, JSON.stringify(L[0] || null)));
+    pineBot.test.setChar('joe');
+
+    // NEGRONI jumps the day queue for joe only.
+    const why = n => pineBot.test.scoreCard({ n, type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || '';
+    test('NEGRONI carries joe-shield for joe', () =>
+        assert.ok(/joe-shield/.test(why('NEGRONI')), why('NEGRONI')));
+    pineBot.test.setChar('pat');
+    test('...and not for pat', () =>
+        assert.ok(!/joe-shield/.test(why('NEGRONI')), why('NEGRONI')));
     done();
 }
 

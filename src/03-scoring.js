@@ -985,6 +985,13 @@
         if (!atCap && type === 'weapon' && KEYLESS_BOOST.includes(name)) {
             add(46 + (hellDetected ? 20 : 0), 'keyless-core');
         }
+        // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
+        // regenerating shield is his regen substitute, and in the 6.94.1 pat
+        // digest the roster's NEGRONI arrived at gt 752. Joe cannot wait 12
+        // minutes for his only sustain. Joe-only, day-weighted.
+        if (!atCap && type === 'weapon' && name === 'NEGRONI' && activeChar === 'joe' && !hellDetected) {
+            add(26, 'joe-shield');
+        }
         // v6.92.3 — THE MULE LOCKOUT (user, stating a game-design rule):
         // "a character cannot get moscow mule if the character has vodka cherry
         // and vice versa". The two are MUTUALLY EXCLUSIVE.

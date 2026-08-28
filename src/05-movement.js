@@ -542,7 +542,9 @@
             let vital = false;
             if (kind === 'health') {
                 v = 10 + 70 * (1 - hpRatio);   // near-worthless at full HP, urgent when low
-                vital = hpRatio < 0.6;         // hurt: healing must BYPASS every greed discount
+                // v6.95.1: for a character with no regen a heal is the ONLY
+                // way lost HP ever comes back — vital fires earlier.
+                vital = hpRatio < (charOf().healVital != null ? charOf().healVital : 0.6);
             } else if (kind === 'timestop' || kind === 'firecross' || kind === 'tequila') {
                 // Battlefield consumables (timestop freeze, firecross burn,
                 // tequila shot) activate ON PICKUP. Grabbing one on an empty
@@ -1784,8 +1786,13 @@
         // with a +117 SHIELD under a 26-mark carpet — the shield eats a mark
         // landing before HP does, so affordability counts both pools.
         const shieldNow = Math.max(0, safe(() => player.shield, 0) || 0);
-        const markSoak = (hp + shieldNow) / Math.max(1, maxHp) >=
-            (M.harvestMarkSoakHp != null ? M.harvestMarkSoakHp : 0.65);
+        // v6.95.1: for the fragile profile (joe, no regen) a 40%-maxHp mark
+        // is 40 PERMANENT HP on a 100 HP pool — soakable only behind a real
+        // NEGRONI shield, never on raw HP.
+        const msNeed = charOf().markShield;
+        const markSoak = ((hp + shieldNow) / Math.max(1, maxHp) >=
+            (M.harvestMarkSoakHp != null ? M.harvestMarkSoakHp : 0.65)) &&
+            (msNeed == null || shieldNow >= msNeed);
         const ultHarvest = meleeUlt && poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
             !hpPanic && (!markHere || markSoak) && !projHere;
 
@@ -2681,8 +2688,11 @@
             const MH2 = CONFIG.movement;
             const gtT = typeof G.gameTime === 'number' ? G.gameTime : 0;
             const relPx = MH2.trekReleasePx != null ? MH2.trekReleasePx : 190;
+            const apDefT = charOf().approachDefense, apHpT = charOf().approachHp;
             const trekGates = MH2.trekOverride !== false && !hellDetected && gtT < 1200 &&
                 gtT >= (MH2.farmFromS != null ? MH2.farmFromS : 150) &&
+                (apDefT == null || ((liveDefense() || 0) >= apDefT)) &&
+                (apHpT == null || hpRatio >= apHpT) &&   // v6.95.1 fragile profile
                 !hpPanic && !th.rival && !rainbowRecent && !flight;
             if (trekGates) {
                 // v6.94.1 (user): in the EARLY game the first-landed passouts
@@ -2777,7 +2787,13 @@
         // first bodies up — the flat 150s gate was fighting the snowball.
         // The real suicide marker in the joe row was BUILD NULL (no weapon
         // at 72s), so the gate is now the weapon itself, plus a short floor.
-        const farmReady = ownedCocktailCount() >= 1 &&
+        // v6.95.1 fragile profile (joe): a character with no regen treats
+        // every approach as a purchase HP cannot refund. Approaches need
+        // MEASURED armor at the 4-OLIVE floor and healthy HP; others unset.
+        const apDefH = charOf().approachDefense, apHpH = charOf().approachHp;
+        const fragileOk = (apDefH == null || ((liveDefense() || 0) >= apDefH)) &&
+                          (apHpH == null || hpRatio >= apHpH);
+        const farmReady = ownedCocktailCount() >= 1 && fragileOk &&
             gtHarv >= (MH.farmFromS != null ? MH.farmFromS : 90);
         const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
             ((meleeUlt && ultHarvest) || flameHarvest) &&
