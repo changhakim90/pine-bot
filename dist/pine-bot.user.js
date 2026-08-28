@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.93.1
+// @version      6.93.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.93.1';
+    const SCRIPT_VERSION = '6.93.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -207,8 +207,23 @@
         // control is historical rather than concurrent.
         // To rotate again: set preferredBartender back to null. The rotation
         // list below is inert while a bartender is pinned.
-        preferredBartender: 'minguk',
-        bartenderRotation: ['pat', 'minguk'],
+        //
+        // v6.93.2 (user): "Let's try to rotate between pat and joe in the
+        // latest build instead of minguk." The minguk pin is LIFTED and the
+        // rotation set to pat/joe — the two characters whose early game the
+        // 6.93.1 harvest approach was built for. Minguk is not deleted: his
+        // store, rows, and posture stay intact, and re-pinning him is this
+        // same one-line change back. What this costs, stated plainly:
+        // minguk's row (the 120-minute-consistent baseline) stops
+        // accumulating, and the sample rate halves per character — expect
+        // ~2x the runs before a z on either row means anything. Each keeps
+        // its OWN CEM store (pineBotUCB_v5_pat / _joe) and its own
+        // compare() rows, so nothing is polluted. NOTE: the 6.93.0 runaway
+        // clamp applies per store on load, so whatever state the pat/joe
+        // stores are in, their means are pulled into the current box the
+        // first time they load.
+        preferredBartender: null,
+        bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate

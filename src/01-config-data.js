@@ -205,8 +205,23 @@
         // control is historical rather than concurrent.
         // To rotate again: set preferredBartender back to null. The rotation
         // list below is inert while a bartender is pinned.
-        preferredBartender: 'minguk',
-        bartenderRotation: ['pat', 'minguk'],
+        //
+        // v6.93.2 (user): "Let's try to rotate between pat and joe in the
+        // latest build instead of minguk." The minguk pin is LIFTED and the
+        // rotation set to pat/joe — the two characters whose early game the
+        // 6.93.1 harvest approach was built for. Minguk is not deleted: his
+        // store, rows, and posture stay intact, and re-pinning him is this
+        // same one-line change back. What this costs, stated plainly:
+        // minguk's row (the 120-minute-consistent baseline) stops
+        // accumulating, and the sample rate halves per character — expect
+        // ~2x the runs before a z on either row means anything. Each keeps
+        // its OWN CEM store (pineBotUCB_v5_pat / _joe) and its own
+        // compare() rows, so nothing is polluted. NOTE: the 6.93.0 runaway
+        // clamp applies per store on load, so whatever state the pat/joe
+        // stores are in, their means are pulled into the current box the
+        // first time they load.
+        preferredBartender: null,
+        bartenderRotation: ['pat', 'joe'],
 
         // USER-PRESCRIBED ROADMAP (overrides self-composition while set; set
         // to null to return to data-derived rosters). PAT survival/ultimate

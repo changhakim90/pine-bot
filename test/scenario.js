@@ -1001,7 +1001,11 @@ if (which === 'cem-heal') {
         enemyTypeMul: { mob: 2.2, bomber: 2.0 }
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
-        storage: { pineBotUCB_v5: JSON.stringify(poisoned) } });   // v6.87.1: minguk is pinned, and his store is the UNSUFFIXED key
+        // v6.93.2: the rotation boots on PAT now, so the poisoned store is
+        // seeded under BOTH keys — this scenario tests store healing, and it
+        // must not silently pass against a fresh store when the character
+        // selection changes again.
+        storage: { pineBotUCB_v5: JSON.stringify(poisoned), pineBotUCB_v5_pat: JSON.stringify(poisoned) } });
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -1045,7 +1049,8 @@ if (which === 'cem-lockup') {
               { r: 7, p: { ...mean, 'movement.standoff': 150 } }]
     };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 5 },
-        storage: { pineBotUCB_v5: JSON.stringify(locked) } });   // v6.87.1: minguk is pinned, and his store is the UNSUFFIXED key
+        // v6.93.2: seeded under both keys — see cem-heal's note.
+        storage: { pineBotUCB_v5: JSON.stringify(locked), pineBotUCB_v5_pat: JSON.stringify(locked) } });
     setTimeout(() => {
         pineBot.stop();
         const L = pineBot.learn();
@@ -1377,27 +1382,29 @@ if (which === 'rotation') {
     const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
     const T = pineBot.test;
-    // v6.87.1: minguk is PINNED. He is the better character on every number
-    // that exists (median 21.9m vs 15.4m) and the one that competed for the
-    // crown, so the whole sample rate goes to him.
-    test('minguk is pinned as the active bartender', () =>
-        assert.strictEqual(pineBot.config.preferredBartender, 'minguk'));
-    test('boot lands on him, not on the rotation head', () =>
-        assert.strictEqual(T.activeChar(), 'minguk'));
-    const pinned = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
-    test('the pin holds run after run', () =>
-        assert.deepStrictEqual(pinned, ['minguk', 'minguk', 'minguk'], pinned.join(',')));
-    // The rotation machinery must survive being switched off, or re-enabling
-    // it silently does nothing — which is exactly the 6.85.0 failure.
-    pineBot.config.preferredBartender = null;
+    // v6.93.2 — REVISED ON PURPOSE, not made to pass. The old assertions
+    // encoded the 6.87.1 minguk pin ("the whole sample rate goes to him").
+    // The user has now overridden it directly: "Let's try to rotate between
+    // pat and joe in the latest build instead of minguk" — the two
+    // characters the 6.93.1 harvest approach was built for. The substance
+    // is kept: the rotation must actually alternate, persist its position,
+    // and the pin machinery must still work when re-set.
+    test('no bartender is pinned — selection goes to the rotation', () =>
+        assert.strictEqual(pineBot.config.preferredBartender, null));
+    test('the rotation is pat and joe (minguk rests, not deleted)', () =>
+        assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'joe']));
     const seq = [T.chooseBartender(), T.chooseBartender(), T.chooseBartender(), T.chooseBartender()];
-    test('lifting the pin restores a rotation that actually alternates', () =>
-        assert.deepStrictEqual(seq, ['pat', 'minguk', 'pat', 'minguk'], seq.join(',')));
-    test('the rotation list is still pat and minguk (joe stays retired)', () =>
-        assert.deepStrictEqual(pineBot.config.bartenderRotation, ['pat', 'minguk']));
+    test('the rotation actually alternates pat and joe', () =>
+        assert.deepStrictEqual(seq, ['pat', 'joe', 'pat', 'joe'], seq.join(',')));
     test('the position is persisted, so a reload resumes mid-sequence', () =>
         assert.strictEqual(String(store.pineBotRotIdx), '0', 'idx ' + store.pineBotRotIdx));
+    // The pin machinery must survive being switched off, or re-pinning
+    // minguk later silently does nothing — the 6.85.0 failure inverted.
     pineBot.config.preferredBartender = 'minguk';
+    const pinned = [T.chooseBartender(), T.chooseBartender()];
+    test('re-pinning minguk still works and holds run after run', () =>
+        assert.deepStrictEqual(pinned, ['minguk', 'minguk'], pinned.join(',')));
+    pineBot.config.preferredBartender = null;
     done();
 }
 
@@ -1409,8 +1416,9 @@ if (which === 'rotation-resume') {
     });
     pineBot.stop();
     const T = pineBot.test;
+    // v6.93.2: rotation is now pat/joe, so index 1 resumes on JOE.
     test('a stored index resumes where the last session stopped', () =>
-        assert.strictEqual(T.nextRotationChar(), 'minguk'));
+        assert.strictEqual(T.nextRotationChar(), 'joe'));
     // switching bartender must switch the learned store with it, or the two
     // characters' CEM samples pollute each other
     T.setChar('minguk'); T.reloadLearn();

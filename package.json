@@ -1,6 +1,6 @@
 {
   "name": "pine-bot",
-  "version": "6.93.1",
+  "version": "6.93.2",
   "description": "Autonomous player for Pine & Co (pineandco.online) — userscript built from src/, tested headless, runnable via Violentmonkey/Tampermonkey or Playwright.",
   "private": true,
   "scripts": {
