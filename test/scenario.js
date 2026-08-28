@@ -3793,7 +3793,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -3852,6 +3852,27 @@ if (which === 'po-harvest') {
     test('a pile beyond harvestRangePx is not worth the walk', () =>
         assert.ok(!pl.harvesting, 'harvesting at ' + pl.poNearest + 'px'));
 
+    // MARK SOAK (user): "the feed filler boss marks are disrupting the
+    // ultimate usage and not allowing the bot to get in optimal position to
+    // kill passouts." A mark is a 40%-maxHp toll and the cast is an invuln
+    // window — at high HP the walk proceeds THROUGH the marked band; low,
+    // the old caution returns.
+    global.gameTime = 700;
+    global.dropMarks = [{ x: 160, y: 270, r: 58, dmg: 72, tele: 0.6, at: 710 }];
+    pl = scene(150, 270, 350, 270, 100);
+    test('a boss mark on the bot does NOT stop a healthy harvest walk', () =>
+        assert.ok(pl.harvesting === true && pl.dx > 0.5,
+            JSON.stringify({ h: pl.harvesting, dx: pl.dx })));
+    pl = scene(150, 270, 350, 270, 100, { hp: 105 });   // 58% — a 40% hit lands near panic
+    test('...but a bot too hurt to soak the mark still yields to it', () =>
+        assert.ok(!pl.harvesting, 'harvesting at 58% under a mark'));
+    // ...unless a SHIELD covers the toll (screenshot: 69% HP +117sh under a
+    // 26-mark carpet) — the shield eats the landing before HP does.
+    pl = scene(150, 270, 350, 270, 100, { hp: 105, shield: 60 });
+    test('...and a shield restores the walk at the same HP', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    global.dropMarks = [];
+
     // MINGUK IS UNTOUCHED — the working baseline. His nuke is field-wide, so
     // the approach must never move him.
     pineBot.test.setChar('minguk');
@@ -3868,6 +3889,93 @@ if (which === 'po-harvest') {
     // (hell not latched in this env, so the window check passes; assert the
     // day-side behaviour is unchanged instead)
     test('outside hell the approach stays available (day farming)', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    done();
+}
+
+// v6.93.3 — THE CROSS IS FOR PASSOUTS (user: "flame cross is still being
+// wasted on mobs and bosses. they should be almost exclusively used for
+// passouts"). Three claims, each with teeth: the PICKUP is refused without a
+// passout field (the cross activates on pickup, so pickup IS targeting); the
+// AIM is passout-exclusive while one is in range; an ACTIVE burn is walked
+// to the pile by the harvest override.
+if (which === 'flame-passout') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');
+    const mkPo = (x, y) => ({ type: 'passout', x, y, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 60 });
+    const boss = { type: 'boss', x: 250, y: 270, r: 40, hp: 5e5, maxHp: 5e5, speed: 0, moving: false, id: 61 };
+
+    // PICKUP: a cross on a hot, passout-free field stays on the floor.
+    // gatherLoot is a real test accessor — the value itself is asserted.
+    global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
+    global.enemies = [boss];
+    global.pickups = [{ kind: 'firecross', x: 180, y: 270 }];
+    let pl = pineBot.test.planMove();   // sets lastPlan (passoutsNear = 0)
+    const crossV = () => {
+        const th = pineBot.test.gatherThreats(global.player);
+        const L = pineBot.test.gatherLoot(global.player, 0.95, th) || [];
+        const it = L.find(i => i.kind === 'firecross');
+        return it ? it.v : null;
+    };
+    const vNoPo = crossV();
+    test('a cross with no passouts anywhere is left lying (flat 4)', () =>
+        assert.ok(vNoPo != null && vNoPo <= 6, 'v ' + vNoPo));
+    // ...even with a BOSS on the field — the old ladder paid +14/+20 here.
+    // (the boss is already in the scene above; vNoPo covers it)
+    // ...and the SAME field with a passout up makes it top-priority.
+    global.enemies = [boss, mkPo(300, 270)];
+    pl = pineBot.test.planMove();       // lastPlan.passoutsNear >= 1 (190px gate: 150px away)
+    const vPo = crossV();
+    test('the same cross with a passout field up is grabbed', () =>
+        assert.ok(vPo != null && vPo > vNoPo + 30, vPo + ' vs ' + vNoPo));
+
+    // AIM: passout-exclusive. A boss CLOSER than the passout must not win the
+    // stream — the old falloff weights let it.
+    global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+    global.gameTime = 700;
+    global.enemies = [Object.assign({}, boss, { x: 200, y: 270 }), mkPo(330, 270)];
+    pl = pineBot.test.planMove();
+    test('with the burn LIVE, a nearer boss does not steal the aim from a passout', () =>
+        assert.ok(pl.flameAimPo === true, JSON.stringify({ po: pl.flameAimPo, d: pl.flameAim })));
+    // ...but with NO passout, the burn is not wasted by refusing to aim at all.
+    global.enemies = [Object.assign({}, boss, { x: 200, y: 270 })];
+    pl = pineBot.test.planMove();
+    test('with no passout in range, the live burn still sweeps the field', () =>
+        assert.ok(pl.flameAim != null && pl.flameAimPo === false,
+            JSON.stringify({ po: pl.flameAimPo, d: pl.flameAim })));
+
+    // PIERCE (user): "flame cross also has pierce so it can kill multiple
+    // passouts at once if you angle the flame cross correctly." Three
+    // passouts in a line to the EAST vs one closer passout to the NORTH —
+    // the aim must take the line, not the nearest body.
+    global.player = { x: 150, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+    global.gameTime = 700;
+    global.enemies = [mkPo(260, 270), mkPo(340, 270), mkPo(420, 270),
+                      Object.assign(mkPo(150, 180), { id: 63 })];
+    pl = pineBot.test.planMove();
+    test('the aim takes the RAY through three passouts over a nearer lone one', () =>
+        assert.ok(pl.flameAimPo === true && pl.flameAim != null && pl.flameAim >= 100,
+            JSON.stringify({ po: pl.flameAimPo, d: pl.flameAim })));
+    test('...and the heading leans along that line, sweeping the pierce through it', () =>
+        assert.ok(pl.dx > 0.3, 'dx ' + pl.dx + ' dy ' + pl.dy));
+
+    // CARRY: an active burn triggers the harvest walk even with the ult cold.
+    global.enemies = [mkPo(380, 270)];
+    pl = pineBot.test.planMove();
+    test('an active burn is CARRIED to the pile (harvest override, ult cold)', () =>
+        assert.ok(pl.harvesting === true && pl.dx > 0.5,
+            JSON.stringify({ h: pl.harvesting, dx: pl.dx, po: pl.poNearest })));
+    // ...and joe carries it too — the flame arm has no meleeUlt gate.
+    pineBot.test.setChar('joe');
+    global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                      ultReadyAt: 1e9, fireCrossUntil: 9999 };
+    global.enemies = [mkPo(380, 270)];
+    pl = pineBot.test.planMove();
+    test('joe carries the burn to the pile as well', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     done();
 }

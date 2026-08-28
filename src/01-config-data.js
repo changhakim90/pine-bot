@@ -523,6 +523,7 @@
             harvestS: 12,          // time-box one approach
             harvestRestS: 20,      // rest before the next attempt
             harvestUntilS: 2700,   // the window: day + hell entry + early hell (user's stated gap)
+            harvestMarkSoakHp: 0.65,   // v6.93.3: above this HP ratio a boss mark (40% maxHp) is an affordable toll on the way to the pile
             // v6.86.7: the flame cross is a DIRECTIONAL flamethrower (3 shots
             // every 3 frames along the aim vector, speed 9-11, rainbow-gun
             // class, 5s + fireCrossBonus). Pointing it is the whole skill, so

@@ -501,7 +501,7 @@
         return 0;
     }
 
-    function gatherLoot(p, hpRatio) {
+    function gatherLoot(p, hpRatio, th) {
         const out = [];
         const ps = G.pickups;
         if (!Array.isArray(ps)) return out;
@@ -528,24 +528,37 @@
                 // and tequila/flame bursts is what outlasts the boss rush
                 // when the rainbow gun isn't up yet — these drops become
                 // top-priority loot the moment the run crosses into hell.
-                if (hellDetected) v += (kind === 'timestop' ? 20 : 14);
-                // USER: FLAME CROSS is essential for melting NO BOOKING
-                // walls and passout fields — grab it when those targets are up.
-                if (kind === 'firecross' && lastPlan) {
-                    // USER PRIORITY ORDER for the flame cross: passouts
-                    // FIRST, then NO BOOKING walls and bosses, then charge
-                    // lanes — the early roster is too weak to melt these,
-                    // the cross does it for free. Day phase values it most.
-                    const gtF = typeof G.gameTime === 'number' ? G.gameTime : 0;
-                    const day = gtF < 1200 && !hellDetected;
-                    // v6.85.9 (user): passouts are what the cross is FOR — the
-                    // rest of the roster barely scratches them. A cross on the
-                    // floor with a passout field up is close to top-priority
-                    // loot, not a mild preference. On an empty field it stays
-                    // cheap, so the bot leaves it lying there until it pays.
-                    if ((lastPlan.passoutsNear || 0) >= 1) v += day ? 55 : 35;
-                    else if (lastPlan.wallNear === true || lastPlan.bossNear === true) v += day ? 20 : 14;
-                    else if ((lastPlan.lines || 0) > 0) v += 12;
+                // (v6.93.3: the firecross is now carved out below — the
+                // chaining doctrine keeps timestop and tequila only.)
+                if (hellDetected && kind !== 'firecross') v += (kind === 'timestop' ? 20 : 14);
+                // v6.93.3 (user): "flame cross is still being wasted on mobs
+                // and bosses. they should be almost exclusively used for
+                // passouts." The cross activates ON PICKUP, so the pickup IS
+                // the targeting decision. The old ladder (passouts first,
+                // then walls/bosses, then lanes, atop a heat-scaled base that
+                // alone reached ~54 in hell) meant a cross with no passout
+                // anywhere still got grabbed and burned on the crowd. Now:
+                // passouts near -> top-priority loot; no passouts -> a flat 4,
+                // no heat scaling, no hell bonus, no wall/boss/lane ladder —
+                // it lies on the floor until a passout field is up. The
+                // source fact makes this cheap: passouts die ONLY to base
+                // attacks, splash, the cross, and the ults, while mobs and
+                // bosses die to the whole roster — spending the one tool that
+                // works on targets everything works on is pure waste.
+                if (kind === 'firecross') {
+                    // v6.93.3b: read the passout field from THIS tick's gather,
+                    // not lastPlan — the old read lagged a tick in live play
+                    // and was simply absent when planMove ran outside the loop.
+                    const poUp = th && Array.isArray(th.passouts)
+                        ? th.passouts.some(po => !po.far && Math.hypot(po.x - p.x, po.y - p.y) < 190)
+                        : !!(lastPlan && (lastPlan.passoutsNear || 0) >= 1);
+                    if (poUp) {
+                        const gtF = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                        const day = gtF < 1200 && !hellDetected;
+                        v += day ? 55 : 35;
+                    } else {
+                        v = 4;
+                    }
                 }
             } else if (kind === 'magnet') {
                 // Magnet hoovers the floor: worth more the more loot is out.
@@ -655,7 +668,7 @@
 
         if (hellDetected) applyHellUnban();   // v6.83.0: fifth-super key opens in hell
         const th = gatherThreats(p);
-        const loot = gatherLoot(p, hpRatio);
+        const loot = gatherLoot(p, hpRatio, th);
 
         // UPGRADE/LOOT SYNC (user directive): the build must hit its power
         // marks ON TIME — roughly the first super by ~11 min and six by the
@@ -1724,8 +1737,24 @@
         // pile at 4x the normal pull weight buys nothing and spends the
         // spacing that keeps a runner alive. Harvest is for melee ults.
         const meleeUlt = charOf().ultKind && charOf().ultKind !== 'nuke';
+        // v6.93.3 (user): "the feed filler boss marks are disrupting the
+        // ultimate usage and not allowing the bot to get in optimal position
+        // to kill passouts." markHere covers a mark-radius + 50px halo, so a
+        // mark-spamming boss near the pile kept the harvest gated off across
+        // a wide band. But a mark is a 40%-of-maxHp hit (mitigation model) —
+        // an AFFORDABLE price for a pile that funds the build — and the cast
+        // itself is an invulnerability window that eats a landing outright.
+        // So a mark only blocks the harvest when the bot cannot afford to
+        // soak it: below harvestMarkSoakHp a 40% hit would drop the bot near
+        // the panic line, and the old caution returns.
+        // v6.93.3b (screenshot, 14:03 pat run): the live bot sat at 69% HP
+        // with a +117 SHIELD under a 26-mark carpet — the shield eats a mark
+        // landing before HP does, so affordability counts both pools.
+        const shieldNow = Math.max(0, safe(() => player.shield, 0) || 0);
+        const markSoak = (hp + shieldNow) / Math.max(1, maxHp) >=
+            (M.harvestMarkSoakHp != null ? M.harvestMarkSoakHp : 0.65);
         const ultHarvest = meleeUlt && poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
-            !hpPanic && !markHere && !projHere;
+            !hpPanic && (!markHere || markSoak) && !projHere;
 
         // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
         // no booking mobs and passouts in day" — with a 17:59 screenshot
@@ -1822,8 +1851,39 @@
                 const sc = w / (1 + d / 200);
                 if (sc > bestF) { bestF = sc; flameTarget = { x, y, d }; }
             };
-            for (const po of th.passouts) if (!po.far) consider(po.x, po.y, 3);
-            for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
+            // v6.93.3 (user): "flame cross also has pierce so it can kill
+            // multiple passouts at once if you angle the flame cross
+            // correctly." So the right aim is not the best single passout but
+            // the RAY through the most of them: for each candidate, count the
+            // pile-through — passouts lying inside a 42px half-width corridor
+            // along the ray from the bot through the candidate — and let that
+            // count dominate the choice. Distance only breaks ties.
+            const poList = th.passouts.filter(po => !po.far);
+            const rayCount = (tx, ty) => {
+                const rdx = tx - p.x, rdy = ty - p.y, L = Math.hypot(rdx, rdy) || 1;
+                const ux = rdx / L, uy = rdy / L;
+                let n = 0;
+                for (const q of poList) {
+                    const qx = q.x - p.x, qy = q.y - p.y;
+                    if (qx * ux + qy * uy < 0) continue;          // behind the stream
+                    if (Math.abs(qx * uy - qy * ux) <= 42) n++;   // inside the corridor
+                }
+                return n;
+            };
+            for (const po of poList) {
+                const d = Math.hypot(po.x - p.x, po.y - p.y);
+                if (d > M.flameAimRange) continue;
+                const sc = rayCount(po.x, po.y) * 3 + 3 / (1 + d / 200);
+                if (sc > bestF) { bestF = sc; flameTarget = { x: po.x, y: po.y, d, po: true }; }
+            }
+            // v6.93.3: while any passout is in aim range it is the ONLY
+            // target class (the old 3 vs 2.5/2/1 weights let a close boss
+            // outbid a farther passout through the falloff). Mobs, walls and
+            // bosses get the burn only when no passout exists to spend it on:
+            // the burn is already lit at that point, so sweeping the crowd
+            // costs nothing.
+            if (!flameTarget)
+                for (const e of th.enemies) consider(e.x, e.y, e.wall ? 2.5 : (e.boss ? 2 : 1));
         }
 
         // v6.89.6/7 THE KITE WEIGHT, hoisted: every factor here is constant
@@ -2520,8 +2580,16 @@
         // the bot back out before the 900ms ult retry fires. The 12s clock is
         // what bounds the hold, and the cast itself ends it (the cooldown
         // resets ultInS past ultHarvestLeadS, dropping ultHarvest).
-        const harvWant = MH.harvestApproach !== false && meleeUlt && harvWindow &&
-            ultHarvest && poN >= 1 && poNearest != null &&
+        // v6.93.3: an ACTIVE burn is walked to the pile the same way — the
+        // cross fires along the aim vector for only ~5s, and a burn spent
+        // circling mobs is the waste the user named. Same gates as ultHarvest
+        // (the flame arm re-states them: !hpPanic/!markHere/!projHere), same
+        // clock, any character — the cross is not a melee ult, so the
+        // meleeUlt gate applies only to the ult arm.
+        const flameHarvest = flameOn && !hpPanic && (!markHere || markSoak) && !projHere;
+        const harvWant = MH.harvestApproach !== false && harvWindow &&
+            ((meleeUlt && ultHarvest) || flameHarvest) &&
+            poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
             !flight && !th.rival;
         let harvOn = false;
@@ -2619,6 +2687,7 @@
             poDps: poDpsOut ? Math.round(poDpsOut) : 0, poGaveUp: poGiveUp.size,
             armorLv, armorConf: +armorConf.toFixed(2), holdoutAnchor,
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
+            flameAimPo: flameTarget ? flameTarget.po === true : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),
             kiteAt, fleeNear, contestTol: th.contestTol, trek: trekPo ? Math.round(Math.hypot(p.x - trekPo.x, p.y - trekPo.y)) : null,
