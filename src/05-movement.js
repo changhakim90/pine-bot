@@ -15,6 +15,20 @@
         };
         const R = CONFIG.threat.enemyRange;
 
+        // v6.95.0 farm stance — computed ONCE per gather (not per enemy, and
+        // never stale on an empty field).
+        {
+            const MF = CONFIG.movement;
+            const gtF0 = safe(() => gameTime, 0) || 0;
+            const defNowF = liveDefense();
+            const mHpF = p.maxHp || p.maxHealth || 100;
+            farmRef.v = MF.farmStance !== false && !hellDetected &&
+                gtF0 >= (MF.farmFromS != null ? MF.farmFromS : 90) &&
+                gtF0 < (MF.farmUntilS != null ? MF.farmUntilS : 1100) &&
+                defNowF != null && defNowF >= (MF.farmDefense != null ? MF.farmDefense : 30) &&
+                ((p.hp != null ? p.hp : mHpF) / (mHpF || 1)) >= (MF.farmHp != null ? MF.farmHp : 0.7);
+        }
+
         const es = G.enemies;
         nearestBossRef.v = Infinity;
         if (Array.isArray(es)) {
@@ -223,9 +237,21 @@
                 // scratch — fear of non-boss mobs scales DOWN with armor
                 // (up to -36% at OLIVE 6), so the bot stands and grinds.
                 const gtDay = safe(() => gameTime, 0) || 0;
+                // v6.95.0 — the day x1.15 harden is RETIRED, and its own
+                // justification was the bug: it cited "manual run crowd
+                // median 0" as the human AVOIDING crowds, but the human's
+                // crowd median is 0 because everything nearby DIES. The
+                // 6.94.1 bot digest shows what the harden actually bought:
+                // crowdMedian 0 the other way — an empty field, no income,
+                // two supers at hell entry. THE FARM STANCE inverts it: with
+                // armor MEASURED at the farm floor and HP healthy, commons
+                // are absorbed, not avoided (armor 35 vs flat 22.4 contact).
+                const farmNow = farmRef.v;
                 const armorEase = ((t !== 'boss' && !isWall)
-                    ? 1 - 0.06 * Math.min(6, armorLevel()) : 1) *
-                    ((t !== 'boss' && !isWall && gtDay < 1200 && !hellDetected) ? 1.15 : 1);   // DAY: commons are avoided, not absorbed (manual run crowd median 0)
+                    ? (1 - 0.06 * Math.min(6, armorLevel())) *
+                      (farmNow ? (CONFIG.movement.farmContactMul != null ? CONFIG.movement.farmContactMul : 0.45)
+                               : ((gtDay < 1200 && !hellDetected) ? 1.15 : 1))
+                    : 1);
                 out.enemies.push({
                     x: e.x, y: e.y, vx, vy, spd,
                     r: (typeof e.r === 'number' ? e.r : 10) + CONFIG.threat.contactPad,
@@ -724,7 +750,8 @@
         const hellMul = hellDetected ? 1.3 : 1;
         const projW = T.projWeight * (1 + Math.min(1, 2 * mixShare('ranged'))) * hellMul;
         const markW = T.markWeight * (1 + Math.min(1, 3 * mixShare('bomber'))) * hellMul;
-        const standoffAdj = M.standoff * (1 + 0.3 * Math.min(1, mixShare('swarm'))) * (hellDetected ? 1.15 : 1) *
+        const standoffAdj = M.standoff * (farmRef.v ? (M.farmStandoffMul != null ? M.farmStandoffMul : 0.55) : 1) *
+            (1 + 0.3 * Math.min(1, mixShare('swarm'))) * (hellDetected ? 1.15 : 1) *
             (flameOn ? 0.75 : 1);   // flame active: tighten in, keep the crowd burning
 
         // ---- Enemy scaling: MEASURE the difficulty curve ----------------
@@ -1962,7 +1989,11 @@
         } else {
             // v6.89.3: cornered means STOP sweeping — the two pulls fight, and
             // the corner is the one that keeps the bot alive.
-            kiteW = kiteBaseW * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp;
+            kiteW = kiteBaseW * (anchor ? 0.35 : 1) * (cornerOn ? 0.12 : 1) * kiteDamp *
+                (farmRef.v ? 0 : 1);   // v6.95.0: the farm stance grinds, it does not sweep — with danger discounted
+                                       // to near zero a DAMPED sweep still beats standing still, so it is OFF outright.
+                                       // The kiteSpacing sidestep arm (other branch) keeps full weight, and an HP drop
+                                       // exits the stance and restores the sweep.
         }
 
         let best = null;
@@ -2050,7 +2081,8 @@
                     danger += 40 * e.w * caution;                                       // stepping THROUGH a boss body still hurts
                 else if (d < reachD) danger += T.enemyWeight * caution * e.w *
                     ((reachD - d) / reachD) * 6 * (e.stationary ? 0.45 : 1) * ((e.boss && !e.stationary) ? 1.25 : 1) *
-                    ((anchor && !e.boss && !e.rival) ? 0.65 : 1);   // anchored: commons don't push us off the farm
+                    ((anchor && !e.boss && !e.rival) ? 0.65 : 1) *   // anchored: commons don't push us off the farm
+                    ((farmRef.v && e.boss && !e.rival) ? (CONFIG.movement.farmBossFearMul != null ? CONFIG.movement.farmBossFearMul : 0.7) : 1);   // v6.95.0: armored day = engage the tip carrier, don't orbit it
             }
 
             for (const q of th.projectiles) {
@@ -2532,7 +2564,13 @@
                 }
             }
             if (kite && i !== N) gain += (dx * kite.x + dy * kite.y) * kiteW;
-            if (escape && i !== N) gain += (dx * escape.x + dy * escape.y) * M.escapePull * (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            if (escape && i !== N && !farmRef.v) gain += (dx * escape.x + dy * escape.y) * M.escapePull *
+                (flight ? (grind ? M.grindKiteMul : 1.8) : 1);
+            // v6.95.0: in the farm stance the widest-gap flee is OFF, same
+            // reasoning as the kite sweep — with contact discounted to near
+            // zero, ANY damped flee still beats standing still on an
+            // otherwise-quiet field. An HP drop exits the stance and
+            // restores it wholesale.
 
             // pull toward the middle of the arena — corners are death traps,
             // and a mob rush must bend the path INWARD, never into a corner
@@ -2561,6 +2599,14 @@
         let vx, vy;
         if (mag > 0.02) { vx = smoothVec.x / mag; vy = smoothVec.y / mag; }
         else { vx = best.dx; vy = best.dy; }   // mid-reversal: commit to the new heading
+        // v6.95.0: normalisation turns a DECAYING residual into full-speed
+        // drift — a chosen stand-still keeps walking the old heading for ~9
+        // ticks until the residual crosses 0.02. In the farm stance that
+        // drift IS the empty-field bug (the bot glides out of the crowd it
+        // decided to grind), so a chosen stand-still stands NOW.
+        if (farmRef.v && best.dx === 0 && best.dy === 0) {
+            smoothVec.x = 0; smoothVec.y = 0; vx = 0; vy = 0;
+        }
 
         // ================== v6.90.0 DEEP PARK ==================
         // The measured A/B, not a model. Bot ON: median run 22 minutes. Bot
@@ -2769,13 +2815,31 @@
             // END of the pierce line instead of the centroid, then CREEP down
             // the line so the facing stays locked along it (the pile itself
             // blocks the walk — passouts deal no contact damage).
-            let tx = poCx, ty = poCy, creep = null;
+            let tx = poCx, ty = poCy, creep = null, crowdBiased = false;
             if (flameHarvest && flameTarget && flameTarget.sx != null) {
                 tx = flameTarget.sx; ty = flameTarget.sy;
                 creep = { x: flameTarget.ldx, y: flameTarget.ldy };
+            } else if (farmRef.v) {
+                // v6.95.0: hold the pile on the CROWD side. With mobs in
+                // front of the passout, fireBase's nearest target is a mob
+                // whose kill pays XP — and pat's splash / joe's pierce leak
+                // into the pile behind it on every volley.
+                let cx = 0, cy = 0, cn = 0;
+                for (const e of th.enemies) {
+                    if (e.wall || e.boss || e.dormant || e.distant) continue;
+                    if (Math.hypot(e.x - p.x, e.y - p.y) > 300) continue;
+                    cx += e.x; cy += e.y; cn++;
+                }
+                if (cn) {
+                    const bx = cx / cn - tx, by = cy / cn - ty;
+                    const bl = Math.hypot(bx, by) || 1;
+                    const bias = CONFIG.movement.harvestCrowdBias != null ? CONFIG.movement.harvestCrowdBias : 36;
+                    tx += (bx / bl) * bias; ty += (by / bl) * bias;
+                    crowdBiased = true;   // the shifted point is the station — walk the last 36px
+                }
             }
             const dPo = Math.hypot(p.x - tx, p.y - ty);
-            if (dPo <= (MH.harvestStopPx || 72)) {
+            if (dPo <= (crowdBiased ? 18 : (MH.harvestStopPx || 72))) {
                 if (creep) { vx = creep.x; vy = creep.y; }
                 else { vx = 0; vy = 0; }
             } else { vx = (tx - p.x) / dPo; vy = (ty - p.y) / dPo; }
@@ -2850,7 +2914,7 @@
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
             flameAimPo: flameTarget ? flameTarget.po === true : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
-            trekking, trekKind: trekT ? trekT.kind : null,
+            trekking, trekKind: trekT ? trekT.kind : null, farmStance: farmRef.v,
             pierceLine: best ? (best.pierceHits || 0) : 0,
             flameLine: flameTarget && flameTarget.line != null ? flameTarget.line : null,
             poField: th.passouts.length, poFree: th.passouts.reduce((n, po) => n + (po.contested ? 0 : 1), 0),

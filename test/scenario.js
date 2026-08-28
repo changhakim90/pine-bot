@@ -3835,7 +3835,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4158,6 +4158,70 @@ if (which === 'joe-pierce') {
     const pl2 = pineBot.test.planMove();
     test('pat, pierceless, gets no alignment term', () =>
         assert.strictEqual(pl2.pierceLine || 0, 0, 'pat pierceLine ' + pl2.pierceLine));
+    done();
+}
+
+// v6.95.0 — THE DAY FARM STANCE. The 6.94.1 digest's smoking gun was
+// crowdMedian 0 / crowdP75 1 across a 20-minute day: safe and broke. Kills
+// are the only income, armor 35 makes flat-22.4 contact nearly free, and the
+// day x1.15 common-fear harden (which MISREAD the human demo's crowd median
+// 0 as avoidance when it was slaughter) kept the bot where mobs aren't.
+if (which === 'farm-stance') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 800 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    pineBot.test.setChar('pat');
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    const drunks = (x0) => Array.from({ length: 5 }, (_, i) =>
+        ({ type: 'drunk', x: x0, y: 230 + i * 20, r: 10, hp: 60, maxHp: 60, speed: 1.5, id: 90 + i }));
+    const scene = (extraP, gt, enemies) => {
+        global.player = Object.assign({ x: 270, y: 270, hp: 170, maxHp: 180, speed: 1.9, r: 7.2,
+                                        ultReadyAt: 1e9, defense: 35 }, extraP || {});
+        global.enemies = enemies || drunks(340);
+        global.gameTime = gt || 800;
+        // the planner smooths headings across ticks — run a few so the scene
+        // settles on ITS OWN answer instead of inheriting the last scene's
+        // momentum (the player is re-pinned each tick, so only the heading
+        // history carries over).
+        let pl; for (let i = 0; i < 4; i++) pl = pineBot.test.planMove();
+        return pl;
+    };
+
+    // THE STANCE LATCHES on measured armor + healthy HP in the day...
+    let pl = scene();
+    test('armored + healthy + day = farm stance ON', () =>
+        assert.ok(pl.farmStance === true, JSON.stringify({ f: pl.farmStance })));
+    // ...and each gate proves it can gate:
+    pl = scene({ defense: 12 });
+    test('under the armor floor the stance stays OFF (read the stat)', () =>
+        assert.ok(pl.farmStance === false, 'stance at defense 12'));
+    pl = scene({ hp: 100 });
+    test('hurt (56%) the stance stays OFF', () =>
+        assert.ok(pl.farmStance === false, 'stance at 56% HP'));
+    pl = scene(null, 1150);
+    test('after farmUntilS the stance re-hardens for the entry surge', () =>
+        assert.ok(pl.farmStance === false, 'stance at gt 1150'));
+
+    // THE POINT: an armored bot does not flee a drunk crowd. Same field,
+    // armored vs unarmored — the unarmored bot backs off west harder.
+    const armored = scene();
+    const soft = scene({ defense: 12 });
+    test('the armored stance stands its ground where the soft bot flees', () =>
+        assert.ok(armored.dx > soft.dx + 0.25,
+            'armored dx ' + armored.dx.toFixed(2) + ' vs soft dx ' + soft.dx.toFixed(2)));
+
+    // CROWD-SIDE HOLD: standing AT the pile centroid with the crowd east,
+    // the stance shifts the hold east (mobs in front, splash leaks into the
+    // pile); without the stance the bot just holds the centroid.
+    const po = { type: 'passout', x: 270, y: 270, r: 37, fallT: 0, hp: 30000, maxHp: 30000, id: 99 };
+    pl = scene({ x: 270, y: 270, ultReadyAt: 100 }, 800, [po].concat(drunks(380)));
+    test('the pile is held on the CROWD side', () =>
+        assert.ok(pl.harvesting === true && pl.dx > 0.3,
+            JSON.stringify({ h: pl.harvesting, dx: pl.dx })));
+    pl = scene({ x: 270, y: 270, ultReadyAt: 100, defense: 12 }, 800, [po].concat(drunks(380)));
+    test('...and without the stance the hold stays centred', () =>
+        assert.ok(pl.harvesting === true && Math.abs(pl.dx) < 0.2,
+            JSON.stringify({ h: pl.harvesting, dx: pl.dx })));
     done();
 }
 

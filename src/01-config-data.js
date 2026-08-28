@@ -530,6 +530,28 @@
             // farmer. No approach override until the run has legs.
             farmFromS: 90,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
             trekPoFirstS: 600, // v6.94.1 (user): first-landed passouts outrank boss treks this early — their HP is priced at landing time
+            // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
+            // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
+            // SAFE AND BROKE: kills are the only source of XP/gold/levels,
+            // and a fortress pat (OLIVE capped at gt 547, armor 35 against
+            // flat 22.4 contact, income capped by the 33-frame invuln) spent
+            // the day standing where mobs aren't. First super 785, two lines
+            // at hell entry, dead in 6s. Once armor is MEASURED at cap and
+            // HP is healthy, the common-mob repulsion is discounted and the
+            // standoff collapses so fireBase always has a target. Marks,
+            // projectiles, lines, walls, and boss hitboxes keep FULL weight
+            // — only the hazard class armor already pays for is discounted.
+            // Gated on liveDefense() (the park lesson: read the stat, not
+            // the ingredient), and OFF from farmUntilS to re-harden for the
+            // hell-entry surge.
+            farmStance: true,
+            farmDefense: 30,      // measured armor floor to enter the stance
+            farmHp: 0.7,          // HP ratio floor
+            farmUntilS: 1100,     // re-harden before the entry surge
+            farmContactMul: 0.45, // common-mob fear multiplier in the stance
+            farmStandoffMul: 0.25,// ring at contact range: the ring-keeper must never out-pay the grind (0.55 left an 82px ring that still backed out of a 70px crowd)
+            farmBossFearMul: 0.7, // boss standoff-gradient ease (hitbox bands stay full)
+            harvestCrowdBias: 36, // hold the pile on the CROWD side: mobs in front, splash/pierce leak into the pile
             // v6.94.0 DAY TREK — the FIELD TREK below (v6.85.10) was a PULL,
             // the third instance of the 6.89.11 lesson (overrides beat
             // pulls). Now an override, with the target set widened to the
@@ -1862,6 +1884,7 @@
     }
     let lastHpSample = null;   // for damage-weighted death attribution
     const slowPadRef = { v: 1 };   // live slow-scaled safety multiplier (set each plan tick)
+    const farmRef = { v: false };  // v6.95.0 day farm stance (set in gatherThreats, read by planMove)
     const th_nearRef = { v: 0 };   // live crowd pressure, for pick-time context
     const flightRef = { v: false };  // live flight-mode flag (unkillable chase)
     // v6.85.12: boss damage-ring instrument. bossHitD collects the player->boss
