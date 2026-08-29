@@ -539,8 +539,32 @@
             // deaths at 72s/101s with no cocktail picked) says a 100-HP joe
             // beelining to piles from the opening seconds is a corpse, not a
             // farmer. No approach override until the run has legs.
-            farmFromS: 90,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+            farmFromS: 45,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+                               // v6.99.1 (user: "kill the passouts as soon as they arrive"): 90 -> 45 — the demo owns
+                               // VODKA TONIC at gt 26 and MOJITO at 45; the weapon gate does the real guarding
             trekPoFirstS: 600, // v6.94.1 (user): first-landed passouts outrank boss treks this early — their HP is priced at landing time
+            // v6.99.1 FUND RUSH (user: "it's not hyper-aggressive with using
+            // ultimates to clear passouts to fund the weapon upgrades"). With
+            // the ult READY in day the cast on arrival covers marks and shots
+            // both — the manual demo walks the crossfire at 3.0 speed and
+            // detonates from ~91px. So under fundRush the harvest approach
+            // ignores the wide 130px shot halo and the mark-soak arithmetic;
+            // only a shot in true collision range still blocks the walk.
+            fundRush: true,    // kill switch for the whole doctrine
+            fundProjPx: 45,    // collision halo (added to shot r) that still vetoes under fundRush
+            fundRushHp: 0.65,  // the rush is for a healthy bot (demo hp median 100); hurt bots keep every old caution
+            // v6.99.1 LITTER HUNT (user: "it needs to kill the feed filler
+            // boss fast so it doesn't crowd the canvas with marks"). Landed
+            // filler litter persists as marks that gate the anchor, corner
+            // and harvest across the floor. At litterHuntN litter marks a
+            // live roaming boss outranks even the early passout FIFO in the
+            // trek order — kill the source, then farm what it was fencing.
+            litterHuntN: 4,
+            // v6.99.1 (user: "need to get tips faster and not let it stick
+            // around wasting time for upgrades"): in day the trek/harvest
+            // rest clocks shrink to 40% — the rest exists to break deadlock
+            // oscillation, not to idle while tips sit on the field.
+            dayRestMul: 0.4,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,

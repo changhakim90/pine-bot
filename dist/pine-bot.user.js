@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.99.0
+// @version      6.99.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.99.0';
+    const SCRIPT_VERSION = '6.99.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -541,8 +541,32 @@
             // deaths at 72s/101s with no cocktail picked) says a 100-HP joe
             // beelining to piles from the opening seconds is a corpse, not a
             // farmer. No approach override until the run has legs.
-            farmFromS: 90,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+            farmFromS: 45,     // v6.94.1: the true gate is OWNING A WEAPON (see farmReady); this floor just skips the spawn seconds
+                               // v6.99.1 (user: "kill the passouts as soon as they arrive"): 90 -> 45 — the demo owns
+                               // VODKA TONIC at gt 26 and MOJITO at 45; the weapon gate does the real guarding
             trekPoFirstS: 600, // v6.94.1 (user): first-landed passouts outrank boss treks this early — their HP is priced at landing time
+            // v6.99.1 FUND RUSH (user: "it's not hyper-aggressive with using
+            // ultimates to clear passouts to fund the weapon upgrades"). With
+            // the ult READY in day the cast on arrival covers marks and shots
+            // both — the manual demo walks the crossfire at 3.0 speed and
+            // detonates from ~91px. So under fundRush the harvest approach
+            // ignores the wide 130px shot halo and the mark-soak arithmetic;
+            // only a shot in true collision range still blocks the walk.
+            fundRush: true,    // kill switch for the whole doctrine
+            fundProjPx: 45,    // collision halo (added to shot r) that still vetoes under fundRush
+            fundRushHp: 0.65,  // the rush is for a healthy bot (demo hp median 100); hurt bots keep every old caution
+            // v6.99.1 LITTER HUNT (user: "it needs to kill the feed filler
+            // boss fast so it doesn't crowd the canvas with marks"). Landed
+            // filler litter persists as marks that gate the anchor, corner
+            // and harvest across the floor. At litterHuntN litter marks a
+            // live roaming boss outranks even the early passout FIFO in the
+            // trek order — kill the source, then farm what it was fencing.
+            litterHuntN: 4,
+            // v6.99.1 (user: "need to get tips faster and not let it stick
+            // around wasting time for upgrades"): in day the trek/harvest
+            // rest clocks shrink to 40% — the rest exists to break deadlock
+            // oscillation, not to idle while tips sit on the field.
+            dayRestMul: 0.4,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -8077,8 +8101,25 @@
         const markSoak = ((hp + shieldNow) / Math.max(1, maxHp) >=
             (M.harvestMarkSoakHp != null ? M.harvestMarkSoakHp : 0.65)) &&
             (msNeed == null || shieldNow >= msNeed);
+        // v6.99.1 FUND RUSH (user: "it's not hyper-aggressive with using
+        // ultimates to clear passouts to fund the weapon upgrades"). The
+        // 6.99.0 armor waiver opened a door these two vetoes kept shut:
+        // projHere is a 130px halo — true nearly always on a day field
+        // laced with common projectile mobs — and the feed filler's landed
+        // litter keeps markHere lit across whole regions. With the ult
+        // READY the cast on arrival covers marks and shots both (the
+        // manual demo walks the crossfire at 3.0 and casts from ~91px), so
+        // only a shot in true collision range (fundProjPx) still blocks.
+        const litterN = th.marks.reduce((n, m) => n + (m.litter ? 1 : 0), 0);
+        // fundRushHp: the rush is for a HEALTHY bot — the demo held hp median
+        // 100. A hurt bot keeps every old caution (the po-harvest "too hurt
+        // to soak the mark" doctrine stands below this floor).
+        const fundRush = (M.fundRush !== false) && dayPhaseNow && ultReadyNow &&
+            hpRatio >= (M.fundRushHp != null ? M.fundRushHp : 0.65);
+        const projTight = th.projectiles.some(q =>
+            Math.hypot(q.x - p.x, q.y - p.y) < q.r + (M.fundProjPx != null ? M.fundProjPx : 45));
         const ultHarvest = meleeUlt && poN >= 1 && (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
-            !hpPanic && (!markHere || markSoak) && !projHere;
+            !hpPanic && (!markHere || markSoak || fundRush) && !(fundRush ? projTight : projHere);
 
         // FIELD TREK (v6.85.10, user: "it needs to clear all bosses including
         // no booking mobs and passouts in day" — with a 17:59 screenshot
@@ -8641,7 +8682,14 @@
                     const budget = hellDetected ? M.poTtkBudgetHellS : M.poTtkBudgetS;
                     poTtk = poTrack.dps > 0 ? tgtPo.hp / poTrack.dps : Infinity;
                     poTtkOut = poTtk; poDpsOut = poTrack.dps;
-                    if (poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
+                    // v6.99.1 (user): "kill the passouts as soon as they
+                    // arrive and constantly try to attack them as 1 out of 3
+                    // of them have a tip." In DAY the ult cycles every pile
+                    // eventually (fund rush walks it there), so a slow
+                    // base-attack burn is never evidence of hopelessness and
+                    // an abandoned body is an abandoned tip roll. Give-up is
+                    // a HELL doctrine now.
+                    if (!dayPhaseNow && poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
                         poGiveUp.add(tgtPo.id);
                         log('passout', tgtPo.id, 'abandoned — ' +
                             (poTrack.dps > 0 ? Math.round(poTtk) + 's to kill at ' + Math.round(poTrack.dps) + ' dps'
@@ -8985,7 +9033,12 @@
             const apDefT = charOf().approachDefense, apHpT = charOf().approachHp;
             const trekGates = MH2.trekOverride !== false && !hellDetected && gtT < 1200 &&
                 gtT >= (MH2.farmFromS != null ? MH2.farmFromS : 150) &&
-                (apDefT == null || ((liveDefense() || 0) >= apDefT)) &&
+                // v6.99.1: the fund-rush waiver extends to the trek — the
+                // demo's "full kill of day bosses including passouts" crossed
+                // the field armor-less; with the ult ready the cast covers
+                // the destination. HP gate below stays.
+                (apDefT == null || ((liveDefense() || 0) >= apDefT) ||
+                 ((MH2.fundRush !== false) && ultReadyNow)) &&
                 (apHpT == null || hpRatio >= apHpT) &&   // v6.95.1 fragile profile
                 !hpPanic && !th.rival && !rainbowRecent && !flight;
             if (trekGates) {
@@ -8995,7 +9048,14 @@
                 // convert to loot, and that loot is what makes the NEXT set
                 // killable. Before trekPoFirstS the FIFO passout leads; after
                 // it, the boss tip (a roster upgrade) resumes the lead.
-                const poFirst = gtT < (MH2.trekPoFirstS != null ? MH2.trekPoFirstS : 600);
+                // v6.99.1 LITTER HUNT (user: "it needs to kill the feed
+                // filler boss fast so it doesn't crowd the canvas with
+                // marks"): when the litter carpet is forming, the live boss
+                // producing it outranks even the early passout FIFO — the
+                // boss scan below takes the lead and the po falls to the
+                // FIFO fallback. Kill the source, then farm the piles.
+                const litterHunt = litterN >= (MH2.litterHuntN != null ? MH2.litterHuntN : 4);
+                const poFirst = gtT < (MH2.trekPoFirstS != null ? MH2.trekPoFirstS : 600) && !litterHunt;
                 let cand = null, kind = null, bestD = Infinity;
                 if (poFirst && trekPo) { cand = trekPo; kind = 'po'; }
                 // roaming boss, unless one is already local — the tip is
@@ -9039,7 +9099,13 @@
                     trekOn = true;
                 } else {
                     trekStartS = null;
-                    trekRestUntilS = gtT + (MH2.trekRestS != null ? MH2.trekRestS : 20);
+                    // v6.99.1 (user: "need to get tips faster and not let it
+                    // stick around wasting time for upgrades"): in day the
+                    // rest between treks is dead income time — the next tip
+                    // is already on the field. Rest clocks shrink by
+                    // dayRestMul; hell keeps the full anti-deadlock rest.
+                    trekRestUntilS = gtT + (MH2.trekRestS != null ? MH2.trekRestS : 20) *
+                        (!hellDetected ? (MH2.dayRestMul != null ? MH2.dayRestMul : 0.4) : 1);
                 }
             }
         }
@@ -9099,8 +9165,19 @@
         const fragileOk = (apHpH == null || hpRatio >= apHpH);
         const farmReady = ownedCocktailCount() >= 1 && fragileOk &&
             gtHarv >= (MH.farmFromS != null ? MH.farmFromS : 90);
+        // v6.99.1 AURA HOLD (user: "the ultimate has a fixed radius so the
+        // bot has to stick to its position to wipe out the passouts instead
+        // of just damaging them to a low hp and not actually killing them to
+        // get the tips"). The cast used to END the hold: the cooldown reset
+        // pushed ultInS past the lead window, ultHarvest dropped, and the
+        // repulsion field shoved the bot off the pile while the aura (joe:
+        // ~12 s) or spiral (pat) was still ticking — bodies left at low HP,
+        // tips unrolled. While the melee ult is ACTIVE and a pile is up, the
+        // hold arm keeps the override pinned to the centroid; the invuln
+        // makes every caution veto moot for exactly that window.
+        const ultBurnHold = meleeUlt && ultInvuln && poN >= 1;
         const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
-            ((meleeUlt && ultHarvest) || (flameHarvest && defOkH)) &&
+            ((meleeUlt && ultHarvest) || (flameHarvest && defOkH) || ultBurnHold) &&
             poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
             !flight && !th.rival;
@@ -9113,7 +9190,9 @@
                 harvOn = true;
             } else {
                 harvStartS = null;
-                harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20);
+                // v6.99.1: same day rest cut as the trek — see above.
+                harvRestUntilS = gtHarv + (MH.harvestRestS != null ? MH.harvestRestS : 20) *
+                    (!hellDetected ? (MH.dayRestMul != null ? MH.dayRestMul : 0.4) : 1);
             }
         }
         // v6.96.0 THE RUN CAP DIVE (see the runCapS config comment). Past the
@@ -9280,6 +9359,7 @@
             flameAim: flameTarget ? Math.round(flameTarget.d) : null,
             flameAimPo: flameTarget ? flameTarget.po === true : null,
             ultHarvest, ultInS: Math.round(ultInS), ultReadyNow, harvesting,
+            fundRush, litter: litterN,   // v6.99.1 probe visibility
             trekking, trekKind: trekT ? trekT.kind : null, farmStance: farmRef.v, seated,
             pierceLine: best ? (best.pierceHits || 0) : 0,
             flameLine: flameTarget && flameTarget.line != null ? flameTarget.line : null,

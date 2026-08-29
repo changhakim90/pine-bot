@@ -1303,14 +1303,24 @@ if (which === 'po-feasibility') {
         assert.strictEqual(easy.plan.poGaveUp, 0, 'gave up ' + easy.plan.poGaveUp));
     test('the observed kill rate is measured, not assumed', () =>
         assert.ok(easy.plan.poDps > 100, 'dps ' + easy.plan.poDps));
-    // 80k is a 20-minute passout: 300 dps needs 4+ minutes, far past the budget
-    const hard = burn(80000, 30, 9000);
-    test('an unkillable passout is abandoned after the probe window', () =>
-        assert.strictEqual(hard.plan.poGaveUp, 1, 'gave up ' + hard.plan.poGaveUp));
+    // v6.99.1 (user: "constantly try to attack them as 1 out of 3 of them
+    // have a tip"): in DAY a slow burn is never hopeless — the ult cycles
+    // every pile eventually, and an abandoned body is an abandoned tip roll.
+    // (7.5s burns: past the 6s poProbeS window, and three of them fit the
+    // 30s per-scenario timeout that the third burn breached at 9s each)
+    const hard = burn(80000, 30, 7500);
+    test('DAY: an unkillable passout is NOT abandoned — the ult will cycle to it', () =>
+        assert.strictEqual(hard.plan.poGaveUp, 0, 'gave up ' + hard.plan.poGaveUp));
+    // HELL keeps the feasibility doctrine: latch hell, re-run the same burn.
+    global.hell = true;
+    pineBot.test.handleScreens();   // the playing handler latches hellDetected off the lexical flag
+    const hellHard = burn(80000, 30, 7500);
+    test('HELL: the unkillable passout is abandoned after the probe window', () =>
+        assert.strictEqual(hellHard.plan.poGaveUp, 1, 'gave up ' + hellHard.plan.poGaveUp));
     test('the abandonment is logged with the measured numbers', () =>
         assert.ok(logs.some(l => /passout .* abandoned/.test(l)), logs.slice(-3).join(' | ')));
     // ...but not while the ult — the actual clear tool — is nearly ready
-    const withUlt = burn(80000, 30, 9000, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
+    const withUlt = burn(80000, 30, 7500, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
     test('a body the ult is about to clear is NOT abandoned', () =>
         assert.strictEqual(withUlt.plan.poGaveUp, 0, 'gave up ' + withUlt.plan.poGaveUp));
     done();
@@ -4114,6 +4124,43 @@ if (which === 'day-trek') {
     pl = scene([mkBoss(460, 270), Object.assign(mkPo(460, 400, 7), { far: true })], 700);
     test('LATE (gt>600): the boss tip resumes the lead', () =>
         assert.ok(pl.trekKind === 'boss', String(pl.trekKind)));
+
+    // v6.99.1 LITTER HUNT: a forming litter carpet flips the early order —
+    // the boss producing it outranks the passout FIFO even before 600s.
+    const litter = n => Array.from({ length: n }, (_, i) =>
+        ({ x: 400, y: 100 + i * 20, land: 100 + i * 20, r: 16 }));
+    global.eprojectiles = litter(5);
+    pl = scene([mkBoss(460, 270), Object.assign(mkPo(460, 400, 7), { far: true })], 400);
+    test('5 litter marks: the EARLY passout lead yields to the boss (kill the source)', () =>
+        assert.ok(pl.trekKind === 'boss', JSON.stringify({ k: pl.trekKind, li: pl.litter })));
+    global.eprojectiles = litter(3);
+    pl = scene([mkBoss(460, 270), Object.assign(mkPo(460, 400, 7), { far: true })], 400);
+    test('...under litterHuntN (3 marks) the passout FIFO keeps the lead', () =>
+        assert.ok(pl.trekKind === 'po', JSON.stringify({ k: pl.trekKind, li: pl.litter })));
+    global.eprojectiles = [];
+
+    // v6.99.1 fund-rush trek waiver: an unarmored joe treks with the ult
+    // READY (the cast covers the destination); ult cold, the armor gate is
+    // back. (Pat above is untouched — his approachDefense is null.)
+    pineBot.test.setChar('joe');
+    // note the advancing gt: the trek clock (trekStartS/trekRestUntilS) is
+    // module state carried from the pat scenes above — a fresh gt past any
+    // rest window starts a clean trek instead of inheriting a spent clock.
+    const joeScene = (ultAt, gt) => {
+        global.player = { x: 100, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                          ultReadyAt: ultAt, defense: 12 };
+        global.enemies = [mkBoss(460, 270)];
+        global.gameTime = gt;
+        return pineBot.test.planMove();
+    };
+    pl = joeScene(100, 760);
+    test('unarmored joe treks to the boss with the ult ready (fund rush)', () =>
+        assert.ok(pl.trekking === true && pl.trekKind === 'boss',
+            JSON.stringify({ t: pl.trekking, k: pl.trekKind })));
+    pl = joeScene(1e9, 800);
+    test('...ult cold, the armor gate returns and the trek stays shut', () =>
+        assert.ok(!pl.trekking, JSON.stringify({ t: pl.trekking, k: pl.trekKind })));
+    pineBot.test.setChar('pat');
     // ...and the readiness gate is the WEAPON, not just the clock: the joe
     // suicide runs died at 72s with build null.
     pineBot.test.setOwned({ 'SOUTH SIDE': 0 });
@@ -4123,9 +4170,9 @@ if (which === 'day-trek') {
     pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
 
     // GATES, each with teeth:
-    pl = scene([mkBoss(460, 270)], 60);
+    pl = scene([mkBoss(460, 270)], 30);   // v6.99.1: floor lowered 90 -> 45
     test('no trek before the run has legs (farmFromS)', () =>
-        assert.ok(!pl.trekking, 'trekking at gt 60'));
+        assert.ok(!pl.trekking, 'trekking at gt 30'));
     global.player = { x: 100, y: 270, hp: 40, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
     global.enemies = [mkBoss(460, 270)]; global.gameTime = 700;
     pl = pineBot.test.planMove();
@@ -4278,12 +4325,48 @@ if (which === 'joe-guard') {
     pl = scene({ defense: 12, ultReadyAt: 1e9 });
     test('ult COLD and no burn: nothing covers the walk — unarmored joe stays home', () =>
         assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    // v6.99.1 AURA HOLD: the cast itself must not end the hold — with the
+    // aura ACTIVE (cooldown spent, ultUntil ahead of gt) the bot stays
+    // pinned to the pile until the burn finishes the bodies.
+    pl = scene({ defense: 12, ultReadyAt: 1e9, ultUntil: 808 });
+    test('an ACTIVE aura pins the hold to the pile (finish the kill, roll the tip)', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     pl = scene({ defense: 12, ultReadyAt: 1e9, fireCrossUntil: 9999 });
     test('the flame arm keeps the armor gate: unarmored joe does NOT carry a burn', () =>
         assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
     pl = scene({ ultReadyAt: 1e9, fireCrossUntil: 9999 });
     test('...armored (25), the burn is carried', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+
+    // v6.99.1 FUND RUSH: with the ult READY, the wide 130px shot halo no
+    // longer vetoes the funding walk — only true collision range does.
+    global.eprojectiles = [{ x: 150 + 100, y: 270, r: 6, vx: 0, vy: 0 }];
+    pl = scene({ defense: 12 });
+    test('a shot 100px off does NOT stop an ult-ready funding walk (fund rush)', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
+    global.eprojectiles = [{ x: 150 + 30, y: 270, r: 6, vx: 0, vy: 0 }];
+    pl = scene({ defense: 12 });
+    test('...but a shot in COLLISION range (30px) still blocks it', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    global.eprojectiles = [{ x: 150 + 100, y: 270, r: 6, vx: 0, vy: 0 }];
+    pl = scene({ ultReadyAt: 1e9, fireCrossUntil: 9999 });
+    test('the flame arm keeps the wide halo: a shot 100px off stops the burn carry', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    global.eprojectiles = [];
+    // ...and a boss mark no longer stops a shieldless walk when the cast
+    // will cover the landing (the demo's whole day was walked mark-blind).
+    global.dropMarks = [{ x: 160, y: 270, r: 58, dmg: 40, tele: 0.6, at: 810 }];
+    pl = scene({ defense: 12 });
+    test('fund rush: a mark does not stop a shieldless ult-ready walk', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
+    global.dropMarks = [];
+    test('the fund-rush config carries its shipped defaults', () =>
+        assert.ok(pineBot.config.movement.fundProjPx === 45 &&
+                  pineBot.config.movement.litterHuntN === 4 &&
+                  pineBot.config.movement.fundRush === true &&
+                  pineBot.config.movement.fundRushHp === 0.65 &&
+                  pineBot.config.movement.dayRestMul === 0.4 &&
+                  pineBot.config.movement.farmFromS === 45));
 
     // ...and PAT is untouched by the fragile profile: same unarmored scene.
     pineBot.test.setChar('pat');
@@ -4295,12 +4378,14 @@ if (which === 'joe-guard') {
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     pineBot.test.setChar('joe');
 
-    // MARKS: a healthy joe does NOT soak a mark on raw HP...
+    // MARKS: a healthy joe does NOT soak a mark on raw HP — on the arms
+    // with no invulnerability window (v6.99.1: the fund rush covers the
+    // ult arm, so the mark doctrine is asserted on the flame carry).
     global.dropMarks = [{ x: 160, y: 270, r: 58, dmg: 40, tele: 0.6, at: 810 }];
-    pl = scene();
-    test('a mark stops an unshielded joe — 40 permanent HP is not a toll', () =>
+    pl = scene({ ultReadyAt: 1e9, fireCrossUntil: 9999 });
+    test('a mark stops an unshielded joe burn carry — 40 permanent HP is not a toll', () =>
         assert.ok(!pl.harvesting, 'harvesting under a mark, no shield'));
-    pl = scene({ shield: 60, shieldMax: 60 });
+    pl = scene({ ultReadyAt: 1e9, fireCrossUntil: 9999, shield: 60, shieldMax: 60 });
     test('...but behind a NEGRONI shield the walk proceeds', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     global.dropMarks = [];
