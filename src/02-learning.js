@@ -591,6 +591,36 @@
         saveLearn();
         return { restarts: c.restarts, why: why, gen: c.gen, runs: learn.runs };
     }
+    // v6.98.0 RECENTER — the repair restartSearch cannot perform. A restart
+    // reopens SIGMA but keeps the MEAN, so a mean the deathNudge ratchet
+    // dragged to the box corner stays in the corner and the reopened search
+    // converges straight back onto it (measured: gen 106, four contact-pool
+    // params exactly at box max, dayClear 0.01 over 865 runs). Recentering
+    // puts the mean back on the CONFIG defaults — the basin that organically
+    // climbed 0.03 -> 0.14 before any seeding — reopens sigma to sigmaInit,
+    // and clears the hall of fame outright: champion vectors recorded during
+    // the pinned era carry the corner inside them, and replaying one would
+    // re-inject it. Item/build/roster statistics and the run log are kept.
+    function recenterSearch(why) {
+        const c = learn.cem;
+        for (const k of Object.keys(TUNABLE)) {
+            const spec = TUNABLE[k];
+            c.mean[k] = Math.min(spec.max, Math.max(spec.min,
+                DEFAULT_PARAMS[k] != null ? DEFAULT_PARAMS[k] : (spec.min + spec.max) / 2));
+            c.sigma[k] = (spec.max - spec.min) * CONFIG.learning.sigmaInit;
+        }
+        c.ss = 1; c.pc = {}; c.batch = []; c.gen = 0;
+        delete c.prevBatchMean;
+        c.stall = 0;
+        c.bestBatchMean = null;
+        c.recenters = (c.recenters || 0) + 1;
+        learn.hof = [];
+        log('CEM RECENTER (' + why + ') — mean back to config defaults, sigma to ' +
+            Math.round(CONFIG.learning.sigmaInit * 100) + '% of range, hof cleared, recenter #' + c.recenters);
+        saveLearn();
+        return { recenters: c.recenters, why: why, runs: learn.runs };
+    }
+
     function maybeRestart(batchMean) {
         const c = learn.cem, L = CONFIG.learning;
         if (!L.autoRestart) return;

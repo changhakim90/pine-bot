@@ -3847,7 +3847,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4744,6 +4744,66 @@ if (which === 'audit-merge') {
     mem = T.appendAuditRow('pineBotPhaseAudit', { rows: [oldRow] }, 'rows', { v: 'ME', t: 600 }, 240);
     test('a corrupt stored audit falls back to the in-memory list', () =>
         assert.deepStrictEqual(JSON.parse(store.pineBotPhaseAudit).rows.map(r => r.t), [100, 600]));
+    done();
+}
+
+// v6.98.0 — THE DEATHNUDGE RATCHET, disarmed and repaired. The gen-106 live
+// probe found the contact DEATH_POOL pinned exactly at box max (standoff
+// 190/190, standoffPull 1.8/1.8, panicHp 0.62/0.62, enemyRange 240/240) with
+// sigma annealed shut: the 0.03/generation defensive push modifies the MEAN,
+// which every restart preserves, so ~120 contact-dominated generations walked
+// joe into the hyper-caution corner (dayClear 0.01 over 865 runs). The nudge
+// now defaults to ZERO; recenterSearch() is the repair restartSearch cannot
+// perform (restart keeps the mean).
+if (which === 'nudge-ratchet') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const L = T.getLearn();
+    const box = T.tunable();
+    const range = box['movement.standoff'].max - box['movement.standoff'].min;
+    const mkBatch = () => {
+        L.cem.batch = Array.from({ length: 10 }, (_, i) =>
+            ({ r: 0.5 + 0.01 * i, p: { ...L.cem.mean }, d: 'contact' }));
+    };
+    // 1. DISARMED BY DEFAULT: a contact-dominated batch refits without
+    //    ratcheting the caution pool.
+    test('deathNudge defaults to 0', () =>
+        assert.strictEqual(pineBot.config.learning.deathNudge, 0));
+    const before = L.cem.mean['movement.standoff'];
+    mkBatch(); T.refitCem();
+    test('a contact-dominated generation no longer ratchets standoff', () =>
+        assert.ok(Math.abs(L.cem.mean['movement.standoff'] - before) < range * 0.02,
+            before + ' -> ' + L.cem.mean['movement.standoff']));
+    // 2. THE MECHANISM SURVIVES BEHIND THE CONFIG (teeth): re-arm it and the
+    //    same batch pushes the pool up.
+    pineBot.config.learning.deathNudge = 0.03;
+    const b2 = L.cem.mean['movement.standoff'];
+    mkBatch(); T.refitCem();
+    test('re-armed, the same generation pushes standoff up', () =>
+        assert.ok(L.cem.mean['movement.standoff'] > b2 + range * 0.02,
+            b2 + ' -> ' + L.cem.mean['movement.standoff']));
+    // 3. THE RATCHET, DEMONSTRATED: enough contact generations pin the pool
+    //    at box max — the exact live failure, reproduced in miniature.
+    for (let g = 0; g < 80; g++) { mkBatch(); T.refitCem(); }
+    test('80 armed generations pin standoff at box max (the live failure)', () =>
+        assert.strictEqual(L.cem.mean['movement.standoff'], box['movement.standoff'].max));
+    test('...and panicHp too — the whole contact pool walks together', () =>
+        assert.strictEqual(L.cem.mean['movement.panicHp'], box['movement.panicHp'].max));
+    pineBot.config.learning.deathNudge = 0;
+    // 4. THE REPAIR: recenterSearch puts the mean back on config defaults,
+    //    reopens sigma, and clears the hall of fame (champions recorded in
+    //    the pinned era carry the corner inside them).
+    L.hof = [{ r: 3, p: { ...L.cem.mean } }];
+    const res = global.window.pineBot.recenterSearch();
+    test('recenterSearch returns the mean to the config default', () =>
+        assert.ok(Math.abs(L.cem.mean['movement.standoff'] - pineBot.config.movement.standoff) < 1,
+            'standoff ' + L.cem.mean['movement.standoff'] + ' vs ' + pineBot.config.movement.standoff));
+    test('...reopens sigma to sigmaInit x range', () =>
+        assert.ok(Math.abs(L.cem.sigma['movement.standoff'] - range * pineBot.config.learning.sigmaInit) < 0.01,
+            'sigma ' + L.cem.sigma['movement.standoff']));
+    test('...clears the hall of fame and restarts the generation clock', () =>
+        assert.ok(L.hof.length === 0 && L.cem.gen === 0 && res.recenters >= 1, JSON.stringify({ hof: L.hof.length, gen: L.cem.gen })));
     done();
 }
 

@@ -850,6 +850,7 @@
                 },
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
+                recenterSearch: () => recenterSearch('manual'),   // v6.98.0: mean back to defaults + sigma reopened + hof cleared — the ratchet repair
                 demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording
                 demoRaw: () => { try { return JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { return []; } },
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
@@ -870,7 +871,7 @@
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
-                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, demoSave: () => demoSave(),
+                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, refitCem, recenterSearch, demoSave: () => demoSave(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },

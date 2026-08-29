@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.97.3
+// @version      6.98.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.97.3';
+    const SCRIPT_VERSION = '6.98.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -935,7 +935,21 @@
             restartAfterStalledGens: 6,
             restartSigma: 0.25,    // reopened sigma as a fraction of each box
             anneal: 0.98,          // per-generation exploration shrink: each iteration refines, not re-guesses
-            deathNudge: 0.03,      // per-generation defensive push against the dominant killer
+            // v6.98.0 THE RATCHET, CONVICTED AND DISARMED. deathNudge pushed
+            // the dominant killer's DEATH_POOL parameters up by >=3% of range
+            // every generation, clamped only at the box edge — and it
+            // modifies the MEAN, which every restart/reseed preserves. Joe's
+            // gen-106 probe showed the exact contact pool pinned at box max
+            // (standoff 190/190, standoffPull 1.8/1.8, panicHp 0.62/0.62,
+            // enemyRange 240/240, enemyWeight 2.15/2.2) with sigma annealed
+            // shut: a hyper-cautious zero-super bot, dayClear 0.01 over 865
+            // runs, line deaths 12% (lineWeight drifted to 3.1 while the
+            // ratchet ate the caution budget). This is the 6.92.3 runaway
+            // one level up. Elite refit already learns defense WHEN IT HELPS
+            // SURVIVAL; an unbounded exogenous push does not belong in the
+            // loop. 0 disables (the mechanism stays, config-toothed); do not
+            // re-enable without adding decay back toward the elite mean.
+            deathNudge: 0,
             // roster bandit (rosterExperiment): explore/exploit over WHOLE
             // cocktail rosters, on the run-reward scale (~0.2 - 2.5)
             rosterExplore: 0.25,       // UCB width — how eagerly untried rosters get auditions
@@ -2898,6 +2912,36 @@
         saveLearn();
         return { restarts: c.restarts, why: why, gen: c.gen, runs: learn.runs };
     }
+    // v6.98.0 RECENTER — the repair restartSearch cannot perform. A restart
+    // reopens SIGMA but keeps the MEAN, so a mean the deathNudge ratchet
+    // dragged to the box corner stays in the corner and the reopened search
+    // converges straight back onto it (measured: gen 106, four contact-pool
+    // params exactly at box max, dayClear 0.01 over 865 runs). Recentering
+    // puts the mean back on the CONFIG defaults — the basin that organically
+    // climbed 0.03 -> 0.14 before any seeding — reopens sigma to sigmaInit,
+    // and clears the hall of fame outright: champion vectors recorded during
+    // the pinned era carry the corner inside them, and replaying one would
+    // re-inject it. Item/build/roster statistics and the run log are kept.
+    function recenterSearch(why) {
+        const c = learn.cem;
+        for (const k of Object.keys(TUNABLE)) {
+            const spec = TUNABLE[k];
+            c.mean[k] = Math.min(spec.max, Math.max(spec.min,
+                DEFAULT_PARAMS[k] != null ? DEFAULT_PARAMS[k] : (spec.min + spec.max) / 2));
+            c.sigma[k] = (spec.max - spec.min) * CONFIG.learning.sigmaInit;
+        }
+        c.ss = 1; c.pc = {}; c.batch = []; c.gen = 0;
+        delete c.prevBatchMean;
+        c.stall = 0;
+        c.bestBatchMean = null;
+        c.recenters = (c.recenters || 0) + 1;
+        learn.hof = [];
+        log('CEM RECENTER (' + why + ') — mean back to config defaults, sigma to ' +
+            Math.round(CONFIG.learning.sigmaInit * 100) + '% of range, hof cleared, recenter #' + c.recenters);
+        saveLearn();
+        return { recenters: c.recenters, why: why, runs: learn.runs };
+    }
+
     function maybeRestart(batchMean) {
         const c = learn.cem, L = CONFIG.learning;
         if (!L.autoRestart) return;
@@ -10089,6 +10133,7 @@
                 },
                 versions: versionReport,               // same table, best-time first (back-compat)
                 restartSearch: () => restartSearch('manual'),   // v6.86.0: reopen the search by hand
+                recenterSearch: () => recenterSearch('manual'),   // v6.98.0: mean back to defaults + sigma reopened + hof cleared — the ratchet repair
                 demo: demoDigest,                      // pineBot.demo() — digest of the last 🎥 recording
                 demoRaw: () => { try { return JSON.parse(localStorage.getItem('pineBotDemos') || '[]'); } catch (e) { return []; } },
                 snapshot: snapshotNow,                 // freeze THIS version's rollup now
@@ -10109,7 +10154,7 @@
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
-                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, demoSave: () => demoSave(),
+                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, refitCem, recenterSearch, demoSave: () => demoSave(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },

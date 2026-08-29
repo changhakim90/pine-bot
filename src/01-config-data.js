@@ -933,7 +933,21 @@
             restartAfterStalledGens: 6,
             restartSigma: 0.25,    // reopened sigma as a fraction of each box
             anneal: 0.98,          // per-generation exploration shrink: each iteration refines, not re-guesses
-            deathNudge: 0.03,      // per-generation defensive push against the dominant killer
+            // v6.98.0 THE RATCHET, CONVICTED AND DISARMED. deathNudge pushed
+            // the dominant killer's DEATH_POOL parameters up by >=3% of range
+            // every generation, clamped only at the box edge — and it
+            // modifies the MEAN, which every restart/reseed preserves. Joe's
+            // gen-106 probe showed the exact contact pool pinned at box max
+            // (standoff 190/190, standoffPull 1.8/1.8, panicHp 0.62/0.62,
+            // enemyRange 240/240, enemyWeight 2.15/2.2) with sigma annealed
+            // shut: a hyper-cautious zero-super bot, dayClear 0.01 over 865
+            // runs, line deaths 12% (lineWeight drifted to 3.1 while the
+            // ratchet ate the caution budget). This is the 6.92.3 runaway
+            // one level up. Elite refit already learns defense WHEN IT HELPS
+            // SURVIVAL; an unbounded exogenous push does not belong in the
+            // loop. 0 disables (the mechanism stays, config-toothed); do not
+            // re-enable without adding decay back toward the elite mean.
+            deathNudge: 0,
             // roster bandit (rosterExperiment): explore/exploit over WHOLE
             // cocktail rosters, on the run-reward scale (~0.2 - 2.5)
             rosterExplore: 0.25,       // UCB width — how eagerly untried rosters get auditions
