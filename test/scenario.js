@@ -4261,16 +4261,29 @@ if (which === 'joe-guard') {
         return pineBot.test.planMove();
     };
 
-    // APPROACHES ARE ARMOR-GATED for joe: same scene, only defense differs.
+    // APPROACHES: v6.99.0 ULT-COVERED WAIVER (manual joe demo, 6.98.0,
+    // 1997s day clear — 91px pile stations BEFORE OLIVE arrived at gt 285,
+    // invulnShare 0.326). The ult arm is its own armor: the cast covers
+    // the exit. The armor gate now guards only the arms with no
+    // invulnerability window (flame cross here, field trek in day-trek).
     let pl = scene({ defense: 12 });
-    test('an unarmored joe does NOT walk to the pile — even with the ult ready', () =>
-        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    test('an unarmored joe DOES walk to the pile when the ult covers it (v6.99.0)', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     pl = scene();
-    test('at the 4-OLIVE armor floor the walk opens', () =>
+    test('at the 4-OLIVE armor floor the walk opens too', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     pl = scene({ hp: 75 });
-    test('at 75% HP (below his 80% floor) joe stays home', () =>
+    test('at 75% HP (below his 80% floor) joe stays home — the waiver is armor-only', () =>
         assert.ok(!pl.harvesting, 'harvesting at 75%'));
+    pl = scene({ defense: 12, ultReadyAt: 1e9 });
+    test('ult COLD and no burn: nothing covers the walk — unarmored joe stays home', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    pl = scene({ defense: 12, ultReadyAt: 1e9, fireCrossUntil: 9999 });
+    test('the flame arm keeps the armor gate: unarmored joe does NOT carry a burn', () =>
+        assert.ok(!pl.harvesting, JSON.stringify({ h: pl.harvesting })));
+    pl = scene({ ultReadyAt: 1e9, fireCrossUntil: 9999 });
+    test('...armored (25), the burn is carried', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
 
     // ...and PAT is untouched by the fragile profile: same unarmored scene.
     pineBot.test.setChar('pat');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.98.0
+// @version      6.99.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.98.0';
+    const SCRIPT_VERSION = '6.99.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -1137,7 +1137,16 @@
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
                   kiteChasers: 2, fleeNear: 3,
-                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false,
+                  // v6.99.0: ultClearsPassouts corrected to TRUE — the manual
+                  // joe demo (6.98.0, 1997s) shows the aura wiping ADJACENT
+                  // passout piles repeatedly (poCount 3→0 at gt 155/361,
+                  // 1→0 at gt 717/1120, bodies up to 3.2M HP). NOTE this flag
+                  // is documentation-only: every live gate keys off ultKind
+                  // (nuke = field-wide, spray/aura = adjacent-only). It was
+                  // set false in 6.86.1 when aura ults were wrongly taken off
+                  // the passout list entirely; 6.86.2 restored adjacency but
+                  // the flag was never corrected, and it misleads analysis.
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: true,
                   // v6.94.0: source-verified — joe's barspoon pierces 8
                   // bodies. fireBase aims at the NEAREST enemy, so whatever
                   // stands BEHIND the target is also hit; the pierce-align
@@ -9075,13 +9084,23 @@
         // v6.95.1 fragile profile (joe): a character with no regen treats
         // every approach as a purchase HP cannot refund. Approaches need
         // MEASURED armor at the 4-OLIVE floor and healthy HP; others unset.
+        // v6.99.0 ULT-COVERED WAIVER (manual joe demo, 6.98.0, 1997s, day
+        // cleared): the human stationed 91px off the piles from the FIRST
+        // landings — first ult wiped 3 passouts at gt 155 while OLIVE did
+        // not arrive until gt 285 — and spent 0.326 of the run invulnerable.
+        // The armor the defense gate waits for IS the ult: the cast covers
+        // the exit. The ult arm of the approach (`meleeUlt && ultHarvest`)
+        // is by construction ult-covered (ultReadyNow || ultInS <= leadS),
+        // so it needs only healthy HP; MEASURED armor stays required for
+        // the flame arm here and for the field trek above, which have no
+        // invulnerability window to hide in.
         const apDefH = charOf().approachDefense, apHpH = charOf().approachHp;
-        const fragileOk = (apDefH == null || ((liveDefense() || 0) >= apDefH)) &&
-                          (apHpH == null || hpRatio >= apHpH);
+        const defOkH = (apDefH == null || ((liveDefense() || 0) >= apDefH));
+        const fragileOk = (apHpH == null || hpRatio >= apHpH);
         const farmReady = ownedCocktailCount() >= 1 && fragileOk &&
             gtHarv >= (MH.farmFromS != null ? MH.farmFromS : 90);
         const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
-            ((meleeUlt && ultHarvest) || flameHarvest) &&
+            ((meleeUlt && ultHarvest) || (flameHarvest && defOkH)) &&
             poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
             !flight && !th.rival;

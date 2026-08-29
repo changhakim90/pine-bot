@@ -2820,13 +2820,23 @@
         // v6.95.1 fragile profile (joe): a character with no regen treats
         // every approach as a purchase HP cannot refund. Approaches need
         // MEASURED armor at the 4-OLIVE floor and healthy HP; others unset.
+        // v6.99.0 ULT-COVERED WAIVER (manual joe demo, 6.98.0, 1997s, day
+        // cleared): the human stationed 91px off the piles from the FIRST
+        // landings — first ult wiped 3 passouts at gt 155 while OLIVE did
+        // not arrive until gt 285 — and spent 0.326 of the run invulnerable.
+        // The armor the defense gate waits for IS the ult: the cast covers
+        // the exit. The ult arm of the approach (`meleeUlt && ultHarvest`)
+        // is by construction ult-covered (ultReadyNow || ultInS <= leadS),
+        // so it needs only healthy HP; MEASURED armor stays required for
+        // the flame arm here and for the field trek above, which have no
+        // invulnerability window to hide in.
         const apDefH = charOf().approachDefense, apHpH = charOf().approachHp;
-        const fragileOk = (apDefH == null || ((liveDefense() || 0) >= apDefH)) &&
-                          (apHpH == null || hpRatio >= apHpH);
+        const defOkH = (apDefH == null || ((liveDefense() || 0) >= apDefH));
+        const fragileOk = (apHpH == null || hpRatio >= apHpH);
         const farmReady = ownedCocktailCount() >= 1 && fragileOk &&
             gtHarv >= (MH.farmFromS != null ? MH.farmFromS : 90);
         const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
-            ((meleeUlt && ultHarvest) || flameHarvest) &&
+            ((meleeUlt && ultHarvest) || (flameHarvest && defOkH)) &&
             poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
             !flight && !th.rival;

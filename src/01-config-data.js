@@ -1135,7 +1135,16 @@
         joe:    { hp: 100, speed: 3.0,   style: 'runner', kiteMul: 1.1, anchorBias: 0, panicMul: 1.1,  mitigationTilt: 4,
                   dayRing: null, crowdPanic: true, bossFloor: 0, ultFalloff: false,
                   kiteChasers: 2, fleeNear: 3,
-                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: false,
+                  // v6.99.0: ultClearsPassouts corrected to TRUE — the manual
+                  // joe demo (6.98.0, 1997s) shows the aura wiping ADJACENT
+                  // passout piles repeatedly (poCount 3→0 at gt 155/361,
+                  // 1→0 at gt 717/1120, bodies up to 3.2M HP). NOTE this flag
+                  // is documentation-only: every live gate keys off ultKind
+                  // (nuke = field-wide, spray/aura = adjacent-only). It was
+                  // set false in 6.86.1 when aura ults were wrongly taken off
+                  // the passout list entirely; 6.86.2 restored adjacency but
+                  // the flag was never corrected, and it misleads analysis.
+                  ultKind: 'aura', ultReach: 156, ultClearsPassouts: true,
                   // v6.94.0: source-verified — joe's barspoon pierces 8
                   // bodies. fireBase aims at the NEAREST enemy, so whatever
                   // stands BEHIND the target is also hit; the pierce-align
