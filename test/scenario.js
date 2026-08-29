@@ -2254,9 +2254,11 @@ if (which === 'corner-anchor') {
         return T.planMove();
     };
     // v6.89.2: the gate moved from 9000 (150 min) to 4800 (the tip window's
-    // close). 9600 must still engage, and 5000 — which the OLD gate refused —
+    // close). Deep must still engage, and 5000 — which the OLD gate refused —
     // is the case that proves the threshold actually moved.
-    const deep = place(9600);
+    // v6.99.3: the deep sample moved 9600 -> 8600 — runCapS is now 9000, so
+    // 9600 is PAST the cap and the patrol (correctly) outranks the anchor.
+    const deep = place(8600);
     test('past the deep threshold the corner anchor engages', () =>
         assert.strictEqual(deep && deep.cornerAnchor, true, JSON.stringify(deep && deep.cornerAnchor)));
     test('and it moves TOWARD the corner even though that closes on the threat', () =>
@@ -4457,6 +4459,10 @@ if (which === 'joe-guard') {
     pineBot.test.setChar('pat');
     test('...and not for pat', () =>
         assert.ok(!/joe-shield/.test(why('NEGRONI')), why('NEGRONI')));
+    // v6.99.3 (user): GIN TONIC is a boss killer — the slow cuts contact
+    // ticks — and its shot hits passouts. Day-weighted, any character.
+    test('GIN TONIC carries gin-boss-slow+24 in day (the slow is a day boss tool)', () =>
+        assert.ok(/gin-boss-slow\+24/.test(why('GIN TONIC')), why('GIN TONIC')));
     done();
 }
 
@@ -4565,6 +4571,10 @@ if (which === 'run-cap') {
         pineBot.stop();
         pineBot.test.applyDefaults();
         const T = pineBot.test;
+        // v6.99.3: gts derive from the SHIPPED cap so the scenario tracks it,
+        // plus one explicit tooth on the value itself (150 min, user's call).
+        const CAP = pineBot.config.deepHell.runCapS;
+        test('runCapS ships at 9000 (150 minutes)', () => assert.strictEqual(CAP, 9000));
         const scene = (gt) => {
             global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
             // one live body due east, inside the 200px gather range; the
@@ -4586,7 +4596,7 @@ if (which === 'run-cap') {
         //    from (200,200) on a 540-field that is a NE diagonal, and the
         //    nearby enemy due east must NOT bend the heading: this is a walk
         //    across open ground, not a dive at a body.
-        let pl = scene(12050);
+        let pl = scene(CAP + 50);
         test('past the cap the plan declares the patrol', () =>
             assert.strictEqual(pl.capDive, true, JSON.stringify({ capDive: pl.capDive })));
         test('...heading for the field centre, ignoring the enemy beside it', () =>
@@ -4597,7 +4607,7 @@ if (which === 'run-cap') {
         {
             global.player = { x: 270, y: 270, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
             global.enemies = [];
-            global.gameTime = 12051;
+            global.gameTime = CAP + 51;
             let plW; for (let i = 0; i < 4; i++) plW = T.planMove();
             test('reaching a waypoint advances the patrol to the next leg', () =>
                 assert.ok(plW.dx < -0.4 && plW.dy < -0.4, 'dx ' + plW.dx.toFixed(2) + ' dy ' + plW.dy.toFixed(2)));
@@ -4617,15 +4627,15 @@ if (which === 'run-cap') {
             test('the same emergency below the cap dashes', () => assert.ok(dashes >= 1, 'dashes ' + dashes));
         }
         // 2. Below the cap the same field is fled, not embraced.
-        pl = scene(11900);
+        pl = scene(CAP - 100);
         test('below the cap there is no dive', () =>
             assert.strictEqual(pl.capDive, false));
         // 3. THE CONFIG'S TEETH: zero the cap and 12050 s is an ordinary tick.
         pineBot.config.deepHell.runCapS = 0;
-        pl = scene(12050);
+        pl = scene(CAP + 50);
         test('runCapS = 0 disables the dive entirely', () =>
             assert.strictEqual(pl.capDive, false));
-        pineBot.config.deepHell.runCapS = 12000;
+        pineBot.config.deepHell.runCapS = CAP;
         // 4. THE ULT STAYS HOLSTERED. Same plan state fires below the cap and
         //    must not fire past it — the invulnerability window is the one
         //    tool that could carry a full build through the dive alive.
@@ -4639,15 +4649,74 @@ if (which === 'run-cap') {
             return n;
         };
         test('below the cap the same emergency fires the ult', () =>
-            assert.ok(fire(11900) >= 1, 'ult did not fire below the cap'));
+            assert.ok(fire(CAP - 100) >= 1, 'ult did not fire below the cap'));
         test('past the cap the ult is holstered', () =>
-            assert.strictEqual(fire(12050), 0));
+            assert.strictEqual(fire(CAP + 50), 0));
         // ...and the holster is the CAP's doing, not a side effect: zero the
         // cap and the same past-12000 state fires again.
         pineBot.config.deepHell.runCapS = 0;
-        test('runCapS = 0 re-arms the ult at 12050s', () =>
-            assert.ok(fire(12050) >= 1, 'ult still holstered with the cap disabled'));
-        pineBot.config.deepHell.runCapS = 12000;
+        test('runCapS = 0 re-arms the ult past the cap', () =>
+            assert.ok(fire(CAP + 50) >= 1, 'ult still holstered with the cap disabled'));
+        pineBot.config.deepHell.runCapS = CAP;
+
+        // 5. v6.99.3 EARLY CAP — the stability proof. Config teeth first:
+        const CS = pineBot.config.deepHell.capStable;
+        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 35 / supersMin 3 / holdS 300', () =>
+            assert.ok(CS && CS.fromS === 3600 && CS.hpFloor === 0.97 &&
+                      CS.defMin === 35 && CS.supersMin === 3 && CS.holdS === 300));
+        const stableScene = (gt, extraP) => {
+            global.player = Object.assign({ x: 200, y: 200, hp: 469, maxHp: 469, speed: 3.0,
+                                            r: 7.2, ultReadyAt: 1e9, defense: 35 }, extraP || {});
+            global.enemies = [];
+            global.gameTime = gt;
+            let pl; for (let i = 0; i < 2; i++) pl = T.planMove();
+            return pl;
+        };
+        T.resetCapLatch(); T.setSupers(4);
+        stableScene(4000);                       // proof clock starts
+        pl = stableScene(4200);                  // 200 s held: under holdS
+        test('a held window SHORTER than holdS does not cap', () =>
+            assert.strictEqual(pl.capDive, false));
+        pl = stableScene(4320);                  // 320 s held: proof complete
+        test('full hp + seat armor + supers held past holdS = EARLY CAP', () =>
+            assert.strictEqual(pl.capDive, true, JSON.stringify({ cd: pl.capDive })));
+        pl = stableScene(4330, { hp: 200 });     // patrol has begun draining hp
+        test('...and the latch HOLDS while the patrol drains hp', () =>
+            assert.strictEqual(pl.capDive, true));
+        // an hp dip DURING the window resets the proof clock:
+        T.resetCapLatch();
+        stableScene(5000);
+        stableScene(5200, { hp: 380 });          // dip under 97% at 200 s
+        pl = stableScene(5320);                  // 320 s after the start, but the clock reset at 5200
+        test('an hp dip inside the window resets the proof clock', () =>
+            assert.strictEqual(pl.capDive, false));
+        // supers under the floor never prove anything:
+        T.resetCapLatch(); T.setSupers(1);
+        stableScene(6000);
+        pl = stableScene(6320);
+        test('supers under supersMin: stable hp alone is not a proof', () =>
+            assert.strictEqual(pl.capDive, false));
+        T.setSupers(4);
+        // the 06 ult holster honors the PLAN's early-cap latch, not just the
+        // gt clock — below runCapS, a plan carrying capDive:true must not fire:
+        {
+            global.gameTime = CAP - 100;
+            let n = 0; global.useUltimate = () => { n++; };
+            T.resetUltGate();
+            T.maybeAbilities({ hpRatio: 0.9, hpPanic: false, panic: false, danger: 0, dx: 0, dy: 0,
+                               near: 2, adjacent: 18, contactImminent: true, toughness: 1,
+                               passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999, capDive: true });
+            test('an early-capped plan holsters the ult below the gt cap too', () =>
+                assert.strictEqual(n, 0, 'ult fired ' + n + 'x under an early-cap plan'));
+        }
+        // holdS 0 disables the whole mechanism:
+        T.resetCapLatch();
+        pineBot.config.deepHell.capStable = Object.assign({}, CS, { holdS: 0 });
+        stableScene(7000);
+        pl = stableScene(7320);
+        test('capStable.holdS = 0 disables the early cap', () =>
+            assert.strictEqual(pl.capDive, false));
+        pineBot.config.deepHell.capStable = CS;
         done();
     }, 700);
 }

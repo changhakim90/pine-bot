@@ -1010,6 +1010,18 @@
         if (!atCap && type === 'weapon' && name === 'NEGRONI' && activeChar === 'joe' && !hellDetected) {
             add(26, 'joe-shield');
         }
+        // v6.99.3 (user): "gin and tonic can attack passouts and should be
+        // used as a boss killer since it slows the bosses from doing contact
+        // damage." GIN TONIC was ranked purely as one of the four super
+        // lines; its SLOW is a mitigation tool — a slowed boss lands fewer
+        // contact ticks (contact is 66% of all HP ever lost), and the
+        // projectile hits passouts. Day-weighted: the day boss roster is
+        // where the slow buys the most (the demo's "full kill of day
+        // bosses"); in hell the freeze tools (WHISKY SOUR, TIME STOP) own
+        // that job.
+        if (!atCap && type === 'weapon' && name === 'GIN TONIC') {
+            add(!hellDetected ? 24 : 10, 'gin-boss-slow');
+        }
         // v6.92.3 — THE MULE LOCKOUT (user, stating a game-design rule):
         // "a character cannot get moscow mule if the character has vodka cherry
         // and vice versa". The two are MUTUALLY EXCLUSIVE.

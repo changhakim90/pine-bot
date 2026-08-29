@@ -98,6 +98,7 @@
         hellEnterGt = hellDetected ? 0 : null;
         capFiredThisRun = false;
         capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
+        capStableSince = null; capEarly = false;   // v6.99.3: the stability proof is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats

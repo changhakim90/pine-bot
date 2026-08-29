@@ -263,7 +263,10 @@
         // so past the cap it stays holstered no matter what else is true.
         // This deliberately outranks ultAlways, ultChain and every emergency
         // clause: they all serve survival, and survival is no longer the job.
-        const capDive = (DH.runCapS || 0) > 0 && gtU >= DH.runCapS;
+        // v6.99.3: the movement layer's plan carries the EARLY cap (the
+        // stability-proof latch) — honor it here too, or the ult would carry
+        // an early-capped build through its own patrol.
+        const capDive = ((DH.runCapS || 0) > 0 && gtU >= DH.runCapS) || plan.capDive === true;
         if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
@@ -899,6 +902,10 @@
                     sigmasAtFloor, paramDist, hofRecord,
                     charProfile: charOf,
                     setChar: b => { if (CHARS[b]) activeChar = b; },
+                    // v6.99.3: the early-cap stability proof reads the run's
+                    // supers count; the test arranges it directly.
+                    setSupers: n => { supersThisRun = n; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; },
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.99.2
+// @version      6.99.3
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.99.2';
+    const SCRIPT_VERSION = '6.99.3';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -872,8 +872,21 @@
             // Purely gt-based, no hellDetected guard: day ends at ~1320 s so
             // only a hell run can reach it, and a run that somehow got here
             // with detection broken should STILL be capped. 0 disables.
-            runCapS: 12000,
+            // v6.99.3 (user): 12000 -> 9000 — "we can adjust the deep hell
+            // run ends to 150 minutes." The 200-min cap was set when a cap-out
+            // was rare; with the day doctrine funding real entrants the
+            // immortal-build hours are better spent as more day/entry samples.
+            // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
+            // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
+            runCapS: 9000,
             capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
+            // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
+            // holdS consecutive game-seconds hp never dips under hpFloor
+            // while measured defense >= defMin and supers >= supersMin, the
+            // build is immortal-in-practice and the patrol engages early:
+            // the remaining hours teach nothing, and the next run's day and
+            // entry are where the learning lives. holdS: 0 disables.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2016,7 +2029,15 @@
     // for hell runs only; this covers every run, day deaths included.
     const PHASE_AUDIT_KEY = 'pineBotPhaseAudit';
     let hellEnterGt = null;         // gameTime when hell latched (0 = run began in hell)
-    let capFiredThisRun = false;    // the 12000 s patrol engaged at least once
+    let capFiredThisRun = false;    // the run-cap patrol engaged at least once
+    // v6.99.3 EARLY CAP (user: "the auto-kill protocol to continue learning
+    // more data if setup is complete and HP and armor and weapons and
+    // ingredients are stable enough to survive corner anchoring"): once the
+    // build PROVES immortality — full HP held through a whole hold window
+    // with the seat armor and supers banked — the run has nothing left to
+    // teach and the patrol starts early. capEarly LATCHES: the patrol
+    // itself drains HP, which must not disengage it.
+    let capStableSince = null, capEarly = false;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {
@@ -4524,6 +4545,18 @@
         if (!atCap && type === 'weapon' && name === 'NEGRONI' && activeChar === 'joe' && !hellDetected) {
             add(26, 'joe-shield');
         }
+        // v6.99.3 (user): "gin and tonic can attack passouts and should be
+        // used as a boss killer since it slows the bosses from doing contact
+        // damage." GIN TONIC was ranked purely as one of the four super
+        // lines; its SLOW is a mitigation tool — a slowed boss lands fewer
+        // contact ticks (contact is 66% of all HP ever lost), and the
+        // projectile hits passouts. Day-weighted: the day boss roster is
+        // where the slow buys the most (the demo's "full kill of day
+        // bosses"); in hell the freeze tools (WHISKY SOUR, TIME STOP) own
+        // that job.
+        if (!atCap && type === 'weapon' && name === 'GIN TONIC') {
+            add(!hellDetected ? 24 : 10, 'gin-boss-slow');
+        }
         // v6.92.3 — THE MULE LOCKOUT (user, stating a game-design rule):
         // "a character cannot get moscow mule if the character has vodka cherry
         // and vice versa". The two are MUTUALLY EXCLUSIVE.
@@ -5386,6 +5419,7 @@
         hellEnterGt = hellDetected ? 0 : null;
         capFiredThisRun = false;
         capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
+        capStableSince = null; capEarly = false;   // v6.99.3: the stability proof is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -9248,7 +9282,29 @@
         // same reason) as park itself: a pull competing with gain terms
         // moves nothing; an override moves everything.
         const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
+        // v6.99.3 EARLY CAP (user: "the auto-kill protocol to continue
+        // learning more data if setup is complete and HP and armor and
+        // weapons and ingredients are stable enough to survive corner
+        // anchoring"). The stability PROOF, not a guess: from capStable.fromS
+        // on, hp must hold >= hpFloor for holdS consecutive game-seconds
+        // with the seat armor (defMin, the parkAudit bar) and supersMin
+        // banked. Any dip resets the clock. Once proven, capEarly LATCHES —
+        // the patrol drains HP by design and must not disengage itself.
+        // No hellDetected guard needed: day ends at ~1320 s, so fromS 3600
+        // is unreachable outside a hell run.
+        {
+            const CS = DHp.capStable || {};
+            if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
+                const stableNow =
+                    hpRatio >= (CS.hpFloor != null ? CS.hpFloor : 0.97) &&
+                    (liveDefense() || 0) >= (CS.defMin != null ? CS.defMin : 35) &&
+                    (typeof supersThisRun === 'number' ? supersThisRun : 0) >= (CS.supersMin != null ? CS.supersMin : 3);
+                if (!stableNow) capStableSince = null;
+                else if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
+                else if (gtCap - capStableSince >= CS.holdS) capEarly = true;
+            }
+        }
+        const capDive = ((DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS) || capEarly;
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
@@ -9688,7 +9744,10 @@
         // so past the cap it stays holstered no matter what else is true.
         // This deliberately outranks ultAlways, ultChain and every emergency
         // clause: they all serve survival, and survival is no longer the job.
-        const capDive = (DH.runCapS || 0) > 0 && gtU >= DH.runCapS;
+        // v6.99.3: the movement layer's plan carries the EARLY cap (the
+        // stability-proof latch) — honor it here too, or the ult would carry
+        // an early-capped build through its own patrol.
+        const capDive = ((DH.runCapS || 0) > 0 && gtU >= DH.runCapS) || plan.capDive === true;
         if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
@@ -10324,6 +10383,10 @@
                     sigmasAtFloor, paramDist, hofRecord,
                     charProfile: charOf,
                     setChar: b => { if (CHARS[b]) activeChar = b; },
+                    // v6.99.3: the early-cap stability proof reads the run's
+                    // supers count; the test arranges it directly.
+                    setSupers: n => { supersThisRun = n; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; },
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.

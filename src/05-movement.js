@@ -2936,7 +2936,29 @@
         // same reason) as park itself: a pull competing with gain terms
         // moves nothing; an override moves everything.
         const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
+        // v6.99.3 EARLY CAP (user: "the auto-kill protocol to continue
+        // learning more data if setup is complete and HP and armor and
+        // weapons and ingredients are stable enough to survive corner
+        // anchoring"). The stability PROOF, not a guess: from capStable.fromS
+        // on, hp must hold >= hpFloor for holdS consecutive game-seconds
+        // with the seat armor (defMin, the parkAudit bar) and supersMin
+        // banked. Any dip resets the clock. Once proven, capEarly LATCHES —
+        // the patrol drains HP by design and must not disengage itself.
+        // No hellDetected guard needed: day ends at ~1320 s, so fromS 3600
+        // is unreachable outside a hell run.
+        {
+            const CS = DHp.capStable || {};
+            if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
+                const stableNow =
+                    hpRatio >= (CS.hpFloor != null ? CS.hpFloor : 0.97) &&
+                    (liveDefense() || 0) >= (CS.defMin != null ? CS.defMin : 35) &&
+                    (typeof supersThisRun === 'number' ? supersThisRun : 0) >= (CS.supersMin != null ? CS.supersMin : 3);
+                if (!stableNow) capStableSince = null;
+                else if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
+                else if (gtCap - capStableSince >= CS.holdS) capEarly = true;
+            }
+        }
+        const capDive = ((DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS) || capEarly;
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides

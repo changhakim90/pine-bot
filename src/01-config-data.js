@@ -870,8 +870,21 @@
             // Purely gt-based, no hellDetected guard: day ends at ~1320 s so
             // only a hell run can reach it, and a run that somehow got here
             // with detection broken should STILL be capped. 0 disables.
-            runCapS: 12000,
+            // v6.99.3 (user): 12000 -> 9000 — "we can adjust the deep hell
+            // run ends to 150 minutes." The 200-min cap was set when a cap-out
+            // was rare; with the day doctrine funding real entrants the
+            // immortal-build hours are better spent as more day/entry samples.
+            // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
+            // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
+            runCapS: 9000,
             capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
+            // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
+            // holdS consecutive game-seconds hp never dips under hpFloor
+            // while measured defense >= defMin and supers >= supersMin, the
+            // build is immortal-in-practice and the patrol engages early:
+            // the remaining hours teach nothing, and the next run's day and
+            // entry are where the learning lives. holdS: 0 disables.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2014,7 +2027,15 @@
     // for hell runs only; this covers every run, day deaths included.
     const PHASE_AUDIT_KEY = 'pineBotPhaseAudit';
     let hellEnterGt = null;         // gameTime when hell latched (0 = run began in hell)
-    let capFiredThisRun = false;    // the 12000 s patrol engaged at least once
+    let capFiredThisRun = false;    // the run-cap patrol engaged at least once
+    // v6.99.3 EARLY CAP (user: "the auto-kill protocol to continue learning
+    // more data if setup is complete and HP and armor and weapons and
+    // ingredients are stable enough to survive corner anchoring"): once the
+    // build PROVES immortality — full HP held through a whole hold window
+    // with the seat armor and supers banked — the run has nothing left to
+    // teach and the patrol starts early. capEarly LATCHES: the patrol
+    // itself drains HP, which must not disengage it.
+    let capStableSince = null, capEarly = false;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {
