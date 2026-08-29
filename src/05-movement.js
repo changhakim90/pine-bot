@@ -755,7 +755,15 @@
         // the run crosses into hell — not just for the 90s entry window.
         const hellMul = hellDetected ? 1.3 : 1;
         const projW = T.projWeight * (1 + Math.min(1, 2 * mixShare('ranged'))) * hellMul;
-        const markW = T.markWeight * (1 + Math.min(1, 3 * mixShare('bomber'))) * hellMul;
+        // v6.97.0 SHIELDLESS MARK FEAR — see the fragileMarkFearMul config
+        // comment (the ~550 s mark rain: four joe deaths in a 17-second
+        // band). Gated on the LIVE shield stat against the fragile profile's
+        // own markShield floor; a character without the floor is untouched.
+        const msNeedFear = charOf().markShield;
+        const shieldNowFear = Math.max(0, safe(() => player.shield, 0) || 0);
+        const markFearMul = (msNeedFear != null && shieldNowFear < msNeedFear)
+            ? (CONFIG.threat.fragileMarkFearMul != null ? CONFIG.threat.fragileMarkFearMul : 1.6) : 1;
+        const markW = T.markWeight * (1 + Math.min(1, 3 * mixShare('bomber'))) * hellMul * markFearMul;
         const standoffAdj = M.standoff * (farmRef.v ? (M.farmStandoffMul != null ? M.farmStandoffMul : 0.55) : 1) *
             (1 + 0.3 * Math.min(1, mixShare('swarm'))) * (hellDetected ? 1.15 : 1) *
             (flameOn ? 0.75 : 1);   // flame active: tighten in, keep the crowd burning
@@ -1744,7 +1752,15 @@
         // passouts flat-out so the first attack upgrade lands BEFORE the
         // first NO BOOKING wall spawns on the timetable.
         const gtNow2 = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const dayFarm = ((!hellDetected && gtNow2 < 60) ? 1.7 : ((gtNow2 < 1200 && !hellDetected) ? 1.35 : 1)) *
+        // v6.97.0: the minute-one sprint is for characters with the HP to
+        // survive being wrong in the middle of the first wave — see the
+        // sprintMinHp config comment. 13 of joe's 28 day deaths sat at
+        // 59-85 s before this gate existed.
+        const sprintable = (charOf().hp || 100) >= (M.sprintMinHp != null ? M.sprintMinHp : 120);
+        const dayFarmBase = (!hellDetected && gtNow2 < 60)
+            ? (sprintable ? 1.7 : (M.fragileSprintMul != null ? M.fragileSprintMul : 1.0))
+            : ((gtNow2 < 1200 && !hellDetected) ? 1.35 : 1);
+        const dayFarm = dayFarmBase *
             (1 + 0.45 * buildHunger) *  // starving build: kills ARE the upgrades — hunt harder
             (flameOn ? 1.6 : 1) *       // burn window: harvest everything it touches
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
@@ -2956,6 +2972,7 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             capDive,   // v6.96.0: the run is being ended on purpose
+            dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.

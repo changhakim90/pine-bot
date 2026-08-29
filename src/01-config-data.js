@@ -563,6 +563,18 @@
             farmStandoffMul: 0.25,// ring at contact range: the ring-keeper must never out-pay the grind (0.55 left an 82px ring that still backed out of a 70px crowd)
             farmBossFearMul: 0.7, // boss standoff-gradient ease (hitbox bands stay full)
             harvestCrowdBias: 36, // hold the pile on the CROWD side: mobs in front, splash/pierce leak into the pile
+            // v6.97.0 THE MINUTE-ONE SPRINT IS GATED ON BULK. The sprint
+            // (dayFarm x1.7 before gt 60, "kill mobs and passouts flat-out so
+            // the first attack upgrade lands before the first wall") was
+            // written for 180-HP pat. The 6.96.2 phase rows show what it does
+            // to 100-HP joe: 13 of 28 day deaths land at 59-85 s, zero
+            // supers — he charges the first wave weaponless, gets enveloped,
+            // and dies as the sprint window closes. A character under
+            // sprintMinHp base HP takes fragileSprintMul instead of 1.7 in
+            // minute one (the day-wide 1.35 funding amp from 60 s onward is
+            // untouched). Dead joe funds nothing.
+            sprintMinHp: 120,
+            fragileSprintMul: 1.0,
             // v6.94.0 DAY TREK — the FIELD TREK below (v6.85.10) was a PULL,
             // the third instance of the 6.89.11 lesson (overrides beat
             // pulls). Now an override, with the target set widened to the
@@ -629,6 +641,17 @@
             noKillBonus: 1.7,     // undestroyable projectiles are worse
             markWeight: 8.0,      // telegraphed AoE (dropMarks)
             markPad: 10,
+            // v6.97.0 SHIELDLESS MARK FEAR (fragile profile). The 6.96.2
+            // phase rows put 10 of 28 joe day deaths on marks, four of them
+            // inside one 17-second band at ~550 s — a timetabled mark rain
+            // that a shieldless 100-HP character cannot soak. The fragile
+            // profile already refuses mark SOAKS without a real NEGRONI
+            // shield (markShield, 6.95.1); this is the same doctrine applied
+            // to the danger field: while player.shield is below the
+            // profile's markShield floor, every mark weighs this much more.
+            // Read from the LIVE stat, never an ingredient name. Characters
+            // without a markShield floor (pat, minguk) are untouched.
+            fragileMarkFearMul: 1.6,
             lineWeight: 6.5,      // charge lanes (roadLines) — data: the #1 killer once visible
             linePad: 14
         },

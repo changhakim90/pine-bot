@@ -3847,7 +3847,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4632,6 +4632,74 @@ if (which === 'phase-audit') {
             assert.ok(g.dayClearRate === 0.5 && g.entrySurvival === 0.6 && g.deepRate === 0.1, JSON.stringify(g)));
         test('the cap-out is counted, and seatedRate reads 2/5', () =>
             assert.ok(g.capOuts === 1 && g.seatedRate === 0.4, JSON.stringify(g)));
+        done();
+    }, 700);
+}
+
+// v6.97.0 — JOE'S DAY, FIXED WHERE THE ROWS SAY HE DIES. The 6.96.2 phase
+// rows (n=31): 13 of 28 day deaths at 59-85 s with zero supers (the minute-
+// one sprint charging 100-HP joe into the first wave), and four mark deaths
+// inside one 17-second band at ~550 s (a timetabled mark rain on a shieldless
+// character). Two gates: the sprint requires sprintMinHp base HP, and marks
+// weigh fragileMarkFearMul more while player.shield sits under the fragile
+// profile's markShield floor — both read live stats, both config-toothed.
+if (which === 'joe-day') {
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 30 } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        const T = pineBot.test;
+        const scene = (gt, extraP) => {
+            global.player = Object.assign({ x: 270, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                                            ultReadyAt: 1e9 }, extraP || {});
+            global.enemies = [{ type: 'drunk', id: 1, x: 380, y: 270, hp: 60, maxHp: 60, r: 10, speed: 1.5 }];
+            global.gameTime = gt;
+            let pl; for (let i = 0; i < 4; i++) pl = T.planMove();
+            return pl;
+        };
+        // 1. THE SPRINT GATE. Joe (100 HP) in minute one: no sprint.
+        T.setChar('joe');
+        test('joe gets NO minute-one sprint (dayFarmBase 1.0)', () =>
+            assert.strictEqual(scene(30).dayFarmBase, 1));
+        test('joe keeps the ordinary day funding amp after 60 s', () =>
+            assert.strictEqual(scene(300).dayFarmBase, 1.35));
+        // Pat (180 HP) sprints exactly as before.
+        T.setChar('pat');
+        test('pat still sprints minute one (1.7)', () =>
+            assert.strictEqual(scene(30, { hp: 170, maxHp: 180, speed: 1.9 }).dayFarmBase, 1.7));
+        // Config teeth: drop the bar under joe and he sprints again.
+        T.setChar('joe');
+        pineBot.config.movement.sprintMinHp = 90;
+        test('sprintMinHp is the gate, not a hardcoded joe check', () =>
+            assert.strictEqual(scene(30).dayFarmBase, 1.7));
+        pineBot.config.movement.sprintMinHp = 120;
+        // 2. SHIELDLESS MARK FEAR. Same scene, a mark on the seat; only the
+        //    LIVE shield stat changes.
+        const markScene = (shield) => {
+            global.dropMarks = [{ x: 280, y: 270, r: 58, dmg: 72, tele: 0.6, at: 6000.3 }];
+            const pl = scene(300, { shield });
+            global.dropMarks = [];
+            return pl;
+        };
+        let pl = markScene(0);
+        test('shieldless joe fears marks x1.6', () =>
+            assert.strictEqual(pl.markFearMul, 1.6));
+        const dangerBare = pl.danger;
+        pl = markScene(60);   // over his markShield floor (30)
+        test('a REAL shield turns the fear off — live stat, not a name', () =>
+            assert.strictEqual(pl.markFearMul, 1));
+        test('...and the danger field actually paid the difference', () =>
+            assert.ok(dangerBare > pl.danger * 1.2, 'bare ' + dangerBare.toFixed(1) + ' vs shielded ' + pl.danger.toFixed(1)));
+        // Pat has no markShield floor: never the multiplier.
+        T.setChar('pat');
+        test('pat (no markShield floor) is untouched', () =>
+            assert.strictEqual(markScene(0).markFearMul, 1));
+        T.setChar('joe');
+        // Config teeth: zero the multiplier and the shieldless fear is gone.
+        pineBot.config.threat.fragileMarkFearMul = 1;
+        test('fragileMarkFearMul is the lever', () =>
+            assert.strictEqual(markScene(0).markFearMul, 1));
+        pineBot.config.threat.fragileMarkFearMul = 1.6;
         done();
     }, 700);
 }

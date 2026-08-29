@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.96.2
+// @version      6.97.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.96.2';
+    const SCRIPT_VERSION = '6.97.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -565,6 +565,18 @@
             farmStandoffMul: 0.25,// ring at contact range: the ring-keeper must never out-pay the grind (0.55 left an 82px ring that still backed out of a 70px crowd)
             farmBossFearMul: 0.7, // boss standoff-gradient ease (hitbox bands stay full)
             harvestCrowdBias: 36, // hold the pile on the CROWD side: mobs in front, splash/pierce leak into the pile
+            // v6.97.0 THE MINUTE-ONE SPRINT IS GATED ON BULK. The sprint
+            // (dayFarm x1.7 before gt 60, "kill mobs and passouts flat-out so
+            // the first attack upgrade lands before the first wall") was
+            // written for 180-HP pat. The 6.96.2 phase rows show what it does
+            // to 100-HP joe: 13 of 28 day deaths land at 59-85 s, zero
+            // supers — he charges the first wave weaponless, gets enveloped,
+            // and dies as the sprint window closes. A character under
+            // sprintMinHp base HP takes fragileSprintMul instead of 1.7 in
+            // minute one (the day-wide 1.35 funding amp from 60 s onward is
+            // untouched). Dead joe funds nothing.
+            sprintMinHp: 120,
+            fragileSprintMul: 1.0,
             // v6.94.0 DAY TREK — the FIELD TREK below (v6.85.10) was a PULL,
             // the third instance of the 6.89.11 lesson (overrides beat
             // pulls). Now an override, with the target set widened to the
@@ -631,6 +643,17 @@
             noKillBonus: 1.7,     // undestroyable projectiles are worse
             markWeight: 8.0,      // telegraphed AoE (dropMarks)
             markPad: 10,
+            // v6.97.0 SHIELDLESS MARK FEAR (fragile profile). The 6.96.2
+            // phase rows put 10 of 28 joe day deaths on marks, four of them
+            // inside one 17-second band at ~550 s — a timetabled mark rain
+            // that a shieldless 100-HP character cannot soak. The fragile
+            // profile already refuses mark SOAKS without a real NEGRONI
+            // shield (markShield, 6.95.1); this is the same doctrine applied
+            // to the danger field: while player.shield is below the
+            // profile's markShield floor, every mark weighs this much more.
+            // Read from the LIVE stat, never an ingredient name. Characters
+            // without a markShield floor (pat, minguk) are untouched.
+            fragileMarkFearMul: 1.6,
             lineWeight: 6.5,      // charge lanes (roadLines) — data: the #1 killer once visible
             linePad: 14
         },
@@ -6921,7 +6944,15 @@
         // the run crosses into hell — not just for the 90s entry window.
         const hellMul = hellDetected ? 1.3 : 1;
         const projW = T.projWeight * (1 + Math.min(1, 2 * mixShare('ranged'))) * hellMul;
-        const markW = T.markWeight * (1 + Math.min(1, 3 * mixShare('bomber'))) * hellMul;
+        // v6.97.0 SHIELDLESS MARK FEAR — see the fragileMarkFearMul config
+        // comment (the ~550 s mark rain: four joe deaths in a 17-second
+        // band). Gated on the LIVE shield stat against the fragile profile's
+        // own markShield floor; a character without the floor is untouched.
+        const msNeedFear = charOf().markShield;
+        const shieldNowFear = Math.max(0, safe(() => player.shield, 0) || 0);
+        const markFearMul = (msNeedFear != null && shieldNowFear < msNeedFear)
+            ? (CONFIG.threat.fragileMarkFearMul != null ? CONFIG.threat.fragileMarkFearMul : 1.6) : 1;
+        const markW = T.markWeight * (1 + Math.min(1, 3 * mixShare('bomber'))) * hellMul * markFearMul;
         const standoffAdj = M.standoff * (farmRef.v ? (M.farmStandoffMul != null ? M.farmStandoffMul : 0.55) : 1) *
             (1 + 0.3 * Math.min(1, mixShare('swarm'))) * (hellDetected ? 1.15 : 1) *
             (flameOn ? 0.75 : 1);   // flame active: tighten in, keep the crowd burning
@@ -7910,7 +7941,15 @@
         // passouts flat-out so the first attack upgrade lands BEFORE the
         // first NO BOOKING wall spawns on the timetable.
         const gtNow2 = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const dayFarm = ((!hellDetected && gtNow2 < 60) ? 1.7 : ((gtNow2 < 1200 && !hellDetected) ? 1.35 : 1)) *
+        // v6.97.0: the minute-one sprint is for characters with the HP to
+        // survive being wrong in the middle of the first wave — see the
+        // sprintMinHp config comment. 13 of joe's 28 day deaths sat at
+        // 59-85 s before this gate existed.
+        const sprintable = (charOf().hp || 100) >= (M.sprintMinHp != null ? M.sprintMinHp : 120);
+        const dayFarmBase = (!hellDetected && gtNow2 < 60)
+            ? (sprintable ? 1.7 : (M.fragileSprintMul != null ? M.fragileSprintMul : 1.0))
+            : ((gtNow2 < 1200 && !hellDetected) ? 1.35 : 1);
+        const dayFarm = dayFarmBase *
             (1 + 0.45 * buildHunger) *  // starving build: kills ARE the upgrades — hunt harder
             (flameOn ? 1.6 : 1) *       // burn window: harvest everything it touches
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
@@ -9122,6 +9161,7 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             capDive,   // v6.96.0: the run is being ended on purpose
+            dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
