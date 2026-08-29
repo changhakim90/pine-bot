@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.99.3
+// @version      6.99.4
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.99.3';
+    const SCRIPT_VERSION = '6.99.4';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -2038,6 +2038,11 @@
     // teach and the patrol starts early. capEarly LATCHES: the patrol
     // itself drains HP, which must not disengage it.
     let capStableSince = null, capEarly = false;
+    // v6.99.4: gt when the patrol FIRST engaged this run — the phase row
+    // books it as capAt, so report() can answer "when do builds actually
+    // prove immortality?" and the capStable.fromS floor can be tuned from
+    // measured latch times instead of guesses.
+    let capFirstGt = null;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {
@@ -5420,6 +5425,7 @@
         capFiredThisRun = false;
         capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
         capStableSince = null; capEarly = false;   // v6.99.3: the stability proof is per-run
+        capFirstGt = null;                          // v6.99.4: capAt telemetry is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -5466,7 +5472,10 @@
             def: entrySample ? entrySample.def : null,
             regen: entrySample ? entrySample.regen : null,
             ultLv: entrySample ? (entrySample.ultLv || 0) : null,
-            cap: !!capFiredThisRun
+            cap: !!capFiredThisRun,
+            // v6.99.4: gt at first patrol engage. capAt < runCapS = the
+            // EARLY stability proof fired; capAt >= runCapS = the clock.
+            capAt: capFirstGt == null ? null : Math.round(capFirstGt)
         };
     }
 
@@ -9311,6 +9320,7 @@
         // and makes the precedence explicit rather than emergent.
         if (capDive) {
             capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
+            if (capFirstGt == null) capFirstGt = gtCap;   // v6.99.4: WHEN it engaged (early vs clock)
             // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
             // needs to walk around the map and doesn't need to dash and it
             // will keep getting hit by the common projectile mobs." Both
@@ -10601,6 +10611,13 @@
                     if (r.day) g.dayCleared++;
                     if (r.ph !== 'day') { g.hellEntered++; if (r.seat) g.seated++; }
                     if (r.cap) g.caps++;
+                    // v6.99.4: split early (stability proof) from clock caps,
+                    // and keep the latch times so fromS can be tuned from data.
+                    if (r.capAt != null) {
+                        g.capAts = g.capAts || [];
+                        g.capAts.push(r.capAt);
+                        if (r.capAt < ((CONFIG.deepHell && CONFIG.deepHell.runCapS) || 9000)) g.earlyCaps = (g.earlyCaps || 0) + 1;
+                    }
                     if (r.def != null) g.defs.push(r.def);
                     if (r.regen != null) g.regens.push(r.regen);
                     if (r.ultLv != null) g.ults.push(r.ultLv);
@@ -10616,6 +10633,8 @@
                         entrySurvival: g.hellEntered ? +((g.hellEntered - (g.deaths.entry || 0)) / g.hellEntered).toFixed(2) : null,
                         deepRate: +((g.deaths.deep || 0) / g.n).toFixed(2),
                         capOuts: g.caps,
+                        earlyCaps: g.earlyCaps || 0,
+                        medianCapAt: med(g.capAts || []),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times)

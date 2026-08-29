@@ -2036,6 +2036,11 @@
     // teach and the patrol starts early. capEarly LATCHES: the patrol
     // itself drains HP, which must not disengage it.
     let capStableSince = null, capEarly = false;
+    // v6.99.4: gt when the patrol FIRST engaged this run — the phase row
+    // books it as capAt, so report() can answer "when do builds actually
+    // prove immortality?" and the capStable.fromS floor can be tuned from
+    // measured latch times instead of guesses.
+    let capFirstGt = null;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {

@@ -4801,7 +4801,7 @@ if (which === 'phase-audit') {
         { v: 'X', t: 1500, ph: 'entry', cause: 'mark', hEnt: 1330, sup: 1, day: true, seat: false, def: 26, regen: 0.8, ultLv: 2, cap: false },
         { v: 'X', t: 3000, ph: 'hell', cause: 'contact', hEnt: 1320, sup: 2, day: true, seat: true, def: 31, regen: 1.1, ultLv: 3, cap: false },
         { v: 'X', t: 4000, ph: 'hell', cause: 'proj', hEnt: 1325, sup: 3, day: true, seat: false, def: 33, regen: 1.4, ultLv: 3, cap: false },
-        { v: 'X', t: 12030, ph: 'deep', cause: 'contact', hEnt: 1320, sup: 3, day: true, seat: true, def: 35, regen: 1.5, ultLv: 4, cap: true }
+        { v: 'X', t: 12030, ph: 'deep', cause: 'contact', hEnt: 1320, sup: 3, day: true, seat: true, def: 35, regen: 1.5, ultLv: 4, cap: true, capAt: 4100 }
     ] };
     const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 1350, hell: true },
         storage: { pineBotPhaseAudit: JSON.stringify(seeded) } });
@@ -4840,8 +4840,11 @@ if (which === 'phase-audit') {
         global.enemies = [{ type: 'drunk', id: 1, x: 300, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
         global.gameTime = 12050;
         for (let i = 0; i < 3; i++) T.planMove();
-        test('a run that engaged the 12000 s dive books cap:true', () =>
+        test('a run that engaged the dive books cap:true', () =>
             assert.strictEqual(T.buildPhaseRow(12060, true).cap, true));
+        // v6.99.4: the row also books WHEN the patrol first engaged.
+        test('...and capAt records the engage gt (clock cap here)', () =>
+            assert.strictEqual(T.buildPhaseRow(12060, true).capAt, 12050));
         // 3. AGGREGATION over the seeded rows: the funnel numbers.
         const rep = global.window.pineBot.phaseAudit();
         const g = rep.groups.find(x => x.version === 'X');
@@ -4851,6 +4854,10 @@ if (which === 'phase-audit') {
             assert.deepStrictEqual(g.deaths, { day: 5, entry: 2, hell: 2, deep: 1 }));
         test('dayClearRate 0.5, entrySurvival 0.6, deepRate 0.1', () =>
             assert.ok(g.dayClearRate === 0.5 && g.entrySurvival === 0.6 && g.deepRate === 0.1, JSON.stringify(g)));
+        // v6.99.4: the seeded cap-out carries capAt 4100 — under runCapS
+        // 9000, so it books as an EARLY cap with a median latch time.
+        test('the funnel splits early caps from clock caps (earlyCaps 1, medianCapAt 4100)', () =>
+            assert.ok(g.earlyCaps === 1 && g.medianCapAt === 4100, JSON.stringify({ e: g.earlyCaps, m: g.medianCapAt })));
         test('the cap-out is counted, and seatedRate reads 2/5', () =>
             assert.ok(g.capOuts === 1 && g.seatedRate === 0.4, JSON.stringify(g)));
         // 4. v6.97.1 THE COMBINED PROBE (user): pineBot.report() bundles the

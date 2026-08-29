@@ -1120,6 +1120,13 @@
                     if (r.day) g.dayCleared++;
                     if (r.ph !== 'day') { g.hellEntered++; if (r.seat) g.seated++; }
                     if (r.cap) g.caps++;
+                    // v6.99.4: split early (stability proof) from clock caps,
+                    // and keep the latch times so fromS can be tuned from data.
+                    if (r.capAt != null) {
+                        g.capAts = g.capAts || [];
+                        g.capAts.push(r.capAt);
+                        if (r.capAt < ((CONFIG.deepHell && CONFIG.deepHell.runCapS) || 9000)) g.earlyCaps = (g.earlyCaps || 0) + 1;
+                    }
                     if (r.def != null) g.defs.push(r.def);
                     if (r.regen != null) g.regens.push(r.regen);
                     if (r.ultLv != null) g.ults.push(r.ultLv);
@@ -1135,6 +1142,8 @@
                         entrySurvival: g.hellEntered ? +((g.hellEntered - (g.deaths.entry || 0)) / g.hellEntered).toFixed(2) : null,
                         deepRate: +((g.deaths.deep || 0) / g.n).toFixed(2),
                         capOuts: g.caps,
+                        earlyCaps: g.earlyCaps || 0,
+                        medianCapAt: med(g.capAts || []),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times)

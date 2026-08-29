@@ -2965,6 +2965,7 @@
         // and makes the precedence explicit rather than emergent.
         if (capDive) {
             capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
+            if (capFirstGt == null) capFirstGt = gtCap;   // v6.99.4: WHEN it engaged (early vs clock)
             // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
             // needs to walk around the map and doesn't need to dash and it
             // will keep getting hit by the common projectile mobs." Both
