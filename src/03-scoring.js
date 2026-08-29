@@ -994,6 +994,14 @@
             const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
             if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
                 !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
+            // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
+            // dead in entry at median def 29.2 — the parkAudit seat bar is
+            // 35). The fund rush buys tempo; from entryPrepFromS this
+            // converts late-day picks back into the armor the seat needs.
+            // 30 is the park gate the never-parked group sat just under.
+            if (!atCap && name === 'OLIVE' && !hellDetected &&
+                gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 900) &&
+                (liveDefense() || 0) < 30) add(40, 'entry-armor');
         }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat

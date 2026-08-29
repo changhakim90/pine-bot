@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.99.1
+// @version      6.99.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.99.1';
+    const SCRIPT_VERSION = '6.99.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -567,6 +567,22 @@
             // rest clocks shrink to 40% — the rest exists to break deadlock
             // oscillation, not to idle while tips sit on the field.
             dayRestMul: 0.4,
+            // v6.99.2 THE MINUTE-ONE REGRESSION (6.99.1 row, n=241): lowering
+            // farmFromS to 45 also lowered the TREK floor, and with the ult
+            // ready from the opening the fund-rush waiver sent a one-weapon
+            // joe ACROSS THE FIELD at gt 45-70 — ~30 deaths in a tight
+            // 64-82 s contact cluster, the exact window 6.97.0 had closed.
+            // The 45 s floor belongs to the LOCAL pile walk; the trek gets
+            // its old floor back. (The demo's first ult was at gt 155 — the
+            // human never crossed the field in minute one.)
+            trekFromS: 150,
+            // v6.99.2 ENTRY PREP (funnel n=240: 35 entrants, 31 dead within
+            // 300 s of the latch, median entry def 29.2 vs the parkAudit bar
+            // of 35): from entryPrepFromS the fund rush stands down — the
+            // armor gate and mark caution return, and 03's entry-armor
+            // checkpoint routes late-day picks back into OLIVE so the run
+            // arrives at the entrance wearing the seat build.
+            entryPrepFromS: 900,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -4492,6 +4508,14 @@
             const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
             if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
                 !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
+            // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
+            // dead in entry at median def 29.2 — the parkAudit seat bar is
+            // 35). The fund rush buys tempo; from entryPrepFromS this
+            // converts late-day picks back into the armor the seat needs.
+            // 30 is the park gate the never-parked group sat just under.
+            if (!atCap && name === 'OLIVE' && !hellDetected &&
+                gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 900) &&
+                (liveDefense() || 0) < 30) add(40, 'entry-armor');
         }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat
@@ -8114,7 +8138,15 @@
         // fundRushHp: the rush is for a HEALTHY bot — the demo held hp median
         // 100. A hurt bot keeps every old caution (the po-harvest "too hurt
         // to soak the mark" doctrine stands below this floor).
-        const fundRush = (M.fundRush !== false) && dayPhaseNow && ultReadyNow &&
+        // v6.99.2: the rush stands down at entryPrepFromS — the last day
+        // minutes belong to arriving at the entrance armored (see config).
+        // The ult condition is ready-OR-imminent, matching ultHarvest: the
+        // demo drifts onto the pile as the cast comes off cooldown, so by
+        // arrival the cover is castable.
+        const gtFund = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const fundRush = (M.fundRush !== false) && dayPhaseNow &&
+            (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
+            gtFund < (M.entryPrepFromS != null ? M.entryPrepFromS : 900) &&
             hpRatio >= (M.fundRushHp != null ? M.fundRushHp : 0.65);
         const projTight = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + (M.fundProjPx != null ? M.fundProjPx : 45));
@@ -9032,13 +9064,18 @@
             const relPx = MH2.trekReleasePx != null ? MH2.trekReleasePx : 190;
             const apDefT = charOf().approachDefense, apHpT = charOf().approachHp;
             const trekGates = MH2.trekOverride !== false && !hellDetected && gtT < 1200 &&
-                gtT >= (MH2.farmFromS != null ? MH2.farmFromS : 150) &&
+                // v6.99.2: the trek keeps its OWN floor — farmFromS 45 is for
+                // the local pile walk; crossing the field in minute one was
+                // the 64-82 s death cluster (see config trekFromS).
+                gtT >= (MH2.trekFromS != null ? MH2.trekFromS : 150) &&
                 // v6.99.1: the fund-rush waiver extends to the trek — the
                 // demo's "full kill of day bosses including passouts" crossed
                 // the field armor-less; with the ult ready the cast covers
-                // the destination. HP gate below stays.
+                // the destination. HP gate below stays; v6.99.2: the waiver
+                // expires with the rush at entryPrepFromS.
                 (apDefT == null || ((liveDefense() || 0) >= apDefT) ||
-                 ((MH2.fundRush !== false) && ultReadyNow)) &&
+                 ((MH2.fundRush !== false) && ultReadyNow &&
+                  gtT < (MH2.entryPrepFromS != null ? MH2.entryPrepFromS : 900))) &&
                 (apHpT == null || hpRatio >= apHpT) &&   // v6.95.1 fragile profile
                 !hpPanic && !th.rival && !rainbowRecent && !flight;
             if (trekGates) {
@@ -9176,8 +9213,14 @@
         // hold arm keeps the override pinned to the centroid; the invuln
         // makes every caution veto moot for exactly that window.
         const ultBurnHold = meleeUlt && ultInvuln && poN >= 1;
+        // v6.99.2: the ult arm's armor waiver is the FUND RUSH's, not
+        // structural — 6.99.0 had removed defOkH from this arm outright, so
+        // "the rush stands down at entryPrepFromS" restored nothing. Now the
+        // unarmored ult-covered walk exists exactly where the rush does
+        // (day, before entry prep, healthy); everywhere else — late day,
+        // entry, hell — the v6.95.1 armor discipline is back.
         const harvWant = MH.harvestApproach !== false && harvWindow && farmReady &&
-            ((meleeUlt && ultHarvest) || (flameHarvest && defOkH) || ultBurnHold) &&
+            ((meleeUlt && ultHarvest && (defOkH || fundRush)) || (flameHarvest && defOkH) || ultBurnHold) &&
             poN >= 1 && poNearest != null &&
             poNearest <= (MH.harvestRangePx || 300) &&
             !flight && !th.rival;

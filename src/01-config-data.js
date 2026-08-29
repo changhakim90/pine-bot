@@ -565,6 +565,22 @@
             // rest clocks shrink to 40% — the rest exists to break deadlock
             // oscillation, not to idle while tips sit on the field.
             dayRestMul: 0.4,
+            // v6.99.2 THE MINUTE-ONE REGRESSION (6.99.1 row, n=241): lowering
+            // farmFromS to 45 also lowered the TREK floor, and with the ult
+            // ready from the opening the fund-rush waiver sent a one-weapon
+            // joe ACROSS THE FIELD at gt 45-70 — ~30 deaths in a tight
+            // 64-82 s contact cluster, the exact window 6.97.0 had closed.
+            // The 45 s floor belongs to the LOCAL pile walk; the trek gets
+            // its old floor back. (The demo's first ult was at gt 155 — the
+            // human never crossed the field in minute one.)
+            trekFromS: 150,
+            // v6.99.2 ENTRY PREP (funnel n=240: 35 entrants, 31 dead within
+            // 300 s of the latch, median entry def 29.2 vs the parkAudit bar
+            // of 35): from entryPrepFromS the fund rush stands down — the
+            // armor gate and mark caution return, and 03's entry-armor
+            // checkpoint routes late-day picks back into OLIVE so the run
+            // arrives at the entrance wearing the seat build.
+            entryPrepFromS: 900,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,

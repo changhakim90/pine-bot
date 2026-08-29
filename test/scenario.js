@@ -1222,6 +1222,10 @@ if (which === 'tank-holdout') {
     // nothing by the finale, because armour is what licences the tank's
     // whole posture for the rest of the run
     const oliveAt = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 1, maxlv: 6 }, 0, []);
+    // v6.99.2: the late sample wears the park-gate armor (30) so the
+    // entry-armor checkpoint stands down — this test measures the tank
+    // premium's DECAY, not the (separately tested) entry checkpoint.
+    global.player = Object.assign({}, global.player, { defense: 32 });
     global.gameTime = 60; const early = oliveAt();
     global.gameTime = 1150; const late = oliveAt();
     test('a tank pays an early premium for the armour lines', () =>
@@ -4093,8 +4097,20 @@ if (which === 'day-trek') {
         return pineBot.test.planMove();
     };
 
+    // v6.99.2 TREK FLOOR — tested FIRST, on a clean trek clock: any test
+    // that treks at a later gt leaves a rest window behind, and a gt-100
+    // assertion after one is toothless (the rest blocks the trek whatever
+    // the floor says — the "other clock" bite, again).
+    pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
+    let pl = scene([mkBoss(460, 270)], 30);
+    test('no trek before the run has legs', () =>
+        assert.ok(!pl.trekking, 'trekking at gt 30'));
+    pl = scene([mkBoss(460, 270)], 100);
+    test('gt 100 (past farmFromS, under trekFromS): still no field crossing', () =>
+        assert.ok(!pl.trekking, 'trekking at gt 100'));
+
     // PRIORITY 1: a roaming boss across the field, empty local — WALK.
-    let pl = scene([mkBoss(460, 270)]);
+    pl = scene([mkBoss(460, 270)]);
     test('an empty local field + a distant roaming boss = trek to the boss', () =>
         assert.ok(pl.trekking === true && pl.trekKind === 'boss' && pl.dx > 0.9,
             JSON.stringify({ t: pl.trekking, k: pl.trekKind, dx: pl.dx })));
@@ -4170,9 +4186,8 @@ if (which === 'day-trek') {
     pineBot.test.setOwned({ 'SOUTH SIDE': 1 });
 
     // GATES, each with teeth:
-    pl = scene([mkBoss(460, 270)], 30);   // v6.99.1: floor lowered 90 -> 45
-    test('no trek before the run has legs (farmFromS)', () =>
-        assert.ok(!pl.trekking, 'trekking at gt 30'));
+    // (the farmFromS / trekFromS floor tests run FIRST in this scenario —
+    // they need a clean trek clock; see the top of the block.)
     global.player = { x: 100, y: 270, hp: 40, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
     global.enemies = [mkBoss(460, 270)]; global.gameTime = 700;
     pl = pineBot.test.planMove();
@@ -4360,13 +4375,43 @@ if (which === 'joe-guard') {
     test('fund rush: a mark does not stop a shieldless ult-ready walk', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
     global.dropMarks = [];
+
+    // v6.99.2 — the tests below JUMP THE CLOCK, so they sit last in the
+    // harvest block (the harvest hold/rest state is module-level).
+    // The 45 s farmFromS floor keeps the LOCAL pile walk open early:
+    global.gameTime = 60;
+    global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                      ultReadyAt: 50, defense: 0 };
+    global.enemies = [mkPo(350, 270)];
+    pl = pineBot.test.planMove();
+    test('at gt 60 with a weapon owned, the local pile walk is already open', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    // ENTRY PREP: from entryPrepFromS (900) the rush stands down — the
+    // armor gate returns so entrants arrive wearing the seat build. (The
+    // unarmored call also clears the carried harvest clock: harvWant false
+    // nulls harvStartS, so the armored call at 960 starts a fresh hold.)
+    global.gameTime = 950;
+    global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                      ultReadyAt: 100, defense: 12 };
+    global.enemies = [mkPo(350, 270)];
+    pl = pineBot.test.planMove();
+    test('gt 950: the fund rush stands down — unarmored joe stays home again', () =>
+        assert.ok(!pl.harvesting && pl.fundRush === false,
+            JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
+    global.gameTime = 960;
+    global.player.defense = 25;
+    pl = pineBot.test.planMove();
+    test('...armored (25) past entry prep, the ult-covered walk still opens', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     test('the fund-rush config carries its shipped defaults', () =>
         assert.ok(pineBot.config.movement.fundProjPx === 45 &&
                   pineBot.config.movement.litterHuntN === 4 &&
                   pineBot.config.movement.fundRush === true &&
                   pineBot.config.movement.fundRushHp === 0.65 &&
                   pineBot.config.movement.dayRestMul === 0.4 &&
-                  pineBot.config.movement.farmFromS === 45));
+                  pineBot.config.movement.farmFromS === 45 &&
+                  pineBot.config.movement.trekFromS === 150 &&
+                  pineBot.config.movement.entryPrepFromS === 900));
 
     // ...and PAT is untouched by the fragile profile: same unarmored scene.
     pineBot.test.setChar('pat');
@@ -4457,6 +4502,15 @@ if (which === 'entry-seat') {
     test('...and with the gate met the checkpoint stands down', () =>
         assert.ok(!/entry-regen/.test(wWhy()), wWhy()));
     pineBot.test.setOwned({ 'SIMPLE SYRUP': 0 });
+    // v6.99.2 ENTRY-ARMOR CHECKPOINT: defense behind at entry prep -> OLIVE jumps.
+    global.gameTime = 950;
+    global.player.defense = 20;
+    const oWhy = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 2, maxlv: 6 }, 0, []).why || '';
+    test('entry prep with armor behind: OLIVE carries entry-armor', () =>
+        assert.ok(/entry-armor/.test(oWhy()), oWhy()));
+    global.player.defense = 32;
+    test('...and past the park gate (30) the checkpoint stands down', () =>
+        assert.ok(!/entry-armor/.test(oWhy()), oWhy()));
 
     // A mark on the seat releases it — the corner doctrine, unchanged.
     global.dropMarks = [{ x: 20, y: 20, r: 58, dmg: 72, tele: 0.6, at: 1155 }];
