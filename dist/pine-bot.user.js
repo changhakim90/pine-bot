@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.97.0
+// @version      6.97.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.97.0';
+    const SCRIPT_VERSION = '6.97.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -10355,6 +10355,19 @@
                 try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
                 return 'phase audit cleared';
             };
+            // v6.97.1 (user: "let's build this combined probe now"):
+            // pineBot.report() — the whole statistics picture in ONE paste.
+            // The four probes every tuning conversation has been asking for
+            // separately: the version table, the phase funnel, the raw
+            // per-run phase rows, and the damage attribution. Console use:
+            //   copy(JSON.stringify(pineBot.report()))
+            window.pineBot.report = () => ({
+                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution.',
+                compare: versionComparison(),
+                funnel: window.pineBot.phaseAudit(),
+                phases: (phaseAudit.rows || []).slice(),
+                damage: window.pineBot.damageAudit()
+            });
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
                 try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }

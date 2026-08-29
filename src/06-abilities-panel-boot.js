@@ -1138,6 +1138,19 @@
                 try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
                 return 'phase audit cleared';
             };
+            // v6.97.1 (user: "let's build this combined probe now"):
+            // pineBot.report() — the whole statistics picture in ONE paste.
+            // The four probes every tuning conversation has been asking for
+            // separately: the version table, the phase funnel, the raw
+            // per-run phase rows, and the damage attribution. Console use:
+            //   copy(JSON.stringify(pineBot.report()))
+            window.pineBot.report = () => ({
+                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution.',
+                compare: versionComparison(),
+                funnel: window.pineBot.phaseAudit(),
+                phases: (phaseAudit.rows || []).slice(),
+                damage: window.pineBot.damageAudit()
+            });
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
                 try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }

@@ -4632,6 +4632,17 @@ if (which === 'phase-audit') {
             assert.ok(g.dayClearRate === 0.5 && g.entrySurvival === 0.6 && g.deepRate === 0.1, JSON.stringify(g)));
         test('the cap-out is counted, and seatedRate reads 2/5', () =>
             assert.ok(g.capOuts === 1 && g.seatedRate === 0.4, JSON.stringify(g)));
+        // 4. v6.97.1 THE COMBINED PROBE (user): pineBot.report() bundles the
+        //    four probes into one paste. The phases key must be the audit's
+        //    OWN rows (the 10 seeded here), not a re-derivation.
+        const rep2 = global.window.pineBot.report();
+        test('pineBot.report() bundles compare/funnel/phases/damage', () =>
+            assert.ok(rep2 && rep2.compare && rep2.funnel && Array.isArray(rep2.phases) && rep2.damage,
+                Object.keys(rep2 || {}).join(',')));
+        test('...and its phases are the seeded audit rows themselves', () =>
+            assert.strictEqual(rep2.phases.length, 10));
+        test('...and its funnel is the same aggregation', () =>
+            assert.strictEqual(rep2.funnel.groups.find(x => x.version === 'X').n, 10));
         done();
     }, 700);
 }
