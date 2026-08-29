@@ -3847,7 +3847,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4713,6 +4713,38 @@ if (which === 'joe-day') {
         pineBot.config.threat.fragileMarkFearMul = 1.6;
         done();
     }, 700);
+}
+
+// v6.97.2 — MULTI-TAB AUDIT MERGE. Measured: 266 runs since the store
+// reset, 58 phase rows kept (~22%) — the user runs 2+ game tabs, the learn
+// store merges across tabs, and the row-list audits clobbered each other.
+// appendAuditRow re-reads the stored list before every append.
+if (which === 'audit-merge') {
+    const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    // OUR tab booted when the audit held one old row; ANOTHER tab has since
+    // appended two more. Our in-memory view is stale by exactly those two.
+    const oldRow = { v: 'A', t: 100 };
+    const foreign1 = { v: 'B', t: 200 }, foreign2 = { v: 'B', t: 300 };
+    store.pineBotPhaseAudit = JSON.stringify({ rows: [oldRow, foreign1, foreign2] });
+    let mem = { rows: [oldRow] };   // the stale in-memory object
+    mem = T.appendAuditRow('pineBotPhaseAudit', mem, 'rows', { v: 'ME', t: 400 }, 240);
+    const stored = JSON.parse(store.pineBotPhaseAudit).rows;
+    test('the append lands ON TOP of the other tab\'s rows, not over them', () =>
+        assert.deepStrictEqual(stored.map(r => r.t), [100, 200, 300, 400], JSON.stringify(stored)));
+    test('...and the caller adopts the merged view', () =>
+        assert.strictEqual(mem.rows.length, 4));
+    // The keep bound still trims oldest-first across the MERGED list.
+    mem = T.appendAuditRow('pineBotPhaseAudit', mem, 'rows', { v: 'ME', t: 500 }, 3);
+    test('the keep bound trims the merged list, oldest first', () =>
+        assert.deepStrictEqual(JSON.parse(store.pineBotPhaseAudit).rows.map(r => r.t), [300, 400, 500]));
+    // A corrupt stored blob must not kill the append — our row still lands.
+    store.pineBotPhaseAudit = '{CORRUPT';
+    mem = T.appendAuditRow('pineBotPhaseAudit', { rows: [oldRow] }, 'rows', { v: 'ME', t: 600 }, 240);
+    test('a corrupt stored audit falls back to the in-memory list', () =>
+        assert.deepStrictEqual(JSON.parse(store.pineBotPhaseAudit).rows.map(r => r.t), [100, 600]));
+    done();
 }
 
 // v6.92.0 — THE ARMING CAP, written from a LIVE READ, not from theory.

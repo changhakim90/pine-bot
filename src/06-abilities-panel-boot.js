@@ -870,7 +870,7 @@
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
-                    getLearn: () => learn, loadLearn, buildPhaseRow, demoSave: () => demoSave(),
+                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, demoSave: () => demoSave(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },

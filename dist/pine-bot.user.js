@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.97.1
+// @version      6.97.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.97.1';
+    const SCRIPT_VERSION = '6.97.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -5335,6 +5335,29 @@
         };
     }
 
+    // v6.97.2 MULTI-TAB AUDIT APPEND (user runs 2+ game tabs). The learn
+    // store merges across tabs (finishRun re-loads before crediting), but
+    // the ROW-LIST audits never did: each tab kept its own in-memory array
+    // and wrote the WHOLE object, so parallel tabs clobbered each other's
+    // rows — measured: 266 runs since the store reset, 58 phase rows kept
+    // (~22%, consistent with 4-5 tabs). Every append now re-reads the
+    // stored list first, so this tab's new row lands on top of whatever
+    // every other tab has written since our boot. The race window is one
+    // synchronous read-modify-write — two tabs finishing in the same
+    // millisecond can still lose one row, which is noise; losing 78% was
+    // not. Returns the merged object so the caller adopts the shared view.
+    function appendAuditRow(key, obj, field, row, keep) {
+        try {
+            const cur = JSON.parse(localStorage.getItem(key) || 'null');
+            if (cur && Array.isArray(cur[field])) obj[field] = cur[field];
+        } catch (e) { }
+        obj[field] = obj[field] || [];
+        obj[field].push(row);
+        while (obj[field].length > keep) obj[field].shift();
+        localStorage.setItem(key, JSON.stringify(obj));
+        return obj;
+    }
+
     function finishRun() {
         if (!runActive) return;
         runActive = false;
@@ -5454,25 +5477,24 @@
         // the question it answers is a comparison between two groups, not a total.
         try {
             if (hellRunEnded) {
-                parkAudit.runs.push({
+                // v6.97.2: merge-on-write — see appendAuditRow.
+                parkAudit = appendAuditRow(PARK_AUDIT_KEY, parkAudit, 'runs', {
                     t: Math.round(stats.time || 0),
                     first: parkFirstS,
                     onShare: runHellTicks ? +(parkOnTicks / runHellTicks).toFixed(3) : null,
                     seatShare: runHellTicks ? +(parkedTicks / runHellTicks).toFixed(3) : null,
                     entry: entrySample
-                });
-                while (parkAudit.runs.length > 80) parkAudit.runs.shift();
-                localStorage.setItem(PARK_AUDIT_KEY, JSON.stringify(parkAudit));
+                }, 80);
             }
         } catch (e) { }
         // v6.96.2 PHASE AUDIT: one row per run, EVERY run — parkAudit above
         // only sees hell runs, and joe's whole problem lives in the 82% that
         // die before it. See buildPhaseRow for the classification.
         try {
-            phaseAudit.rows.push(buildPhaseRow(Math.round(stats.time || 0), hellRunEnded));
-            const keep = (CONFIG.phaseAudit && CONFIG.phaseAudit.keep) || 240;
-            while (phaseAudit.rows.length > keep) phaseAudit.rows.shift();
-            localStorage.setItem(PHASE_AUDIT_KEY, JSON.stringify(phaseAudit));
+            // v6.97.2: merge-on-write — see appendAuditRow.
+            phaseAudit = appendAuditRow(PHASE_AUDIT_KEY, phaseAudit, 'rows',
+                buildPhaseRow(Math.round(stats.time || 0), hellRunEnded),
+                (CONFIG.phaseAudit && CONFIG.phaseAudit.keep) || 240);
         } catch (e) { }
         try {
             if (runHellTicks > 0) {
@@ -10087,7 +10109,7 @@
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
-                    getLearn: () => learn, loadLearn, buildPhaseRow, demoSave: () => demoSave(),
+                    getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, demoSave: () => demoSave(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },
