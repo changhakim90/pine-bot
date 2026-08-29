@@ -1,6 +1,16 @@
 
     function maybeAbilities(plan) {
         const now = Date.now();
+        // v6.100.0 SPEED-INVARIANT ABILITY CLOCK: the dash and ult retry
+        // gates are millisecond gates, and at a frame multiplier wall-ms run
+        // slow against the game (one ult ask per ~200 game-seconds at 100x —
+        // the 6.99.3/4 wreckage). Both gates now read GAME milliseconds when
+        // gameTime exists; a stamp from a previous run (gameTime restarted)
+        // resets to zero.
+        const gtClk = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+        const clockMs = gtClk != null ? gtClk * 1000 : now;
+        if (lastUlt > clockMs) lastUlt = 0;
+        if (lastDash > clockMs) lastDash = 0;
         const A = CONFIG.abilities;
         // DASH (defensive): the lower our HP, the earlier we bail out — and
         // standing inside a telegraphed blast zone is an emergency that
@@ -92,11 +102,11 @@
         // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
         // carrying the bot OUT of the projectile paths that are supposed to
         // end the run. Holstered like the ult while the cap patrol walks.
-        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
+        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
-            lastDash = now;
+            lastDash = clockMs;
             callGame('tryDash', plan.dx, plan.dy);
         }
         // ULTIMATE (damage + INVINCIBILITY): best spent when damage is coming
@@ -267,11 +277,11 @@
         // stability-proof latch) — honor it here too, or the ult would carry
         // an early-capped build through its own patrol.
         const capDive = ((DH.runCapS || 0) > 0 && gtU >= DH.runCapS) || plan.capDive === true;
-        if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
+        if (!capDive && A.ultEnabled && hasGame('useUltimate') && clockMs - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
                 ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
-            lastUlt = now;
+            lastUlt = clockMs;
             callGame('useUltimate');
             poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
         }
@@ -300,8 +310,18 @@
                 if (!running) return;   // a handler may have stopped us (hell record)
             }
 
-            if (now - lastTick >= CONFIG.tickMs) {
+            // v6.100.0 SPEED-INVARIANT TICK: plan every tickMs of GAME time.
+            // Under the frame multiplier this loop is itself called once per
+            // VIRTUAL frame (rAF is multiplied), so gating on gameTime keeps
+            // the per-game-second planning cadence identical at any speed.
+            // The wall clock (250 ms) stays as the keep-alive for pauses and
+            // states where gameTime is frozen or absent.
+            const gtL = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+            const gtDue = gtL != null && (gtL < lastTickGt || gtL - lastTickGt >= CONFIG.tickMs / 1000);
+            const wallDue = now - lastTick >= (gtL != null ? Math.max(CONFIG.tickMs, 250) : CONFIG.tickMs);
+            if (gtDue || wallDue) {
                 lastTick = now;
+                if (gtL != null) lastTickGt = gtL;
                 const st = G.state;
                 const playing = (st == null) ? true : (st === 'playing');
                 if (playing) {
@@ -333,7 +353,7 @@
         running = true;
         stopReason = null;
         applyParams(bestParams());
-        lastTick = 0; lastOverlay = 0;
+        lastTick = 0; lastOverlay = 0; lastTickGt = 0;
         rafId = requestAnimationFrame(mainLoop);
         setStatus('running');
         log('started');

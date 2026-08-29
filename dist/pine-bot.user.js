@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.99.4
+// @version      6.100.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.99.4';
+    const SCRIPT_VERSION = '6.100.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -582,7 +582,12 @@
             // armor gate and mark caution return, and 03's entry-armor
             // checkpoint routes late-day picks back into OLIVE so the run
             // arrives at the entrance wearing the seat build.
-            entryPrepFromS: 900,
+            // v6.100.0: 900 -> 1050. The 6.99.2 row (n=131, pre-speed, clean)
+            // measured the 900 cutoff collapsing dayClear 0.15 -> 0.02 — the
+            // pre-registered failure mode ("push it later, don't revert").
+            // 1050 leaves the last 2.5 minutes for arriving armored; the
+            // funding rush keeps the 17.5 minutes that produced the 0.15.
+            entryPrepFromS: 1050,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -1830,6 +1835,14 @@
     let running = false;
     let rafId = null;
     let lastTick = 0, lastOverlay = 0;
+    // v6.100.0 SPEED INVARIANCE: at a frame multiplier (the pine-speed
+    // userscript runs the game at up to 100 virtual frames per real frame)
+    // every wall-clock gate runs slow relative to the GAME — the 6.99.3/4
+    // rows measured the wreckage: the planner re-planned once per ~3.3
+    // game-seconds and the death pile moved to 47-115 s. Combat cadence is
+    // therefore gated on GAME time; the wall clock stays only as the
+    // keep-alive for menus and pauses, where gameTime is frozen.
+    let lastTickGt = 0;
     const heldKeys = new Set();
     let smoothVec = { x: 0, y: 0 };   // un-normalised, so a reversal can pass through zero
     let lastDir = { x: 0, y: 0 };     // unit heading actually being driven
@@ -8731,11 +8744,16 @@
                 // worth more spent levelling. Only in-range time counts, so
                 // the walk over never condemns a passout.
                 if (tgtPo) {
-                    const nowPo = Date.now();
-                    if (poTrack.id !== tgtPo.id) {
+                    // v6.100.0 SPEED INVARIANCE: the TTK probe measures dps
+                    // in GAME seconds (it was wall seconds — under the frame
+                    // multiplier that inflated dps 100x and made every budget
+                    // comparison meaningless). gt going backwards = new run:
+                    // re-init the track.
+                    const nowPo = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                    if (poTrack.id !== tgtPo.id || nowPo < poTrack.at) {
                         poTrack = { id: tgtPo.id, hp: tgtPo.hp, at: nowPo, inRangeS: 0, dps: 0 };
                     } else {
-                        const dt = (nowPo - poTrack.at) / 1000;
+                        const dt = nowPo - poTrack.at;
                         if (dt >= 0.4) {
                             const inRange = (Math.hypot(tgtPo.x - p.x, tgtPo.y - p.y) - tgtPo.r) < M.poEngageRange;
                             if (inRange) poTrack.inRangeS += dt;
@@ -8745,7 +8763,7 @@
                                 poTrack.dps = poTrack.dps > 0 ? poTrack.dps * 0.7 + inst * 0.3 : inst;
                             }
                             poTrack.hp = tgtPo.hp;
-                            poTrack.at = nowPo;
+                            poTrack.at = nowPo;   // game seconds (v6.100.0)
                         }
                     }
                     // The probe measures BASE-ATTACK dps, and the base attack
@@ -9492,6 +9510,16 @@
 
     function maybeAbilities(plan) {
         const now = Date.now();
+        // v6.100.0 SPEED-INVARIANT ABILITY CLOCK: the dash and ult retry
+        // gates are millisecond gates, and at a frame multiplier wall-ms run
+        // slow against the game (one ult ask per ~200 game-seconds at 100x —
+        // the 6.99.3/4 wreckage). Both gates now read GAME milliseconds when
+        // gameTime exists; a stamp from a previous run (gameTime restarted)
+        // resets to zero.
+        const gtClk = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+        const clockMs = gtClk != null ? gtClk * 1000 : now;
+        if (lastUlt > clockMs) lastUlt = 0;
+        if (lastDash > clockMs) lastDash = 0;
         const A = CONFIG.abilities;
         // DASH (defensive): the lower our HP, the earlier we bail out — and
         // standing inside a telegraphed blast zone is an emergency that
@@ -9583,11 +9611,11 @@
         // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
         // carrying the bot OUT of the projectile paths that are supposed to
         // end the run. Holstered like the ult while the cap patrol walks.
-        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
+        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
-            lastDash = now;
+            lastDash = clockMs;
             callGame('tryDash', plan.dx, plan.dy);
         }
         // ULTIMATE (damage + INVINCIBILITY): best spent when damage is coming
@@ -9758,11 +9786,11 @@
         // stability-proof latch) — honor it here too, or the ult would carry
         // an early-capped build through its own patrol.
         const capDive = ((DH.runCapS || 0) > 0 && gtU >= DH.runCapS) || plan.capDive === true;
-        if (!capDive && A.ultEnabled && hasGame('useUltimate') && now - lastUlt > ultGate &&
+        if (!capDive && A.ultEnabled && hasGame('useUltimate') && clockMs - lastUlt > ultGate &&
             (plan.near >= A.ultCrowd || plan.hpRatio < A.ultHpRatio ||
                 defensive || offensive || emergency || entryHold || surgeCrowd || harvest || lootTargets || linebackerBurst || scalingMobs || ultSpam || contactSave || survivalUlt ||
                 ultChain || ultAlways)) {   // v6.88.2: deep + invuln ult = fire, unconditionally
-            lastUlt = now;
+            lastUlt = clockMs;
             callGame('useUltimate');
             poReconsider();   // v6.86.2: the ult is the passout clear tool — re-open bodies the base attack gave up on
         }
@@ -9791,8 +9819,18 @@
                 if (!running) return;   // a handler may have stopped us (hell record)
             }
 
-            if (now - lastTick >= CONFIG.tickMs) {
+            // v6.100.0 SPEED-INVARIANT TICK: plan every tickMs of GAME time.
+            // Under the frame multiplier this loop is itself called once per
+            // VIRTUAL frame (rAF is multiplied), so gating on gameTime keeps
+            // the per-game-second planning cadence identical at any speed.
+            // The wall clock (250 ms) stays as the keep-alive for pauses and
+            // states where gameTime is frozen or absent.
+            const gtL = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+            const gtDue = gtL != null && (gtL < lastTickGt || gtL - lastTickGt >= CONFIG.tickMs / 1000);
+            const wallDue = now - lastTick >= (gtL != null ? Math.max(CONFIG.tickMs, 250) : CONFIG.tickMs);
+            if (gtDue || wallDue) {
                 lastTick = now;
+                if (gtL != null) lastTickGt = gtL;
                 const st = G.state;
                 const playing = (st == null) ? true : (st === 'playing');
                 if (playing) {
@@ -9824,7 +9862,7 @@
         running = true;
         stopReason = null;
         applyParams(bestParams());
-        lastTick = 0; lastOverlay = 0;
+        lastTick = 0; lastOverlay = 0; lastTickGt = 0;
         rafId = requestAnimationFrame(mainLoop);
         setStatus('running');
         log('started');

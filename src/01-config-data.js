@@ -580,7 +580,12 @@
             // armor gate and mark caution return, and 03's entry-armor
             // checkpoint routes late-day picks back into OLIVE so the run
             // arrives at the entrance wearing the seat build.
-            entryPrepFromS: 900,
+            // v6.100.0: 900 -> 1050. The 6.99.2 row (n=131, pre-speed, clean)
+            // measured the 900 cutoff collapsing dayClear 0.15 -> 0.02 — the
+            // pre-registered failure mode ("push it later, don't revert").
+            // 1050 leaves the last 2.5 minutes for arriving armored; the
+            // funding rush keeps the 17.5 minutes that produced the 0.15.
+            entryPrepFromS: 1050,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -1828,6 +1833,14 @@
     let running = false;
     let rafId = null;
     let lastTick = 0, lastOverlay = 0;
+    // v6.100.0 SPEED INVARIANCE: at a frame multiplier (the pine-speed
+    // userscript runs the game at up to 100 virtual frames per real frame)
+    // every wall-clock gate runs slow relative to the GAME — the 6.99.3/4
+    // rows measured the wreckage: the planner re-planned once per ~3.3
+    // game-seconds and the death pile moved to 47-115 s. Combat cadence is
+    // therefore gated on GAME time; the wall clock stays only as the
+    // keep-alive for menus and pauses, where gameTime is frozen.
+    let lastTickGt = 0;
     const heldKeys = new Set();
     let smoothVec = { x: 0, y: 0 };   // un-normalised, so a reversal can pass through zero
     let lastDir = { x: 0, y: 0 };     // unit heading actually being driven

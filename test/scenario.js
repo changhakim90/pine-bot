@@ -1293,10 +1293,16 @@ if (which === 'po-feasibility') {
                                         ultReadyAt: 1e9 }, extra || {});
         const po = { type: 'passout', x: 360, y: 270, r: 37, fallT: 0, hp, maxHp: hp, id: 7 };
         global.enemies = [po];
+        // v6.100.0: the TTK probe reads GAME seconds now, so the scene
+        // advances gameTime alongside the wall spin (0.15 game-sec per
+        // ~100 ms tick — a mild speed-up that also keeps the scenario
+        // inside the 30 s per-scenario timeout).
+        global.gameTime = 900;
         let pl; const t0 = Date.now();
         while (Date.now() - t0 < ms) {
             pl = pineBot.test.planMove();
             po.hp = Math.max(1, po.hp - dmgPerTick);
+            global.gameTime += 0.15;
             const w = Date.now(); while (Date.now() - w < 100) { }
         }
         return { plan: pl, po };
@@ -1312,21 +1318,39 @@ if (which === 'po-feasibility') {
     // every pile eventually, and an abandoned body is an abandoned tip roll.
     // (7.5s burns: past the 6s poProbeS window, and three of them fit the
     // 30s per-scenario timeout that the third burn breached at 9s each)
-    const hard = burn(80000, 30, 7500);
+    const hard = burn(80000, 30, 4500);
     test('DAY: an unkillable passout is NOT abandoned — the ult will cycle to it', () =>
         assert.strictEqual(hard.plan.poGaveUp, 0, 'gave up ' + hard.plan.poGaveUp));
     // HELL keeps the feasibility doctrine: latch hell, re-run the same burn.
     global.hell = true;
     pineBot.test.handleScreens();   // the playing handler latches hellDetected off the lexical flag
-    const hellHard = burn(80000, 30, 7500);
+    const hellHard = burn(80000, 30, 4500);
     test('HELL: the unkillable passout is abandoned after the probe window', () =>
         assert.strictEqual(hellHard.plan.poGaveUp, 1, 'gave up ' + hellHard.plan.poGaveUp));
     test('the abandonment is logged with the measured numbers', () =>
         assert.ok(logs.some(l => /passout .* abandoned/.test(l)), logs.slice(-3).join(' | ')));
     // ...but not while the ult — the actual clear tool — is nearly ready
-    const withUlt = burn(80000, 30, 7500, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
+    const withUlt = burn(80000, 30, 4500, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
     test('a body the ult is about to clear is NOT abandoned', () =>
         assert.strictEqual(withUlt.plan.poGaveUp, 0, 'gave up ' + withUlt.plan.poGaveUp));
+    // v6.100.0 SPEED INVARIANCE: freeze the GAME clock and the feasibility
+    // window must not accumulate — the wall-clock probe abandoned bodies on
+    // wall time (during pauses, and 100x too fast under the multiplier).
+    {
+        pineBot.test.resetPoTracking();
+        global.player = { x: 300, y: 270, hp: 180, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 1e9 };
+        const po = { type: 'passout', x: 360, y: 270, r: 37, fallT: 0, hp: 80000, maxHp: 80000, id: 7 };
+        global.enemies = [po];
+        global.gameTime = 900;   // and it STAYS 900 — frozen
+        let pl; const t0 = Date.now();
+        while (Date.now() - t0 < 6600) {
+            pl = pineBot.test.planMove();
+            po.hp = Math.max(1, po.hp - 30);
+            const w = Date.now(); while (Date.now() - w < 100) { }
+        }
+        test('a FROZEN game clock accumulates no feasibility window', () =>
+            assert.strictEqual(pl.poGaveUp, 0, 'gave up ' + pl.poGaveUp));
+    }
     done();
 }
 
@@ -1413,6 +1437,10 @@ if (which === 'flight') {
         let ults = 0, dashes = 0;
         global.useUltimate = () => { ults++; };
         global.tryDash = () => { dashes++; };
+        // v6.100.0: the ability gates read GAME time — the boot frames ran at
+        // gt 3000 and may have spent the gate there, so advance the clock the
+        // way live play would before asserting a fresh fire.
+        global.gameTime = (typeof global.gameTime === 'number' ? global.gameTime : 3000) + 10;
         pineBot.test.maybeAbilities(plan);
         // the ult path here is `defensive` (panic && near >= 4), not ultSpam —
         // see the note in maybeAbilities. Asserted because the directive names
@@ -1428,6 +1456,24 @@ if (which === 'flight') {
         // with hpPanic set, which is precisely that case.
         test('a low-HP deep-hell panic does NOT dash any more', () =>
             assert.strictEqual(dashes, 0, 'dashes ' + dashes + ' — panic should anchor, not sprint'));
+        // v6.100.0 SPEED INVARIANCE: with the GAME clock frozen, wall time
+        // alone must not reopen the ult gate — at a 100x frame multiplier a
+        // wall-gated retry starved the ult 100:1 against game time (the
+        // 6.99.3/4 death pile at 47-115 s).
+        {
+            const savedCd = pineBot.config.abilities.ultCooldownMs;
+            pineBot.config.abilities.ultCooldownMs = 1;
+            global.gameTime = (typeof global.gameTime === 'number' ? global.gameTime : 3010) + 10;
+            ults = 0;
+            pineBot.test.maybeAbilities(plan);            // gt advanced: fires
+            const afterFirst = ults;
+            const w0 = Date.now(); while (Date.now() - w0 < 30) { }   // wall +30ms, gt frozen
+            pineBot.test.maybeAbilities(plan);
+            test('a frozen game clock holds the ult gate shut whatever the wall does', () =>
+                assert.ok(afterFirst >= 1 && ults === afterFirst,
+                    JSON.stringify({ afterFirst, ults })));
+            pineBot.config.abilities.ultCooldownMs = savedCd;
+        }
         done();
     }, 2000);
 }
@@ -4388,23 +4434,34 @@ if (which === 'joe-guard') {
     pl = pineBot.test.planMove();
     test('at gt 60 with a weapon owned, the local pile walk is already open', () =>
         assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
-    // ENTRY PREP: from entryPrepFromS (900) the rush stands down — the
-    // armor gate returns so entrants arrive wearing the seat build. (The
-    // unarmored call also clears the carried harvest clock: harvWant false
-    // nulls harvStartS, so the armored call at 960 starts a fresh hold.)
+    // ENTRY PREP: from entryPrepFromS (1050, v6.100.0 — 900 measured too
+    // blunt: dayClear 0.15 -> 0.02 on the clean 6.99.2 row) the rush stands
+    // down — the armor gate returns so entrants arrive wearing the seat
+    // build. (The unarmored call also clears the carried harvest clock:
+    // harvWant false nulls harvStartS, so the armored call starts fresh.)
+    global.gameTime = 1080;
+    global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
+                      ultReadyAt: 100, defense: 12 };
+    global.enemies = [mkPo(350, 270)];
+    pl = pineBot.test.planMove();
+    test('gt 1080: the fund rush stands down — unarmored joe stays home again', () =>
+        assert.ok(!pl.harvesting && pl.fundRush === false,
+            JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
+    global.gameTime = 1090;
+    global.player.defense = 25;
+    pl = pineBot.test.planMove();
+    test('...armored (25) past entry prep, the ult-covered walk still opens', () =>
+        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
+    // ...and at 950 — under the 900 cutoff this was already shut — the rush
+    // now still runs: the late-day funding window belongs to the rush.
     global.gameTime = 950;
     global.player = { x: 150, y: 270, hp: 95, maxHp: 100, speed: 3.0, r: 7.2,
                       ultReadyAt: 100, defense: 12 };
     global.enemies = [mkPo(350, 270)];
     pl = pineBot.test.planMove();
-    test('gt 950: the fund rush stands down — unarmored joe stays home again', () =>
-        assert.ok(!pl.harvesting && pl.fundRush === false,
+    test('gt 950 still rushes (the 900 cutoff was the 6.99.2 dayClear collapse)', () =>
+        assert.ok(pl.harvesting === true && pl.fundRush === true,
             JSON.stringify({ h: pl.harvesting, fr: pl.fundRush })));
-    global.gameTime = 960;
-    global.player.defense = 25;
-    pl = pineBot.test.planMove();
-    test('...armored (25) past entry prep, the ult-covered walk still opens', () =>
-        assert.ok(pl.harvesting === true, JSON.stringify({ h: pl.harvesting })));
     test('the fund-rush config carries its shipped defaults', () =>
         assert.ok(pineBot.config.movement.fundProjPx === 45 &&
                   pineBot.config.movement.litterHuntN === 4 &&
@@ -4413,7 +4470,7 @@ if (which === 'joe-guard') {
                   pineBot.config.movement.dayRestMul === 0.4 &&
                   pineBot.config.movement.farmFromS === 45 &&
                   pineBot.config.movement.trekFromS === 150 &&
-                  pineBot.config.movement.entryPrepFromS === 900));
+                  pineBot.config.movement.entryPrepFromS === 1050));
 
     // ...and PAT is untouched by the fragile profile: same unarmored scene.
     pineBot.test.setChar('pat');
@@ -4509,7 +4566,7 @@ if (which === 'entry-seat') {
         assert.ok(!/entry-regen/.test(wWhy()), wWhy()));
     pineBot.test.setOwned({ 'SIMPLE SYRUP': 0 });
     // v6.99.2 ENTRY-ARMOR CHECKPOINT: defense behind at entry prep -> OLIVE jumps.
-    global.gameTime = 950;
+    global.gameTime = 1080;   // v6.100.0: entryPrepFromS moved 900 -> 1050
     global.player.defense = 20;
     const oWhy = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 2, maxlv: 6 }, 0, []).why || '';
     test('entry prep with armor behind: OLIVE carries entry-armor', () =>

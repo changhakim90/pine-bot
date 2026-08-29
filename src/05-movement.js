@@ -2376,11 +2376,16 @@
                 // worth more spent levelling. Only in-range time counts, so
                 // the walk over never condemns a passout.
                 if (tgtPo) {
-                    const nowPo = Date.now();
-                    if (poTrack.id !== tgtPo.id) {
+                    // v6.100.0 SPEED INVARIANCE: the TTK probe measures dps
+                    // in GAME seconds (it was wall seconds — under the frame
+                    // multiplier that inflated dps 100x and made every budget
+                    // comparison meaningless). gt going backwards = new run:
+                    // re-init the track.
+                    const nowPo = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                    if (poTrack.id !== tgtPo.id || nowPo < poTrack.at) {
                         poTrack = { id: tgtPo.id, hp: tgtPo.hp, at: nowPo, inRangeS: 0, dps: 0 };
                     } else {
-                        const dt = (nowPo - poTrack.at) / 1000;
+                        const dt = nowPo - poTrack.at;
                         if (dt >= 0.4) {
                             const inRange = (Math.hypot(tgtPo.x - p.x, tgtPo.y - p.y) - tgtPo.r) < M.poEngageRange;
                             if (inRange) poTrack.inRangeS += dt;
@@ -2390,7 +2395,7 @@
                                 poTrack.dps = poTrack.dps > 0 ? poTrack.dps * 0.7 + inst * 0.3 : inst;
                             }
                             poTrack.hp = tgtPo.hp;
-                            poTrack.at = nowPo;
+                            poTrack.at = nowPo;   // game seconds (v6.100.0)
                         }
                     }
                     // The probe measures BASE-ATTACK dps, and the base attack
