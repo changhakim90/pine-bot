@@ -80,6 +80,23 @@
     function loadLearnInner() {
         let d = null;
         try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
+        // v6.96.2 BACKUP HEAL. The silent catch above is where 153 joe runs
+        // died on 2026-08-29: an unreadable (or vanished) primary blob fell
+        // through to `d = {}` with no log, no .broken copy, nothing — the
+        // outer loadLearn wrapper only catches STRUCTURAL throws below this
+        // line, so a clean parse failure reset the store invisibly. Every
+        // successful save now leaves a `__bak` copy (see saveLearn); when the
+        // primary is missing or unreadable, the backup — at worst one save
+        // old — is the store.
+        if (!d || typeof d !== 'object') {
+            try {
+                const b = JSON.parse(localStorage.getItem(learnKey() + '__bak'));
+                if (b && typeof b === 'object') {
+                    d = b;
+                    log('own store missing/unreadable — HEALED from backup (' + (b.runs || 0) + ' runs recovered)');
+                }
+            } catch (e) { }
+        }
         if (!d || typeof d !== 'object') d = {};
         // SHARED comparison state overlays the per-bartender blob. First
         // load migrates the legacy blob's versions/snapshots into the shared
@@ -222,17 +239,54 @@
         // that must survive), versions pruned like snapshots already were, and
         // a failure is logged and surfaced once.
         const own = (() => { const { versions, snapshots, ...rest } = learn; return rest; })();
-        let ok = true;
-        try { localStorage.setItem(learnKey(), JSON.stringify(own)); }
-        catch (e) { ok = false; log('SAVE FAILED (own store): ' + (e && e.name) + ' — learning for this run is lost'); }
+        let ok = true, ownSaved = false;
+        let ownBlob = JSON.stringify(own);
+        try { localStorage.setItem(learnKey(), ownBlob); ownSaved = true; }
+        catch (e) {
+            // v6.96.2 QUOTA PATH: a full origin used to cost the whole run's
+            // learning ("learning for this run is lost"). The store's own
+            // bulk is almost entirely rings that exist for REPORTING —
+            // runLog, reward history, the improvement curve — so trim those
+            // hard and retry once before conceding. The CEM mean/sigma and
+            // the item/build statistics, the parts that ARE the learning,
+            // are a few KB and always fit.
+            try {
+                own.runLog = (own.runLog || []).slice(-10);
+                own.history = (own.history || []).slice(-40);
+                own.genHistory = (own.genHistory || []).slice(-40);
+                own.hof = (own.hof || []).slice(0, 5);
+                ownBlob = JSON.stringify(own);
+                localStorage.setItem(learnKey(), ownBlob);
+                ownSaved = true;
+                log('SAVE squeezed: own store trimmed to ' + ownBlob.length + ' bytes to fit quota');
+            } catch (e2) { ok = false; log('SAVE FAILED (own store): ' + (e2 && e2.name) + ' — learning for this run is lost'); }
+        }
+        // v6.96.2: the backup only ever holds a blob the primary ACCEPTED, so
+        // a crash mid-save leaves the backup one save old, never corrupt-both.
+        if (ownSaved) { try { localStorage.setItem(learnKey() + '__bak', ownBlob); } catch (e) { } }
         try {
             pruneVersions();
             localStorage.setItem(SHARED_KEY, JSON.stringify({
                 versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
             }));
         } catch (e) {
-            log('SAVE FAILED (shared table): ' + (e && e.name) + ' — comparison history is not being recorded');
-            ok = false;
+            // v6.96.2 QUOTA PATH (shared): the bulk is the per-version
+            // survival-time rings (up to 600 entries each). Trim every row
+            // but the live one to its last 40 times — enough for a median —
+            // and retry once.
+            try {
+                const cur = scriptTag();
+                for (const [k, v] of Object.entries(learn.versions || {})) {
+                    if (k !== cur && v && Array.isArray(v.times) && v.times.length > 40) v.times = v.times.slice(-40);
+                }
+                localStorage.setItem(SHARED_KEY, JSON.stringify({
+                    versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
+                }));
+                log('SAVE squeezed: shared time rings trimmed to fit quota');
+            } catch (e2) {
+                log('SAVE FAILED (shared table): ' + (e2 && e2.name) + ' — comparison history is not being recorded');
+                ok = false;
+            }
         }
         if (!ok && !saveWarned) { saveWarned = true; try { setStatus('⚠ localStorage full — learning is NOT being saved'); } catch (e2) { } }
         return ok;

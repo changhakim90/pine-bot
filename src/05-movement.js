@@ -20,6 +20,10 @@
         {
             const MF = CONFIG.movement;
             const gtF0 = safe(() => gameTime, 0) || 0;
+            // v6.96.2 phase audit: the hell latch happens at several sites in
+            // 04; recording its GAME TIME lazily here (every gather sees the
+            // flag within a tick of the latch) beats editing five latch sites.
+            if (hellDetected && hellEnterGt == null) hellEnterGt = gtF0;
             const defNowF = liveDefense();
             const mHpF = p.maxHp || p.maxHealth || 100;
             farmRef.v = MF.farmStance !== false && !hellDetected &&
@@ -2833,22 +2837,33 @@
         // moves nothing; an override moves everything.
         const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
-        let capTarget = null;
-        if (capDive) {
-            let capD = Infinity;
-            for (const e of th.enemies) {
-                if (e.dormant || e.distant) continue;   // a body that cannot hit back cannot kill us
-                const d = Math.hypot(e.x - p.x, e.y - p.y);
-                if (d < capD) { capD = d; capTarget = e; }
-            }
-        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
-        if (capDive && capTarget) {
-            const dC = Math.hypot(capTarget.x - p.x, capTarget.y - p.y) || 1;
-            vx = (capTarget.x - p.x) / dC; vy = (capTarget.y - p.y) / dC;
+        if (capDive) {
+            capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
+            // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
+            // needs to walk around the map and doesn't need to dash and it
+            // will keep getting hit by the common projectile mobs." Both
+            // dives were still guesses at what kills a maxed build — 6.96.0
+            // walked at commons (37 minutes, contact bounced off), 6.96.1 at
+            // bosses. The user's answer is the one the data already signed:
+            // run 4589 (pat, 220 min) died to a PROJECTILE the moment it was
+            // forced off the corner. So the cap now just walks the open map —
+            // a five-point circuit through the centre and the four corner
+            // regions — with the dash holstered alongside the ult (see 06),
+            // and the ranged mobs' crossfire does the rest. No target, no
+            // gather dependence: the patrol runs even on a tick that sees no
+            // enemies at all.
+            const WPS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85]];
+            const wp = WPS[capWpIdx % WPS.length];
+            const wx = fieldW * wp[0], wy = fieldH * wp[1];
+            const dW = Math.hypot(wx - p.x, wy - p.y);
+            if (dW < 30 || (capWpUntil && gtCap >= capWpUntil)) {
+                capWpIdx++; capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
+            } else if (!capWpUntil) capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
+            vx = (wx - p.x) / (dW || 1); vy = (wy - p.y) / (dW || 1);
         } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }

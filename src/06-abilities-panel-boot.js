@@ -88,7 +88,11 @@
         const cornerHeld = plan.cornerAnchor === true;
         const dashProductive = escaping ||
             (!deepPanic && (!cornerHeld || plan.cornerward === true));
-        if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
+        // v6.96.2 (user): "it ... doesn't need to dash" past the run cap —
+        // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
+        // carrying the bot OUT of the projectile paths that are supposed to
+        // end the run. Holstered like the ult while the cap patrol walks.
+        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -634,7 +638,22 @@
             const all = JSON.parse(localStorage.getItem('pineBotDemos') || '[]');
             all.push({ at: demoRec.at, n: demoRec.samples.length, samples: demoRec.samples, events: demoRec.events });
             while (all.length > 4) all.shift();
-            localStorage.setItem('pineBotDemos', JSON.stringify(all));
+            // v6.96.2 SIZE CAP. "Last 4 runs" was the only bound, and four
+            // 20-minute demos measured 2.66 MB — 91% of the bot's whole
+            // storage footprint, crowding the quota every learn-store save
+            // has to fit under. Bytes, not count, are the real budget: drop
+            // oldest demos until the blob fits, and if a SINGLE demo is over
+            // the cap, thin its sample ring (every 2nd sample; the digest's
+            // percentiles barely move) rather than refuse the save.
+            const demoCap = (CONFIG.learning && CONFIG.learning.demoCapBytes) || 900000;
+            let demoBlob = JSON.stringify(all);
+            while (all.length > 1 && demoBlob.length > demoCap) { all.shift(); demoBlob = JSON.stringify(all); }
+            while (demoBlob.length > demoCap && all.length === 1 && (all[0].samples || []).length > 500) {
+                all[0].samples = all[0].samples.filter((_, i) => i % 2 === 0);
+                all[0].thinned = (all[0].thinned || 0) + 1;
+                demoBlob = JSON.stringify(all);
+            }
+            localStorage.setItem('pineBotDemos', demoBlob);
             setStatus('🎥 saved demo: ' + demoRec.samples.length + ' samples, ' + demoRec.events.length + ' events');
             demoRec = null;
             showReport(demoDigest());   // v6.86.3: the digest is what gets pasted to Claude
@@ -850,6 +869,9 @@
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
+                    // v6.96.2: store-guard + phase-audit hooks
+                    getLearn: () => learn, loadLearn, buildPhaseRow, demoSave: () => demoSave(),
+                    startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },
                     notNameForm, clickTextIf,
@@ -1070,6 +1092,51 @@
                 parkAudit = { runs: [] };
                 try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
                 return 'park audit cleared';
+            };
+            // v6.96.2: pineBot.phaseAudit() — the funnel, per version+char.
+            // Every run books exactly one phase (day / entry / hell / deep),
+            // so the four death counts ARE the survival story: dayClearRate
+            // is the day lever, entrySurvival is the seat's lever, and
+            // deepRate (cap-outs included, reported separately) is the
+            // doctrine's bottom line. parkAudit stays the seat's detail view;
+            // this is the view that sees the 82% who never got there.
+            window.pineBot.phaseAudit = () => {
+                const rows = (phaseAudit && phaseAudit.rows) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2); };
+                const by = {};
+                for (const r of rows) {
+                    const g = by[r.v] || (by[r.v] = { version: r.v, n: 0, deaths: { day: 0, entry: 0, hell: 0, deep: 0 },
+                        dayCleared: 0, hellEntered: 0, seated: 0, caps: 0, defs: [], regens: [], ults: [], times: [] });
+                    g.n++; g.deaths[r.ph] = (g.deaths[r.ph] || 0) + 1;
+                    if (r.day) g.dayCleared++;
+                    if (r.ph !== 'day') { g.hellEntered++; if (r.seat) g.seated++; }
+                    if (r.cap) g.caps++;
+                    if (r.def != null) g.defs.push(r.def);
+                    if (r.regen != null) g.regens.push(r.regen);
+                    if (r.ultLv != null) g.ults.push(r.ultLv);
+                    g.times.push(r.t);
+                }
+                return {
+                    rows: rows.length,
+                    note: 'phase = where the run ENDED. entrySurvival = of hell entrants, the share that outlived the first ' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths).',
+                    groups: Object.values(by).map(g => ({
+                        version: g.version, n: g.n, deaths: g.deaths,
+                        dayClearRate: +(g.dayCleared / g.n).toFixed(2),
+                        entrySurvival: g.hellEntered ? +((g.hellEntered - (g.deaths.entry || 0)) / g.hellEntered).toFixed(2) : null,
+                        deepRate: +((g.deaths.deep || 0) / g.n).toFixed(2),
+                        capOuts: g.caps,
+                        seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
+                        medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
+                        medianTimeS: med(g.times)
+                    }))
+                };
+            };
+            window.pineBot.resetPhaseAudit = () => {
+                phaseAudit = { rows: [] };
+                try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
+                return 'phase audit cleared';
             };
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };

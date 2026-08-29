@@ -92,6 +92,12 @@
         trekStartS = null; trekRestUntilS = 0;   // v6.94.0: and the day-trek clock
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
+        // v6.96.2 phase audit: a run that BEGINS in hell (the results-screen
+        // hell entrance) entered at gt 0; otherwise the latch time is
+        // recorded lazily by the first gather that sees hellDetected.
+        hellEnterGt = hellDetected ? 0 : null;
+        capFiredThisRun = false;
+        capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -108,6 +114,38 @@
         runPickCtx = [];
         beginTrial();
         log('run started; roster', activeRoster, '| CEM gen', learn.cem.gen, 'batch', learn.cem.batch.length + '/' + CONFIG.learning.batchSize, 'tab', TAB_ID);
+    }
+
+    // v6.96.2 PHASE CLASSIFICATION (user: "get the data of how it survived
+    // day mode and hell and deep hell mode"). A run's phase is where it
+    // ENDED, judged on hellRunEnded (captured before the results screen can
+    // mutate the live flag) and the game-time the latch was seen:
+    //   day   — hell never latched; the run died in the funding phase.
+    //   entry — hell latched and death came within phaseAudit.entryS seconds
+    //           of the latch: the entry surge, the window the seat bridges.
+    //   hell  — past the entry window but before phaseAudit.deepFromS.
+    //   deep  — past deepFromS: the parked-equilibrium regime. A cap-out
+    //           books here with cap:true, so the row is legible as
+    //           right-censored rather than as a natural death.
+    function buildPhaseRow(t, hellEnded) {
+        const PA = CONFIG.phaseAudit || {};
+        const entryS = PA.entryS != null ? PA.entryS : 300;
+        const deepFromS = PA.deepFromS != null ? PA.deepFromS : 7200;
+        const ph = !hellEnded ? 'day'
+            : (hellEnterGt != null && (t - hellEnterGt) < entryS) ? 'entry'
+            : t < deepFromS ? 'hell' : 'deep';
+        return {
+            v: scriptTag(), t, ph,
+            cause: lastDeathCause,
+            hEnt: hellEnterGt == null ? null : Math.round(hellEnterGt),
+            sup: supersThisRun,
+            day: !!dayClearedThisRun,
+            seat: entrySample ? !!entrySample.seated : null,
+            def: entrySample ? entrySample.def : null,
+            regen: entrySample ? entrySample.regen : null,
+            ultLv: entrySample ? (entrySample.ultLv || 0) : null,
+            cap: !!capFiredThisRun
+        };
     }
 
     function finishRun() {
@@ -239,6 +277,15 @@
                 while (parkAudit.runs.length > 80) parkAudit.runs.shift();
                 localStorage.setItem(PARK_AUDIT_KEY, JSON.stringify(parkAudit));
             }
+        } catch (e) { }
+        // v6.96.2 PHASE AUDIT: one row per run, EVERY run — parkAudit above
+        // only sees hell runs, and joe's whole problem lives in the 82% that
+        // die before it. See buildPhaseRow for the classification.
+        try {
+            phaseAudit.rows.push(buildPhaseRow(Math.round(stats.time || 0), hellRunEnded));
+            const keep = (CONFIG.phaseAudit && CONFIG.phaseAudit.keep) || 240;
+            while (phaseAudit.rows.length > keep) phaseAudit.rows.shift();
+            localStorage.setItem(PHASE_AUDIT_KEY, JSON.stringify(phaseAudit));
         } catch (e) { }
         try {
             if (runHellTicks > 0) {

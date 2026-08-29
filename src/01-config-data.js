@@ -808,6 +808,7 @@
             // only a hell run can reach it, and a run that somehow got here
             // with detection broken should STILL be capped. 0 disables.
             runCapS: 12000,
+            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -926,7 +927,28 @@
             versionKeep: 40,
             minMeaningfulRuns: 20,
             versionTopRuns: 5,
-            versionTimesKeep: 600      // per-version survival-time list (median / SD); oldest dropped past this
+            versionTimesKeep: 600,     // per-version survival-time list (median / SD); oldest dropped past this
+            // v6.96.2 STORE GUARDS (the joe store died 2026-08-29: 153 runs /
+            // 44 generations reset to defaults at a page reload — the primary
+            // blob failed to parse and loadLearnInner's silent catch answered
+            // with a fresh store). Every successful own-store save now also
+            // writes a `__bak` copy, the loader heals from it when the
+            // primary is missing or unreadable, and a quota throw on save
+            // TRIMS the store's own bulk and retries instead of losing the
+            // run. demoCapBytes bounds the 🎥 recording blob, which at
+            // 2.66 MB was 91% of the bot's whole storage footprint.
+            demoCapBytes: 900000
+        },
+        // v6.96.2 PHASE AUDIT thresholds (user: "get the data of how it
+        // survived day mode and hell and deep hell mode"). A run's phase is
+        // where it ENDED: 'day' = hell never latched; 'entry' = died within
+        // entryS seconds of the hell latch (the surge the entry seat exists
+        // for); 'hell' = died before deepFromS; 'deep' = past deepFromS —
+        // the parked-equilibrium regime (a 12000 s cap-out books here).
+        phaseAudit: {
+            entryS: 300,
+            deepFromS: 7200,
+            keep: 240              // rows kept (~120 bytes each)
         },
 
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
@@ -1894,6 +1916,26 @@
         try {
             const raw = JSON.parse(localStorage.getItem(PARK_AUDIT_KEY) || 'null');
             if (raw && Array.isArray(raw.runs)) return raw;
+        } catch (e) { }
+        return blank;
+    })();
+    // v6.96.2 PHASE AUDIT (user: "get the data of how it survived day mode
+    // and hell and deep hell mode"). One compact row per FINISHED run: which
+    // phase the run ENDED in, the entrance build, and whether the run cap
+    // fired. The joe question this exists to answer: of 153 runs, WHERE does
+    // the 82% day-death mass actually sit, and does a run that survives the
+    // entry window ever die before deep? parkAudit answers the seat question
+    // for hell runs only; this covers every run, day deaths included.
+    const PHASE_AUDIT_KEY = 'pineBotPhaseAudit';
+    let hellEnterGt = null;         // gameTime when hell latched (0 = run began in hell)
+    let capFiredThisRun = false;    // the 12000 s patrol engaged at least once
+    let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
+    let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
+    let phaseAudit = (() => {
+        const blank = { rows: [] };
+        try {
+            const raw = JSON.parse(localStorage.getItem(PHASE_AUDIT_KEY) || 'null');
+            if (raw && Array.isArray(raw.rows)) return raw;
         } catch (e) { }
         return blank;
     })();

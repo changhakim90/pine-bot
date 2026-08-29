@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.96.0
+// @version      6.96.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.96.0';
+    const SCRIPT_VERSION = '6.96.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -810,6 +810,7 @@
             // only a hell run can reach it, and a run that somehow got here
             // with detection broken should STILL be capped. 0 disables.
             runCapS: 12000,
+            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -928,7 +929,28 @@
             versionKeep: 40,
             minMeaningfulRuns: 20,
             versionTopRuns: 5,
-            versionTimesKeep: 600      // per-version survival-time list (median / SD); oldest dropped past this
+            versionTimesKeep: 600,     // per-version survival-time list (median / SD); oldest dropped past this
+            // v6.96.2 STORE GUARDS (the joe store died 2026-08-29: 153 runs /
+            // 44 generations reset to defaults at a page reload — the primary
+            // blob failed to parse and loadLearnInner's silent catch answered
+            // with a fresh store). Every successful own-store save now also
+            // writes a `__bak` copy, the loader heals from it when the
+            // primary is missing or unreadable, and a quota throw on save
+            // TRIMS the store's own bulk and retries instead of losing the
+            // run. demoCapBytes bounds the 🎥 recording blob, which at
+            // 2.66 MB was 91% of the bot's whole storage footprint.
+            demoCapBytes: 900000
+        },
+        // v6.96.2 PHASE AUDIT thresholds (user: "get the data of how it
+        // survived day mode and hell and deep hell mode"). A run's phase is
+        // where it ENDED: 'day' = hell never latched; 'entry' = died within
+        // entryS seconds of the hell latch (the surge the entry seat exists
+        // for); 'hell' = died before deepFromS; 'deep' = past deepFromS —
+        // the parked-equilibrium regime (a 12000 s cap-out books here).
+        phaseAudit: {
+            entryS: 300,
+            deepFromS: 7200,
+            keep: 240              // rows kept (~120 bytes each)
         },
 
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
@@ -1899,6 +1921,26 @@
         } catch (e) { }
         return blank;
     })();
+    // v6.96.2 PHASE AUDIT (user: "get the data of how it survived day mode
+    // and hell and deep hell mode"). One compact row per FINISHED run: which
+    // phase the run ENDED in, the entrance build, and whether the run cap
+    // fired. The joe question this exists to answer: of 153 runs, WHERE does
+    // the 82% day-death mass actually sit, and does a run that survives the
+    // entry window ever die before deep? parkAudit answers the seat question
+    // for hell runs only; this covers every run, day deaths included.
+    const PHASE_AUDIT_KEY = 'pineBotPhaseAudit';
+    let hellEnterGt = null;         // gameTime when hell latched (0 = run began in hell)
+    let capFiredThisRun = false;    // the 12000 s patrol engaged at least once
+    let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
+    let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
+    let phaseAudit = (() => {
+        const blank = { rows: [] };
+        try {
+            const raw = JSON.parse(localStorage.getItem(PHASE_AUDIT_KEY) || 'null');
+            if (raw && Array.isArray(raw.rows)) return raw;
+        } catch (e) { }
+        return blank;
+    })();
 
     const MARK_AUDIT_KEY = 'pineBotMarkAudit';
     let markAudit = (() => {
@@ -2322,6 +2364,23 @@
     function loadLearnInner() {
         let d = null;
         try { d = JSON.parse(localStorage.getItem(learnKey())); } catch (e) { }
+        // v6.96.2 BACKUP HEAL. The silent catch above is where 153 joe runs
+        // died on 2026-08-29: an unreadable (or vanished) primary blob fell
+        // through to `d = {}` with no log, no .broken copy, nothing — the
+        // outer loadLearn wrapper only catches STRUCTURAL throws below this
+        // line, so a clean parse failure reset the store invisibly. Every
+        // successful save now leaves a `__bak` copy (see saveLearn); when the
+        // primary is missing or unreadable, the backup — at worst one save
+        // old — is the store.
+        if (!d || typeof d !== 'object') {
+            try {
+                const b = JSON.parse(localStorage.getItem(learnKey() + '__bak'));
+                if (b && typeof b === 'object') {
+                    d = b;
+                    log('own store missing/unreadable — HEALED from backup (' + (b.runs || 0) + ' runs recovered)');
+                }
+            } catch (e) { }
+        }
         if (!d || typeof d !== 'object') d = {};
         // SHARED comparison state overlays the per-bartender blob. First
         // load migrates the legacy blob's versions/snapshots into the shared
@@ -2464,17 +2523,54 @@
         // that must survive), versions pruned like snapshots already were, and
         // a failure is logged and surfaced once.
         const own = (() => { const { versions, snapshots, ...rest } = learn; return rest; })();
-        let ok = true;
-        try { localStorage.setItem(learnKey(), JSON.stringify(own)); }
-        catch (e) { ok = false; log('SAVE FAILED (own store): ' + (e && e.name) + ' — learning for this run is lost'); }
+        let ok = true, ownSaved = false;
+        let ownBlob = JSON.stringify(own);
+        try { localStorage.setItem(learnKey(), ownBlob); ownSaved = true; }
+        catch (e) {
+            // v6.96.2 QUOTA PATH: a full origin used to cost the whole run's
+            // learning ("learning for this run is lost"). The store's own
+            // bulk is almost entirely rings that exist for REPORTING —
+            // runLog, reward history, the improvement curve — so trim those
+            // hard and retry once before conceding. The CEM mean/sigma and
+            // the item/build statistics, the parts that ARE the learning,
+            // are a few KB and always fit.
+            try {
+                own.runLog = (own.runLog || []).slice(-10);
+                own.history = (own.history || []).slice(-40);
+                own.genHistory = (own.genHistory || []).slice(-40);
+                own.hof = (own.hof || []).slice(0, 5);
+                ownBlob = JSON.stringify(own);
+                localStorage.setItem(learnKey(), ownBlob);
+                ownSaved = true;
+                log('SAVE squeezed: own store trimmed to ' + ownBlob.length + ' bytes to fit quota');
+            } catch (e2) { ok = false; log('SAVE FAILED (own store): ' + (e2 && e2.name) + ' — learning for this run is lost'); }
+        }
+        // v6.96.2: the backup only ever holds a blob the primary ACCEPTED, so
+        // a crash mid-save leaves the backup one save old, never corrupt-both.
+        if (ownSaved) { try { localStorage.setItem(learnKey() + '__bak', ownBlob); } catch (e) { } }
         try {
             pruneVersions();
             localStorage.setItem(SHARED_KEY, JSON.stringify({
                 versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
             }));
         } catch (e) {
-            log('SAVE FAILED (shared table): ' + (e && e.name) + ' — comparison history is not being recorded');
-            ok = false;
+            // v6.96.2 QUOTA PATH (shared): the bulk is the per-version
+            // survival-time rings (up to 600 entries each). Trim every row
+            // but the live one to its last 40 times — enough for a median —
+            // and retry once.
+            try {
+                const cur = scriptTag();
+                for (const [k, v] of Object.entries(learn.versions || {})) {
+                    if (k !== cur && v && Array.isArray(v.times) && v.times.length > 40) v.times = v.times.slice(-40);
+                }
+                localStorage.setItem(SHARED_KEY, JSON.stringify({
+                    versions: learn.versions || {}, snapshots: learn.snapshots || [], lastVersion: learn.lastVersion
+                }));
+                log('SAVE squeezed: shared time rings trimmed to fit quota');
+            } catch (e2) {
+                log('SAVE FAILED (shared table): ' + (e2 && e2.name) + ' — comparison history is not being recorded');
+                ok = false;
+            }
         }
         if (!ok && !saveWarned) { saveWarned = true; try { setStatus('⚠ localStorage full — learning is NOT being saved'); } catch (e2) { } }
         return ok;
@@ -5160,6 +5256,12 @@
         trekStartS = null; trekRestUntilS = 0;   // v6.94.0: and the day-trek clock
         parkYieldId = null; parkYieldAt = 0;     // v6.91.4
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
+        // v6.96.2 phase audit: a run that BEGINS in hell (the results-screen
+        // hell entrance) entered at gt 0; otherwise the latch time is
+        // recorded lazily by the first gather that sees hellDetected.
+        hellEnterGt = hellDetected ? 0 : null;
+        capFiredThisRun = false;
+        capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -5176,6 +5278,38 @@
         runPickCtx = [];
         beginTrial();
         log('run started; roster', activeRoster, '| CEM gen', learn.cem.gen, 'batch', learn.cem.batch.length + '/' + CONFIG.learning.batchSize, 'tab', TAB_ID);
+    }
+
+    // v6.96.2 PHASE CLASSIFICATION (user: "get the data of how it survived
+    // day mode and hell and deep hell mode"). A run's phase is where it
+    // ENDED, judged on hellRunEnded (captured before the results screen can
+    // mutate the live flag) and the game-time the latch was seen:
+    //   day   — hell never latched; the run died in the funding phase.
+    //   entry — hell latched and death came within phaseAudit.entryS seconds
+    //           of the latch: the entry surge, the window the seat bridges.
+    //   hell  — past the entry window but before phaseAudit.deepFromS.
+    //   deep  — past deepFromS: the parked-equilibrium regime. A cap-out
+    //           books here with cap:true, so the row is legible as
+    //           right-censored rather than as a natural death.
+    function buildPhaseRow(t, hellEnded) {
+        const PA = CONFIG.phaseAudit || {};
+        const entryS = PA.entryS != null ? PA.entryS : 300;
+        const deepFromS = PA.deepFromS != null ? PA.deepFromS : 7200;
+        const ph = !hellEnded ? 'day'
+            : (hellEnterGt != null && (t - hellEnterGt) < entryS) ? 'entry'
+            : t < deepFromS ? 'hell' : 'deep';
+        return {
+            v: scriptTag(), t, ph,
+            cause: lastDeathCause,
+            hEnt: hellEnterGt == null ? null : Math.round(hellEnterGt),
+            sup: supersThisRun,
+            day: !!dayClearedThisRun,
+            seat: entrySample ? !!entrySample.seated : null,
+            def: entrySample ? entrySample.def : null,
+            regen: entrySample ? entrySample.regen : null,
+            ultLv: entrySample ? (entrySample.ultLv || 0) : null,
+            cap: !!capFiredThisRun
+        };
     }
 
     function finishRun() {
@@ -5307,6 +5441,15 @@
                 while (parkAudit.runs.length > 80) parkAudit.runs.shift();
                 localStorage.setItem(PARK_AUDIT_KEY, JSON.stringify(parkAudit));
             }
+        } catch (e) { }
+        // v6.96.2 PHASE AUDIT: one row per run, EVERY run — parkAudit above
+        // only sees hell runs, and joe's whole problem lives in the 82% that
+        // die before it. See buildPhaseRow for the classification.
+        try {
+            phaseAudit.rows.push(buildPhaseRow(Math.round(stats.time || 0), hellRunEnded));
+            const keep = (CONFIG.phaseAudit && CONFIG.phaseAudit.keep) || 240;
+            while (phaseAudit.rows.length > keep) phaseAudit.rows.shift();
+            localStorage.setItem(PHASE_AUDIT_KEY, JSON.stringify(phaseAudit));
         } catch (e) { }
         try {
             if (runHellTicks > 0) {
@@ -6043,6 +6186,10 @@
         {
             const MF = CONFIG.movement;
             const gtF0 = safe(() => gameTime, 0) || 0;
+            // v6.96.2 phase audit: the hell latch happens at several sites in
+            // 04; recording its GAME TIME lazily here (every gather sees the
+            // flag within a tick of the latch) beats editing five latch sites.
+            if (hellDetected && hellEnterGt == null) hellEnterGt = gtF0;
             const defNowF = liveDefense();
             const mHpF = p.maxHp || p.maxHealth || 100;
             farmRef.v = MF.farmStance !== false && !hellDetected &&
@@ -8856,22 +9003,33 @@
         // moves nothing; an override moves everything.
         const gtCap = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const capDive = (DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS;
-        let capTarget = null;
-        if (capDive) {
-            let capD = Infinity;
-            for (const e of th.enemies) {
-                if (e.dormant || e.distant) continue;   // a body that cannot hit back cannot kill us
-                const d = Math.hypot(e.x - p.x, e.y - p.y);
-                if (d < capD) { capD = d; capTarget = e; }
-            }
-        }
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
-        if (capDive && capTarget) {
-            const dC = Math.hypot(capTarget.x - p.x, capTarget.y - p.y) || 1;
-            vx = (capTarget.x - p.x) / dC; vy = (capTarget.y - p.y) / dC;
+        if (capDive) {
+            capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
+            // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
+            // needs to walk around the map and doesn't need to dash and it
+            // will keep getting hit by the common projectile mobs." Both
+            // dives were still guesses at what kills a maxed build — 6.96.0
+            // walked at commons (37 minutes, contact bounced off), 6.96.1 at
+            // bosses. The user's answer is the one the data already signed:
+            // run 4589 (pat, 220 min) died to a PROJECTILE the moment it was
+            // forced off the corner. So the cap now just walks the open map —
+            // a five-point circuit through the centre and the four corner
+            // regions — with the dash holstered alongside the ult (see 06),
+            // and the ranged mobs' crossfire does the rest. No target, no
+            // gather dependence: the patrol runs even on a tick that sees no
+            // enemies at all.
+            const WPS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85]];
+            const wp = WPS[capWpIdx % WPS.length];
+            const wx = fieldW * wp[0], wy = fieldH * wp[1];
+            const dW = Math.hypot(wx - p.x, wy - p.y);
+            if (dW < 30 || (capWpUntil && gtCap >= capWpUntil)) {
+                capWpIdx++; capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
+            } else if (!capWpUntil) capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
+            vx = (wx - p.x) / (dW || 1); vy = (wy - p.y) / (dW || 1);
         } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
@@ -9107,7 +9265,11 @@
         const cornerHeld = plan.cornerAnchor === true;
         const dashProductive = escaping ||
             (!deepPanic && (!cornerHeld || plan.cornerward === true));
-        if (A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
+        // v6.96.2 (user): "it ... doesn't need to dash" past the run cap —
+        // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
+        // carrying the bot OUT of the projectile paths that are supposed to
+        // end the run. Holstered like the ult while the cap patrol walks.
+        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && now - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -9653,7 +9815,22 @@
             const all = JSON.parse(localStorage.getItem('pineBotDemos') || '[]');
             all.push({ at: demoRec.at, n: demoRec.samples.length, samples: demoRec.samples, events: demoRec.events });
             while (all.length > 4) all.shift();
-            localStorage.setItem('pineBotDemos', JSON.stringify(all));
+            // v6.96.2 SIZE CAP. "Last 4 runs" was the only bound, and four
+            // 20-minute demos measured 2.66 MB — 91% of the bot's whole
+            // storage footprint, crowding the quota every learn-store save
+            // has to fit under. Bytes, not count, are the real budget: drop
+            // oldest demos until the blob fits, and if a SINGLE demo is over
+            // the cap, thin its sample ring (every 2nd sample; the digest's
+            // percentiles barely move) rather than refuse the save.
+            const demoCap = (CONFIG.learning && CONFIG.learning.demoCapBytes) || 900000;
+            let demoBlob = JSON.stringify(all);
+            while (all.length > 1 && demoBlob.length > demoCap) { all.shift(); demoBlob = JSON.stringify(all); }
+            while (demoBlob.length > demoCap && all.length === 1 && (all[0].samples || []).length > 500) {
+                all[0].samples = all[0].samples.filter((_, i) => i % 2 === 0);
+                all[0].thinned = (all[0].thinned || 0) + 1;
+                demoBlob = JSON.stringify(all);
+            }
+            localStorage.setItem('pineBotDemos', demoBlob);
             setStatus('🎥 saved demo: ' + demoRec.samples.length + ' samples, ' + demoRec.events.length + ' events');
             demoRec = null;
             showReport(demoDigest());   // v6.86.3: the digest is what gets pasted to Claude
@@ -9869,6 +10046,9 @@
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
+                    // v6.96.2: store-guard + phase-audit hooks
+                    getLearn: () => learn, loadLearn, buildPhaseRow, demoSave: () => demoSave(),
+                    startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },
                     notNameForm, clickTextIf,
@@ -10089,6 +10269,51 @@
                 parkAudit = { runs: [] };
                 try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
                 return 'park audit cleared';
+            };
+            // v6.96.2: pineBot.phaseAudit() — the funnel, per version+char.
+            // Every run books exactly one phase (day / entry / hell / deep),
+            // so the four death counts ARE the survival story: dayClearRate
+            // is the day lever, entrySurvival is the seat's lever, and
+            // deepRate (cap-outs included, reported separately) is the
+            // doctrine's bottom line. parkAudit stays the seat's detail view;
+            // this is the view that sees the 82% who never got there.
+            window.pineBot.phaseAudit = () => {
+                const rows = (phaseAudit && phaseAudit.rows) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2); };
+                const by = {};
+                for (const r of rows) {
+                    const g = by[r.v] || (by[r.v] = { version: r.v, n: 0, deaths: { day: 0, entry: 0, hell: 0, deep: 0 },
+                        dayCleared: 0, hellEntered: 0, seated: 0, caps: 0, defs: [], regens: [], ults: [], times: [] });
+                    g.n++; g.deaths[r.ph] = (g.deaths[r.ph] || 0) + 1;
+                    if (r.day) g.dayCleared++;
+                    if (r.ph !== 'day') { g.hellEntered++; if (r.seat) g.seated++; }
+                    if (r.cap) g.caps++;
+                    if (r.def != null) g.defs.push(r.def);
+                    if (r.regen != null) g.regens.push(r.regen);
+                    if (r.ultLv != null) g.ults.push(r.ultLv);
+                    g.times.push(r.t);
+                }
+                return {
+                    rows: rows.length,
+                    note: 'phase = where the run ENDED. entrySurvival = of hell entrants, the share that outlived the first ' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths).',
+                    groups: Object.values(by).map(g => ({
+                        version: g.version, n: g.n, deaths: g.deaths,
+                        dayClearRate: +(g.dayCleared / g.n).toFixed(2),
+                        entrySurvival: g.hellEntered ? +((g.hellEntered - (g.deaths.entry || 0)) / g.hellEntered).toFixed(2) : null,
+                        deepRate: +((g.deaths.deep || 0) / g.n).toFixed(2),
+                        capOuts: g.caps,
+                        seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
+                        medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
+                        medianTimeS: med(g.times)
+                    }))
+                };
+            };
+            window.pineBot.resetPhaseAudit = () => {
+                phaseAudit = { rows: [] };
+                try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
+                return 'phase audit cleared';
             };
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };

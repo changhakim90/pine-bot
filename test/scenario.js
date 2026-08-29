@@ -3847,7 +3847,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4424,12 +4424,46 @@ if (which === 'run-cap') {
             let pl; for (let i = 0; i < 4; i++) pl = T.planMove();
             return pl;
         };
-        // 1. Past the cap: the plan says so, and the heading is INTO the body.
+        // 1. Past the cap: the plan says so, and the heading is the PATROL.
+        //    v6.96.2 (user, watching the live cap-out): "it just needs to
+        //    walk around the map and doesn't need to dash and it will keep
+        //    getting hit by the common projectile mobs." Both dives (6.96.0
+        //    nearest-body, 6.96.1 boss-seek) were guesses; the patrol is the
+        //    user's design, signed by run 4589's own death tag (`proj` the
+        //    moment it left the corner). First waypoint is the field centre —
+        //    from (200,200) on a 540-field that is a NE diagonal, and the
+        //    nearby enemy due east must NOT bend the heading: this is a walk
+        //    across open ground, not a dive at a body.
         let pl = scene(12050);
-        test('past the cap the plan declares the dive', () =>
+        test('past the cap the plan declares the patrol', () =>
             assert.strictEqual(pl.capDive, true, JSON.stringify({ capDive: pl.capDive })));
-        test('...and the heading is straight at the nearest enemy', () =>
-            assert.ok(pl.dx > 0.7 && Math.abs(pl.dy) < 0.5, 'dx ' + pl.dx.toFixed(2) + ' dy ' + pl.dy.toFixed(2)));
+        test('...heading for the field centre, ignoring the enemy beside it', () =>
+            assert.ok(pl.dx > 0.55 && pl.dy > 0.55, 'dx ' + pl.dx.toFixed(2) + ' dy ' + pl.dy.toFixed(2)));
+        // 1b. ARRIVAL ADVANCES THE CIRCUIT: standing on the centre, the next
+        //     leg points back toward the first corner region (NW: both
+        //     components negative).
+        {
+            global.player = { x: 270, y: 270, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            global.enemies = [];
+            global.gameTime = 12051;
+            let plW; for (let i = 0; i < 4; i++) plW = T.planMove();
+            test('reaching a waypoint advances the patrol to the next leg', () =>
+                assert.ok(plW.dx < -0.4 && plW.dy < -0.4, 'dx ' + plW.dx.toFixed(2) + ' dy ' + plW.dy.toFixed(2)));
+        }
+        // 1c. THE DASH IS HOLSTERED. An escape-worthy emergency (mark
+        //     underfoot, contact imminent, huge danger) dashes below the cap
+        //     and must NOT dash during the patrol — the dash burst is what
+        //     keeps carrying the bot out of the projectile paths.
+        {
+            let dashes = 0; global.tryDash = () => { dashes++; };
+            const dashPlan = (cap) => ({ hpRatio: 0.9, hpPanic: false, panic: false, danger: 9999, dx: 1, dy: 0,
+                                         near: 2, adjacent: 18, contactImminent: true, markHere: true, toughness: 1,
+                                         passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999, capDive: cap });
+            T.maybeAbilities(dashPlan(true));
+            test('past the cap the dash stays holstered', () => assert.strictEqual(dashes, 0));
+            T.maybeAbilities(dashPlan(false));
+            test('the same emergency below the cap dashes', () => assert.ok(dashes >= 1, 'dashes ' + dashes));
+        }
         // 2. Below the cap the same field is fled, not embraced.
         pl = scene(11900);
         test('below the cap there is no dive', () =>
@@ -4462,6 +4496,142 @@ if (which === 'run-cap') {
         test('runCapS = 0 re-arms the ult at 12050s', () =>
             assert.ok(fire(12050) >= 1, 'ult still holstered with the cap disabled'));
         pineBot.config.deepHell.runCapS = 12000;
+        done();
+    }, 700);
+}
+
+// v6.96.2 — STORE GUARDS. The joe store died 2026-08-29: 153 runs / 44
+// generations reset to defaults because the primary blob failed to parse and
+// loadLearnInner's silent catch answered with a fresh store. Three guards:
+// the loader heals from a __bak copy, a quota throw on save trims the store's
+// reporting bulk and retries, and the 2.66 MB demo blob gets a byte cap.
+if (which === 'store-guard') {
+    const good = { bartender: 'joe', runs: 42, totalPicks: 7, items: {}, history: [], builds: {},
+                   hof: [], genHistory: [], runLog: [], rosters: {}, rewardEpoch: CUR_EPOCH, cem: null, linucb: {} };
+    const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    // 1. THE 2026-08-29 FAILURE, REPLAYED — first WITHOUT the backup (the
+    //    silent-reset baseline), then WITH it (the heal). Same corrupt blob.
+    store.pineBotUCB_v5_joe = '{CORRUPT';
+    delete store.pineBotUCB_v5_joe__bak;
+    test('a corrupt primary with no backup still resets (the old world)', () =>
+        assert.strictEqual(T.loadLearn().runs, 0));
+    store.pineBotUCB_v5_joe = '{CORRUPT';
+    store.pineBotUCB_v5_joe__bak = JSON.stringify(good);
+    test('a corrupt primary HEALS from the backup', () =>
+        assert.strictEqual(T.loadLearn().runs, 42));
+    delete store.pineBotUCB_v5_joe;   // the vanished-key variant of the same failure
+    test('a MISSING primary heals from the backup too', () =>
+        assert.strictEqual(T.loadLearn().runs, 42));
+    // 2. QUOTA: a save that throws once must trim its reporting bulk and
+    //    land, and a successful save must leave a fresh backup behind.
+    const L = T.getLearn();
+    for (let i = 0; i < 100; i++) L.runLog.push({ t: i, d: 1, s: 1, r: 1 });
+    const realSet = global.localStorage.setItem;
+    let onceArmed = true;
+    global.localStorage.setItem = (k, v) => {
+        if (k === 'pineBotUCB_v5_joe' && onceArmed) { onceArmed = false; const err = new Error('full'); err.name = 'QuotaExceededError'; throw err; }
+        return realSet(k, v);
+    };
+    test('a quota throw trims and retries instead of losing the run', () =>
+        assert.strictEqual(T.saveLearn(), true));
+    test('...the landed blob really was trimmed', () =>
+        assert.ok(JSON.parse(store.pineBotUCB_v5_joe).runLog.length <= 10,
+            'runLog kept ' + JSON.parse(store.pineBotUCB_v5_joe).runLog.length));
+    test('...and the backup copy was refreshed', () =>
+        assert.ok(!!store.pineBotUCB_v5_joe__bak && JSON.parse(store.pineBotUCB_v5_joe__bak).runs === JSON.parse(store.pineBotUCB_v5_joe).runs));
+    // teeth: a store that CANNOT fit still reports failure loudly
+    global.localStorage.setItem = (k, v) => {
+        if (k === 'pineBotUCB_v5_joe') { const err = new Error('full'); err.name = 'QuotaExceededError'; throw err; }
+        return realSet(k, v);
+    };
+    test('an unfixably full own store still returns failure', () =>
+        assert.strictEqual(T.saveLearn(), false));
+    global.localStorage.setItem = realSet;
+    // 3. THE DEMO CAP: bytes, not count, oldest dropped first.
+    pineBot.config.learning.demoCapBytes = 50000;
+    const fat = (id) => ({ at: id, n: 500, samples: Array.from({ length: 500 }, (_, i) => ({ gt: i, x: 100.123, y: 200.456, poD: 55.5 })), events: [] });
+    store.pineBotDemos = JSON.stringify([fat(1), fat(2), fat(3)]);
+    T.startDemo(); T.demoSave();
+    test('the demo blob is capped by BYTES, oldest dropped', () => {
+        const blob = store.pineBotDemos;
+        assert.ok(blob.length <= 50000, 'blob ' + blob.length);
+        assert.ok(!JSON.parse(blob).some(d => d.at === 1), 'oldest demo survived the cap');
+    });
+    // ...and the cap is the CONFIG doing it, not a hidden constant.
+    pineBot.config.learning.demoCapBytes = 9000000;
+    store.pineBotDemos = JSON.stringify([fat(1), fat(2), fat(3)]);
+    T.startDemo(); T.demoSave();
+    test('with the cap out of reach the 4-demo window is unchanged', () =>
+        assert.strictEqual(JSON.parse(store.pineBotDemos).length, 4));
+    done();
+}
+
+// v6.96.2 — THE PHASE AUDIT (user: "get the data of how it survived day mode
+// and hell and deep hell mode"). Classification is a pure function of the
+// death time, the hell flag, and the latch gt; the aggregation turns 240 rows
+// into the day -> entry -> hell -> deep funnel per version.
+if (which === 'phase-audit') {
+    const seeded = { rows: [
+        // 5 day deaths, 2 entry, 2 hell, 1 deep cap-out — all version 'X'
+        ...Array.from({ length: 5 }, (_, i) => ({ v: 'X', t: 300 + i, ph: 'day', cause: 'contact', hEnt: null, sup: 0, day: false, seat: null, def: null, regen: null, ultLv: null, cap: false })),
+        { v: 'X', t: 1400, ph: 'entry', cause: 'contact', hEnt: 1320, sup: 1, day: true, seat: false, def: 24, regen: 0.6, ultLv: 1, cap: false },
+        { v: 'X', t: 1500, ph: 'entry', cause: 'mark', hEnt: 1330, sup: 1, day: true, seat: false, def: 26, regen: 0.8, ultLv: 2, cap: false },
+        { v: 'X', t: 3000, ph: 'hell', cause: 'contact', hEnt: 1320, sup: 2, day: true, seat: true, def: 31, regen: 1.1, ultLv: 3, cap: false },
+        { v: 'X', t: 4000, ph: 'hell', cause: 'proj', hEnt: 1325, sup: 3, day: true, seat: false, def: 33, regen: 1.4, ultLv: 3, cap: false },
+        { v: 'X', t: 12030, ph: 'deep', cause: 'contact', hEnt: 1320, sup: 3, day: true, seat: true, def: 35, regen: 1.5, ultLv: 4, cap: true }
+    ] };
+    const { pineBot } = makeEnv({ script: SCRIPT, frames: 40, game: { state: 'playing', gameTime: 1350, hell: true },
+        storage: { pineBotPhaseAudit: JSON.stringify(seeded) } });
+    setTimeout(() => {
+        pineBot.stop();
+        pineBot.test.applyDefaults();
+        const T = pineBot.test;
+        // 1. CLASSIFICATION. Day first (flag false), then latch hell the way
+        //    the main loop does and let the next gather record the latch gt.
+        test('hell never entered books as DAY', () =>
+            assert.strictEqual(T.buildPhaseRow(800, false).ph, 'day'));
+        T.handleScreens();   // latch hell (env hell: true)
+        global.player = { x: 200, y: 200, hp: 90, maxHp: 100, speed: 3, r: 7.2 };
+        global.enemies = []; global.gameTime = 1350;
+        T.gatherThreats(global.player);
+        let row = T.buildPhaseRow(1500, true);
+        test('death within entryS of the latch books as ENTRY', () =>
+            assert.strictEqual(row.ph, 'entry', JSON.stringify(row)));
+        test('...and the latch gt rode along', () => assert.strictEqual(row.hEnt, 1350));
+        test('past the entry window, before deep: HELL', () =>
+            assert.strictEqual(T.buildPhaseRow(3000, true).ph, 'hell'));
+        test('past deepFromS: DEEP', () =>
+            assert.strictEqual(T.buildPhaseRow(8000, true).ph, 'deep'));
+        // config teeth: the thresholds are the CONFIG, not constants
+        pineBot.config.phaseAudit.deepFromS = 99999;
+        test('deepFromS is read from config', () =>
+            assert.strictEqual(T.buildPhaseRow(8000, true).ph, 'hell'));
+        pineBot.config.phaseAudit.deepFromS = 7200;
+        pineBot.config.phaseAudit.entryS = 5;
+        test('entryS is read from config', () =>
+            assert.strictEqual(T.buildPhaseRow(1500, true).ph, 'hell'));
+        pineBot.config.phaseAudit.entryS = 300;
+        // 2. THE CAP FLAG: false before any dive, true after one.
+        test('an undived run books cap:false', () =>
+            assert.strictEqual(T.buildPhaseRow(12060, true).cap, false));
+        global.enemies = [{ type: 'drunk', id: 1, x: 300, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
+        global.gameTime = 12050;
+        for (let i = 0; i < 3; i++) T.planMove();
+        test('a run that engaged the 12000 s dive books cap:true', () =>
+            assert.strictEqual(T.buildPhaseRow(12060, true).cap, true));
+        // 3. AGGREGATION over the seeded rows: the funnel numbers.
+        const rep = global.window.pineBot.phaseAudit();
+        const g = rep.groups.find(x => x.version === 'X');
+        test('the seeded rows aggregate into one group of 10', () =>
+            assert.ok(g && g.n === 10, JSON.stringify(rep.groups.map(x => [x.version, x.n]))));
+        test('deaths split day/entry/hell/deep = 5/2/2/1', () =>
+            assert.deepStrictEqual(g.deaths, { day: 5, entry: 2, hell: 2, deep: 1 }));
+        test('dayClearRate 0.5, entrySurvival 0.6, deepRate 0.1', () =>
+            assert.ok(g.dayClearRate === 0.5 && g.entrySurvival === 0.6 && g.deepRate === 0.1, JSON.stringify(g)));
+        test('the cap-out is counted, and seatedRate reads 2/5', () =>
+            assert.ok(g.capOuts === 1 && g.seatedRate === 0.4, JSON.stringify(g)));
         done();
     }, 700);
 }
