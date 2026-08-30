@@ -4696,6 +4696,29 @@ if (which === 'run-cap') {
             test('the smother takes the BOSS over the commons centroid', () =>
                 assert.ok(plB.dy > 0.9, 'dy ' + plB.dy.toFixed(2) + ' (positive = toward the boss)'));
         }
+        // 1b-iii. v6.103.0 A CENTROID IS NOT A BODY, and this is a SIGN FLIP
+        //         against the 6.102.0 behaviour it replaces. Measured: all six
+        //         6.102.0 cap-outs booked at exactly capAt + capStandS, i.e.
+        //         the smother never killed and rung 2 did. The geometry is the
+        //         reason — a crowd that has surrounded the player has its
+        //         centroid AT the player, so aiming there resolved to standing
+        //         in a hole in the middle of a ring, taking no contact at all.
+        //         Ring below is built so the centroid lies 12.5 px BELOW the
+        //         player while the nearest real body sits 70 px ABOVE it:
+        //         centroid-aiming heads +y, body-aiming heads -y.
+        {
+            global.player = { x: 270, y: 270, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            global.enemies = [
+                { type: 'drunk', id: 1, x: 270, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 },
+                { type: 'drunk', id: 2, x: 270, y: 390, hp: 500, maxHp: 500, r: 12, speed: 8 },
+                { type: 'drunk', id: 3, x: 150, y: 270, hp: 500, maxHp: 500, r: 12, speed: 8 },
+                { type: 'drunk', id: 4, x: 390, y: 270, hp: 500, maxHp: 500, r: 12, speed: 8 }
+            ];
+            global.gameTime = CAP + 53;
+            let plR; for (let i = 0; i < 4; i++) plR = T.planMove();
+            test('surrounded, the smother walks at the nearest BODY, not the empty centroid', () =>
+                assert.ok(plR.dy < -0.5, 'dy ' + plR.dy.toFixed(2) + ' (negative = at the body; positive = the old centroid)'));
+        }
         // 1c. THE DASH IS HOLSTERED. An escape-worthy emergency (mark
         //     underfoot, contact imminent, huge danger) dashes below the cap
         //     and must NOT dash during the patrol — the dash burst is what
@@ -4760,8 +4783,8 @@ if (which === 'run-cap') {
 
         // 5. v6.99.3 EARLY CAP — the stability proof. Config teeth first:
         const CS = pineBot.config.deepHell.capStable;
-        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 34.9 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
-            assert.ok(CS && CS.fromS === 3600 && CS.hpFloor === 0.97 &&
+        test('capStable ships fromS 2400 / hpFloor 0.97 / defMin 34.9 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
+            assert.ok(CS && CS.fromS === 2400 && CS.hpFloor === 0.97 &&
                       CS.defMin === 34.9 && CS.supersMin === 3 && CS.holdS === 300 && CS.dipGraceS === 4));
         // v6.102.0 THE CEILING TOOTH — the assertion that would have caught
         // the bug that made the whole early cap dead code for four versions.
@@ -4883,8 +4906,8 @@ if (which === 'run-cap') {
         //    reason a single window could sit on one run for four hours.
         const STAND = pineBot.config.deepHell.capStandS;
         const FORCE = pineBot.config.deepHell.capForceS;
-        test('the ladder ships capStandS 150 / capForceS 240', () =>
-            assert.ok(STAND === 150 && FORCE === 240, 'stand ' + STAND + ' force ' + FORCE));
+        test('the ladder ships capStandS 45 / capForceS 120', () =>
+            assert.ok(STAND === 45 && FORCE === 120, 'stand ' + STAND + ' force ' + FORCE));
         const ladder = (gt) => {
             global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
             global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];

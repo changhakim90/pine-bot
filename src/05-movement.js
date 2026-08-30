@@ -3043,18 +3043,26 @@
             // Once inside contact range the velocity goes to ZERO — no
             // evasion, no kiting, no dash, no ult. That is the user's own
             // instruction: "just get constant contact damage."
-            let sx = 0, sy = 0, sn = 0, capBoss = null, capBossD = Infinity;
+            // v6.103.0 THE CENTROID WAS EMPTY SPACE. 6.102.0 aimed the
+            // smother at the crowd's centroid, and all six cap-outs then
+            // needed rung 2 to die. The geometry says why: a crowd that has
+            // surrounded the player has its centroid AT the player, so
+            // "walk to the centroid" resolved to "you are already there",
+            // the stop test passed at distance ~0, and the bot stood in a
+            // hole in the middle of a ring taking no contact at all. A
+            // centroid is not a body. Aim at an actual body — the nearest
+            // one, boss preferred (biggest contactDmg) — so the stand always
+            // resolves onto a hitbox.
+            let capBoss = null, capBossD = Infinity, capNear = null, capNearD = Infinity;
             for (const e of th.enemies) {
                 if (e.wall || e.dormant || e.distant) continue;
-                sx += e.x; sy += e.y; sn++;
-                if (e.boss) {
-                    const dB = Math.hypot(e.x - p.x, e.y - p.y);
-                    if (dB < capBossD) { capBossD = dB; capBoss = e; }
-                }
+                const dB = Math.hypot(e.x - p.x, e.y - p.y);
+                if (dB < capNearD) { capNearD = dB; capNear = e; }
+                if (e.boss && dB < capBossD) { capBossD = dB; capBoss = e; }
             }
+            const capTgt = capBoss || capNear;
             let ctx2, cty2, ctR;
-            if (capBoss) { ctx2 = capBoss.x; cty2 = capBoss.y; ctR = (capBoss.r || 20) + (p.r || 7.2); }
-            else if (sn) { ctx2 = sx / sn; cty2 = sy / sn; ctR = 0; }
+            if (capTgt) { ctx2 = capTgt.x; cty2 = capTgt.y; ctR = (capTgt.r || 12) + (p.r || 7.2); }
             else { ctx2 = fieldW * 0.5; cty2 = fieldH * 0.5; ctR = 0; }
             const dSm = Math.hypot(ctx2 - p.x, cty2 - p.y);
             if (dSm <= Math.max(ctR, 6)) { vx = 0; vy = 0; }   // STAND IN IT

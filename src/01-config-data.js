@@ -905,8 +905,17 @@
             //   3. past capForceS: hard-book (finishRun) + backToTitle, so an
             //      unattended farm can NEVER be parked on one immortal run
             //      again whatever the game does.
-            capStandS: 150,        // stage 1 budget: stand in contact this long before escalating
-            capForceS: 240,        // stage 2 budget: past this, book the run and force a restart
+            // v6.103.0 MEASURED: RUNG 1 HAS NEVER KILLED ANYTHING. All six
+            // 6.102.0 cap-outs booked at EXACTLY capAt + 150 s — that is
+            // capStandS to the second (4727->4877, 5119->5270, 4002->4151,
+            // 3600->3750 x2, 6781->6931). The smother stood in the crowd for
+            // the full budget every time and rung 2's hurtPlayer did the
+            // killing. Budget cut to 45 s: the mitigation model puts a real
+            // sustained-contact death at ~36 s, so if the smother is ever
+            // going to work it works inside that window, and anything longer
+            // is pure wasted farm time plus a fake death cause on the row.
+            capStandS: 45,         // stage 1 budget: stand in contact this long before escalating
+            capForceS: 120,        // stage 2 budget: past this, book the run and force a restart
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor
             // while measured defense >= defMin and supers >= supersMin, the
@@ -939,7 +948,22 @@
             // instead of from the stat. Same family as the ownedLevels trap
             // (findings-and-fixes.md): a rounded proxy read as the quantity.
             // 34.9 sits under the ceiling with room for float noise.
-            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
+            // v6.103.0 fromS 3600 -> 2400, SET FROM DATA AT LAST. The 6.102.0
+            // funnel is the first row where the proof could fire (defMin), and
+            // it carries the measurement the 3600 guess never had:
+            //   buildsReady 13, medianReadyAt 1854, range 1398-2438.
+            // Builds complete in a TIGHT band around gt 1854 — half an hour,
+            // not an hour — and the latest one ever seen was 2438. So 3600
+            // was ~1750 s of pure waiting after the build was already done,
+            // and two of the six cap-outs fired at EXACTLY 3600, i.e. the
+            // floor, not the proof, was the binding constraint.
+            // 2400 sits just above the observed max readyAt, so it stops
+            // gating builds that finished long ago while never capping one
+            // that has not banked armour, supers AND holdS of held HP. The
+            // hp hold is doing the real filtering: of the 13 ready builds,
+            // 7 died naturally between 2523 and 7394 because their hold
+            // never completed — being "ready" is necessary, not sufficient.
+            capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
