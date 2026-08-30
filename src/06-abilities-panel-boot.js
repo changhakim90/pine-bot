@@ -12,6 +12,40 @@
         if (lastUlt > clockMs) lastUlt = 0;
         if (lastDash > clockMs) lastDash = 0;
         const A = CONFIG.abilities;
+        // v6.101.0 THE CAP LADDER, RUNGS 2 AND 3. Stage 1 (the smother) is
+        // pure movement and lives in 05. These two are game calls, so they
+        // live here — the layer that owns them. They only ever run on a run
+        // that is ALREADY past the cap and has already failed to die by
+        // standing in the crowd, so neither can touch an ordinary run.
+        if (plan.capStage >= 2) {
+            // RUNG 2: the game's own damage function. hurtPlayer is a
+            // top-level `function` declaration, so unlike the game's `let`
+            // globals it really is on window (see the LEXICAL GLOBAL ACCESS
+            // note). It sets invuln=38 frames itself, so a poke every half
+            // game-second is already the maximum the game will honour.
+            const gtH = safe(() => (typeof gameTime === 'number' ? gameTime : 0), 0) || 0;
+            if (hasGame('hurtPlayer') && (gtH - capHurtAt >= 0.5 || gtH < capHurtAt)) {
+                capHurtAt = gtH;
+                callGame('hurtPlayer', 1e6);
+            }
+        }
+        if (plan.capStage >= 3) {
+            // RUNG 3: the guarantee. If the crowd would not kill us and the
+            // game exposes no damage hook, the run still ENDS — booked
+            // through the same finishRun() path a natural death uses (it is
+            // idempotent, so a later real death cannot double-book it), then
+            // navigated out so the unattended farm starts a fresh run. An
+            // immortal build can no longer park a window for four hours.
+            if (runActive) {
+                deathSnapshot = deathSnapshot || snapshotStats();
+                finishRun();
+                setStatus('RUN CAP: booked by force at stage 3');
+            }
+            if (!capForcedThisRun) { capForcedThisRun = true; log('run cap: hard book + restart'); }
+            releaseAll();
+            callFirst(['backToTitle']);
+            return;   // nothing else this tick — the run is over
+        }
         // DASH (defensive): the lower our HP, the earlier we bail out — and
         // standing inside a telegraphed blast zone is an emergency that
         // overrides the normal danger threshold entirely.
@@ -102,7 +136,20 @@
         // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
         // carrying the bot OUT of the projectile paths that are supposed to
         // end the run. Holstered like the ult while the cap patrol walks.
-        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
+        // v6.101.0 THE DASH HOLSTER GETS THE ULT'S BELT AND BRACES. The ult
+        // gate below has ALWAYS carried its own `gtU >= runCapS` clock check
+        // as well as reading plan.capDive; the dash gate read the plan alone.
+        // So any tick whose plan lacked the flag re-armed the dash past the
+        // cap while the ult stayed correctly holstered — and one dash is not
+        // cosmetic here: it is a 0.16 s movement burst that BREAKS the
+        // sustained contact the kill depends on and resets the ~36 s clock.
+        // The user watched exactly this ("using dashes even after when it's
+        // supposed to just get constant contact damage"). Now both gates
+        // answer the same question the same way.
+        const gtDash = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const capHolster = plan.capDive === true ||
+            ((CONFIG.deepHell.runCapS || 0) > 0 && gtDash >= CONFIG.deepHell.runCapS);
+        if (!capHolster && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -925,7 +972,11 @@
                     // v6.99.3: the early-cap stability proof reads the run's
                     // supers count; the test arranges it directly.
                     setSupers: n => { supersThisRun = n; },
-                    resetCapLatch: () => { capStableSince = null; capEarly = false; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
+                    // v6.101.0: the ladder's own clock, so a scenario can put
+                    // the run at a chosen rung without replaying 4 minutes.
+                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; },
+                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.
@@ -1174,6 +1225,51 @@
                 phaseAudit = { rows: [] };
                 try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
                 return 'phase audit cleared';
+            };
+            // v6.100.1 (user: "the bot is not dying even with the kill
+            // protocol"): a LIVE inspector for the early-cap stability proof,
+            // so a run that "should" be immortal but keeps dashing can be
+            // checked mid-run instead of guessed at. Call this while a hell
+            // run is past capStable.fromS and read WHY capEarly hasn't
+            // latched: streakS vs holdS needed, which leg (hp/def/supers) is
+            // short, and bestStreakS (the closest this run has gotten).
+            window.pineBot.capStatus = () => {
+                const CS = (CONFIG.deepHell && CONFIG.deepHell.capStable) || {};
+                const gt = safe(() => gameTime, 0) || 0;
+                const p = safe(() => player, null);
+                const hp = p && typeof p.hp === 'number' && typeof p.maxHp === 'number' && p.maxHp > 0
+                    ? p.hp / p.maxHp : null;
+                const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
+                const defMin = CS.defMin != null ? CS.defMin : 35;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const def = liveDefense();
+                return {
+                    gt: Math.round(gt),
+                    fromS: CS.fromS != null ? CS.fromS : 3600,
+                    holdS: CS.holdS != null ? CS.holdS : 300,
+                    dipGraceS: CS.dipGraceS != null ? CS.dipGraceS : 0,
+                    capEarly, capFiredThisRun,
+                    runCapS: (CONFIG.deepHell && CONFIG.deepHell.runCapS) || 0,
+                    // v6.101.0 the ladder: which rung, and how long it has been climbing
+                    capAt: capFirstGt == null ? null : Math.round(capFirstGt),
+                    cappedForS: capFirstGt == null ? 0 : Math.round(gt - capFirstGt),
+                    stage: capFirstGt == null ? 0
+                        : (gt - capFirstGt) >= (CONFIG.deepHell.capForceS != null ? CONFIG.deepHell.capForceS : 240) ? 3
+                        : (gt - capFirstGt) >= (CONFIG.deepHell.capStandS != null ? CONFIG.deepHell.capStandS : 150) ? 2 : 1,
+                    forced: capForcedThisRun,
+                    streakS: capStableSince == null ? 0 : Math.round(gt - capStableSince),
+                    bestStreakS: Math.round(capBestStreakS),
+                    inDip: capDipSince != null,
+                    dipForS: capDipSince == null ? 0 : Math.round(gt - capDipSince),
+                    lastResetReason: capLastResetReason,
+                    live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
+                    need: { hpFloor, defMin, supersMin },
+                    short: {
+                        hp: hp != null && hp < hpFloor,
+                        def: def != null && def < defMin,
+                        supers: (typeof supersThisRun === 'number' ? supersThisRun : 0) < supersMin
+                    }
+                };
             };
             // v6.97.1 (user: "let's build this combined probe now"):
             // pineBot.report() — the whole statistics picture in ONE paste.

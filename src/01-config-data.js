@@ -882,14 +882,46 @@
             // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
             // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
             runCapS: 9000,
-            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
+            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances (unused from 6.101.0 — see capStandS)
+            // v6.101.0 THE CAP LADDER (user: "the bot is not dying even with
+            // the kill protocol"). Measured proof the 6.96.2 patrol failed:
+            // 6.100.0 booked runs at 25,141 s and 22,800 s against runCapS
+            // 9000 — the clock cap fired on time and the bot then survived
+            // FOUR AND A HALF MORE HOURS. mitigation-model.md says why that
+            // is impossible in sustained contact: hurtPlayer sets invuln=38
+            // frames, so contact lands 1.58 hits/s x ~9.8 = ~15.5 dps against
+            // a measured regen of 1.71-3.07 HP/s. Standing in real contact
+            // costs ~13 HP/s net and kills a 469-HP build in ~36 s. So the
+            // patrol was never IN contact — it toured the four corner regions,
+            // which is exactly where park/seat sits BECAUSE the corner
+            // geometry is safe. The cap was walking a circuit of the safest
+            // ground on the map. Three stages now, each escalating only if
+            // the one before it failed:
+            //   1. SMOTHER (0 -> capStandS): stand ON the nearest boss, or on
+            //      the crowd centroid, and STOP. No evasion, no dash, no ult.
+            //      36 s is the physics; capStandS is 4x that for margin.
+            //   2. capStandS -> capForceS: call the game's own hurtPlayer().
+            //      A natural death, booked through the normal over() path.
+            //   3. past capForceS: hard-book (finishRun) + backToTitle, so an
+            //      unattended farm can NEVER be parked on one immortal run
+            //      again whatever the game does.
+            capStandS: 150,        // stage 1 budget: stand in contact this long before escalating
+            capForceS: 240,        // stage 2 budget: past this, book the run and force a restart
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor
             // while measured defense >= defMin and supers >= supersMin, the
             // build is immortal-in-practice and the patrol engages early:
             // the remaining hours teach nothing, and the next run's day and
             // entry are where the learning lives. holdS: 0 disables.
-            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300 },
+            // v6.100.1 (user: "the bot is not dying even with the kill
+            // protocol"): 6.99.3 zeroed capStableSince on ANY instantaneous
+            // hp dip below hpFloor, but this is a contact-damage game — a
+            // tanky build still gets chipped every few seconds, so a real
+            // 300 s streak with zero blips essentially never completes.
+            // dipGraceS tolerates a blip shorter than this many game-seconds
+            // (the clock keeps running, just doesn't reset); a dip that
+            // outlasts the grace still resets fully. 0 = old strict behavior.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2054,6 +2086,17 @@
     // prove immortality?" and the capStable.fromS floor can be tuned from
     // measured latch times instead of guesses.
     let capFirstGt = null;
+    // v6.100.1: dip-grace bookkeeping + live diagnostics for pineBot.capStatus()
+    // — see the capStable.dipGraceS comment. capDipSince marks when the CURRENT
+    // blip started (null = not currently dipping); capBestStreakS is the
+    // longest continuous stable streak this run got to before either latching
+    // or breaking (so a stuck run's report can show "45s of 300s needed, then
+    // hp fell to 0.89" instead of nothing at all); capLastResetReason records
+    // which leg (hp/def/supers) broke the most recent streak.
+    let capDipSince = null, capBestStreakS = 0, capLastResetReason = null;
+    // v6.101.0 cap ladder actuator state: gt of the last hurtPlayer poke
+    // (stage 2) and whether the hard book (stage 3) has already run.
+    let capHurtAt = 0, capForcedThisRun = false;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {

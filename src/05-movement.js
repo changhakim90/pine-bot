@@ -1834,7 +1834,7 @@
         const gtFund = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const fundRush = (M.fundRush !== false) && dayPhaseNow &&
             (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
-            gtFund < (M.entryPrepFromS != null ? M.entryPrepFromS : 900) &&
+            gtFund < (M.entryPrepFromS != null ? M.entryPrepFromS : 1050) &&
             hpRatio >= (M.fundRushHp != null ? M.fundRushHp : 0.65);
         const projTight = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + (M.fundProjPx != null ? M.fundProjPx : 45));
@@ -2768,7 +2768,7 @@
                 // expires with the rush at entryPrepFromS.
                 (apDefT == null || ((liveDefense() || 0) >= apDefT) ||
                  ((MH2.fundRush !== false) && ultReadyNow &&
-                  gtT < (MH2.entryPrepFromS != null ? MH2.entryPrepFromS : 900))) &&
+                  gtT < (MH2.entryPrepFromS != null ? MH2.entryPrepFromS : 1050))) &&
                 (apHpT == null || hpRatio >= apHpT) &&   // v6.95.1 fragile profile
                 !hpPanic && !th.rival && !rainbowRecent && !flight;
             if (trekGates) {
@@ -2954,13 +2954,35 @@
         {
             const CS = DHp.capStable || {};
             if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
-                const stableNow =
-                    hpRatio >= (CS.hpFloor != null ? CS.hpFloor : 0.97) &&
-                    (liveDefense() || 0) >= (CS.defMin != null ? CS.defMin : 35) &&
-                    (typeof supersThisRun === 'number' ? supersThisRun : 0) >= (CS.supersMin != null ? CS.supersMin : 3);
-                if (!stableNow) capStableSince = null;
-                else if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
-                else if (gtCap - capStableSince >= CS.holdS) capEarly = true;
+                const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
+                const defMin = CS.defMin != null ? CS.defMin : 35;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const defNow = liveDefense() || 0;
+                const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
+                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
+                const stableNow = hpOk && defOk && supOk;
+                if (stableNow) {
+                    capDipSince = null;   // v6.100.1: back in the green — the grace clock stands down
+                    if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
+                    else {
+                        const streak = gtCap - capStableSince;
+                        if (streak > capBestStreakS) capBestStreakS = streak;
+                        if (streak >= CS.holdS) capEarly = true;
+                    }
+                } else if (capStableSince != null) {
+                    // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
+                    // the old code zeroed the WHOLE hold on any instantaneous
+                    // dip, which a contact-damage game trips constantly. A
+                    // blip shorter than dipGraceS pauses the clock (streak
+                    // keeps counting once we're back over the floor); a dip
+                    // that outlasts the grace still resets fully, same as before.
+                    const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
+                    if (capDipSince == null) capDipSince = gtCap;
+                    if (grace <= 0 || (gtCap - capDipSince) > grace) {
+                        capStableSince = null; capDipSince = null;
+                        capLastResetReason = !hpOk ? 'hp' : !defOk ? 'def' : 'supers';
+                    }
+                }
             }
         }
         const capDive = ((DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS) || capEarly;
@@ -2968,9 +2990,16 @@
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
+        // v6.101.0: which rung of the cap ladder we are on. 0 = not capped.
+        // 1 = smother, 2 = the game's own hurtPlayer, 3 = hard book + restart.
+        // 06 actuates 2 and 3; see the capStandS config comment.
+        let capStage = 0;
         if (capDive) {
             capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
             if (capFirstGt == null) capFirstGt = gtCap;   // v6.99.4: WHEN it engaged (early vs clock)
+            const capEl = Math.max(0, gtCap - capFirstGt);
+            capStage = capEl >= (DHp.capForceS != null ? DHp.capForceS : 240) ? 3
+                     : capEl >= (DHp.capStandS != null ? DHp.capStandS : 150) ? 2 : 1;
             // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
             // needs to walk around the map and doesn't need to dash and it
             // will keep getting hit by the common projectile mobs." Both
@@ -2984,14 +3013,36 @@
             // and the ranged mobs' crossfire does the rest. No target, no
             // gather dependence: the patrol runs even on a tick that sees no
             // enemies at all.
-            const WPS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85]];
-            const wp = WPS[capWpIdx % WPS.length];
-            const wx = fieldW * wp[0], wy = fieldH * wp[1];
-            const dW = Math.hypot(wx - p.x, wy - p.y);
-            if (dW < 30 || (capWpUntil && gtCap >= capWpUntil)) {
-                capWpIdx++; capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
-            } else if (!capWpUntil) capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
-            vx = (wx - p.x) / (dW || 1); vy = (wy - p.y) / (dW || 1);
+            // v6.101.0 THE SMOTHER (replaces the 6.96.2 five-point patrol —
+            // see the capStandS config comment for the measurement that
+            // convicted it: 25,141 s and 22,800 s runs against a 9000 s cap).
+            // The patrol's own waypoints were four CORNER regions, i.e. the
+            // safest ground on the map — the same geometry park/seat is built
+            // on. A tour of the safe spots never establishes the sustained
+            // contact the kill depends on, and contact is the only damage a
+            // maxed build cannot out-regen (~15.5 dps vs 1.71-3.07 HP/s).
+            // So: walk ONTO the hardest-hitting body available and STAND
+            // there. Bosses first (biggest contactDmg), else the live crowd's
+            // centroid, else the middle of the field while the crowd arrives.
+            // Once inside contact range the velocity goes to ZERO — no
+            // evasion, no kiting, no dash, no ult. That is the user's own
+            // instruction: "just get constant contact damage."
+            let sx = 0, sy = 0, sn = 0, capBoss = null, capBossD = Infinity;
+            for (const e of th.enemies) {
+                if (e.wall || e.dormant || e.distant) continue;
+                sx += e.x; sy += e.y; sn++;
+                if (e.boss) {
+                    const dB = Math.hypot(e.x - p.x, e.y - p.y);
+                    if (dB < capBossD) { capBossD = dB; capBoss = e; }
+                }
+            }
+            let ctx2, cty2, ctR;
+            if (capBoss) { ctx2 = capBoss.x; cty2 = capBoss.y; ctR = (capBoss.r || 20) + (p.r || 7.2); }
+            else if (sn) { ctx2 = sx / sn; cty2 = sy / sn; ctR = 0; }
+            else { ctx2 = fieldW * 0.5; cty2 = fieldH * 0.5; ctR = 0; }
+            const dSm = Math.hypot(ctx2 - p.x, cty2 - p.y);
+            if (dSm <= Math.max(ctR, 6)) { vx = 0; vy = 0; }   // STAND IN IT
+            else { vx = (ctx2 - p.x) / dSm; vy = (cty2 - p.y) / dSm; }
         } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
@@ -3084,6 +3135,7 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             capDive,   // v6.96.0: the run is being ended on purpose
+            capStage,  // v6.101.0: 0 none, 1 smother, 2 hurtPlayer, 3 hard book
             dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both

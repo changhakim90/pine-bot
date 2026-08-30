@@ -100,6 +100,8 @@
         capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
         capStableSince = null; capEarly = false;   // v6.99.3: the stability proof is per-run
         capFirstGt = null;                          // v6.99.4: capAt telemetry is per-run
+        capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
+        capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats

@@ -4653,21 +4653,48 @@ if (which === 'run-cap') {
         //    from (200,200) on a 540-field that is a NE diagonal, and the
         //    nearby enemy due east must NOT bend the heading: this is a walk
         //    across open ground, not a dive at a body.
+        T.resetCapLadder();
         let pl = scene(CAP + 50);
-        test('past the cap the plan declares the patrol', () =>
+        test('past the cap the plan declares the dive', () =>
             assert.strictEqual(pl.capDive, true, JSON.stringify({ capDive: pl.capDive })));
-        test('...heading for the field centre, ignoring the enemy beside it', () =>
-            assert.ok(pl.dx > 0.55 && pl.dy > 0.55, 'dx ' + pl.dx.toFixed(2) + ' dy ' + pl.dy.toFixed(2)));
-        // 1b. ARRIVAL ADVANCES THE CIRCUIT: standing on the centre, the next
-        //     leg points back toward the first corner region (NW: both
-        //     components negative).
+        test('...and opens on rung 1, the smother', () =>
+            assert.strictEqual(pl.capStage, 1));
+        // v6.101.0 DOCTRINE INVERSION, and the assertion is deliberately the
+        // OPPOSITE of the one that stood here through 6.96.2-6.100.1. That
+        // test demanded the heading IGNORE the body beside it and walk to the
+        // field centre, because the cap was a five-point patrol. The patrol
+        // was measured failing at the largest possible scale — 6.100.0 booked
+        // 25,141 s and 22,800 s against a 9000 s cap — and the reason is that
+        // its four corner waypoints are the SAFE ground the seat is built on.
+        // Contact is the one damage a maxed build cannot out-regen, so the
+        // cap must now walk straight AT the nearest body and stop on it.
+        test('...heading straight AT the body, not past it', () =>
+            assert.ok(pl.dx > 0.9 && Math.abs(pl.dy) < 0.2, 'dx ' + pl.dx.toFixed(2) + ' dy ' + pl.dy.toFixed(2)));
+        // 1b. THE STAND ITSELF — the whole mechanism. Standing on the crowd,
+        //     velocity must go to ZERO: sustained contact is ~15.5 dps against
+        //     1.71-3.07 HP/s regen, which kills a 469-HP build in ~36 s. Any
+        //     residual movement is what kept the patrol alive for four hours.
+        {
+            global.player = { x: 320, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
+            global.gameTime = CAP + 51;
+            let plS; for (let i = 0; i < 4; i++) plS = T.planMove();
+            test('standing on the crowd, the smother STOPS dead', () =>
+                assert.ok(plS.dx === 0 && plS.dy === 0, 'dx ' + plS.dx + ' dy ' + plS.dy));
+        }
+        // 1b-ii. A BOSS OUTRANKS THE CENTROID — bosses carry the biggest
+        //        contactDmg, so they are the fastest death available.
         {
             global.player = { x: 270, y: 270, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
-            global.enemies = [];
-            global.gameTime = CAP + 51;
-            let plW; for (let i = 0; i < 4; i++) plW = T.planMove();
-            test('reaching a waypoint advances the patrol to the next leg', () =>
-                assert.ok(plW.dx < -0.4 && plW.dy < -0.4, 'dx ' + plW.dx.toFixed(2) + ' dy ' + plW.dy.toFixed(2)));
+            global.enemies = [
+                { type: 'drunk', id: 1, x: 275, y: 100, hp: 500, maxHp: 500, r: 12, speed: 8 },
+                { type: 'drunk', id: 2, x: 265, y: 100, hp: 500, maxHp: 500, r: 12, speed: 8 },
+                { type: 'boss', id: 3, boss: true, x: 270, y: 460, hp: 9e5, maxHp: 9e5, r: 30, speed: 3 }
+            ];
+            global.gameTime = CAP + 52;
+            let plB; for (let i = 0; i < 4; i++) plB = T.planMove();
+            test('the smother takes the BOSS over the commons centroid', () =>
+                assert.ok(plB.dy > 0.9, 'dy ' + plB.dy.toFixed(2) + ' (positive = toward the boss)'));
         }
         // 1c. THE DASH IS HOLSTERED. An escape-worthy emergency (mark
         //     underfoot, contact imminent, huge danger) dashes below the cap
@@ -4678,10 +4705,25 @@ if (which === 'run-cap') {
             const dashPlan = (cap) => ({ hpRatio: 0.9, hpPanic: false, panic: false, danger: 9999, dx: 1, dy: 0,
                                          near: 2, adjacent: 18, contactImminent: true, markHere: true, toughness: 1,
                                          passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999, capDive: cap });
+            global.gameTime = CAP + 50;
             T.maybeAbilities(dashPlan(true));
             test('past the cap the dash stays holstered', () => assert.strictEqual(dashes, 0));
+            global.gameTime = CAP - 100;
             T.maybeAbilities(dashPlan(false));
             test('the same emergency below the cap dashes', () => assert.ok(dashes >= 1, 'dashes ' + dashes));
+            // v6.101.0 BELT AND BRACES (the user's reported symptom: "it's
+            // using dashes even after when it's supposed to just get constant
+            // contact damage"). The ult gate has always ALSO consulted the gt
+            // clock; the dash gate read plan.capDive alone, so a plan that
+            // arrived without the flag re-armed the dash past the cap while
+            // the ult stayed holstered. One dash is not cosmetic: it is a
+            // 0.16 s burst that breaks the contact the kill depends on.
+            dashes = 0;
+            global.gameTime = CAP + 50;
+            const noFlag = dashPlan(undefined); delete noFlag.capDive;
+            T.resetUltGate(); T.maybeAbilities(noFlag);
+            test('past the cap a plan with NO capDive flag still holsters the dash', () =>
+                assert.strictEqual(dashes, 0, 'dashed ' + dashes + 'x on the gt clock alone'));
         }
         // 2. Below the cap the same field is fled, not embraced.
         pl = scene(CAP - 100);
@@ -4718,9 +4760,9 @@ if (which === 'run-cap') {
 
         // 5. v6.99.3 EARLY CAP — the stability proof. Config teeth first:
         const CS = pineBot.config.deepHell.capStable;
-        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 35 / supersMin 3 / holdS 300', () =>
+        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 35 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
             assert.ok(CS && CS.fromS === 3600 && CS.hpFloor === 0.97 &&
-                      CS.defMin === 35 && CS.supersMin === 3 && CS.holdS === 300));
+                      CS.defMin === 35 && CS.supersMin === 3 && CS.holdS === 300 && CS.dipGraceS === 4));
         const stableScene = (gt, extraP) => {
             global.player = Object.assign({ x: 200, y: 200, hp: 469, maxHp: 469, speed: 3.0,
                                             r: 7.2, ultReadyAt: 1e9, defense: 35 }, extraP || {});
@@ -4740,13 +4782,38 @@ if (which === 'run-cap') {
         pl = stableScene(4330, { hp: 200 });     // patrol has begun draining hp
         test('...and the latch HOLDS while the patrol drains hp', () =>
             assert.strictEqual(pl.capDive, true));
-        // an hp dip DURING the window resets the proof clock:
-        T.resetCapLatch();
-        stableScene(5000);
-        stableScene(5200, { hp: 380 });          // dip under 97% at 200 s
-        pl = stableScene(5320);                  // 320 s after the start, but the clock reset at 5200
-        test('an hp dip inside the window resets the proof clock', () =>
+        // v6.100.1 DIP GRACE (user: "the bot is not dying even with the kill
+        // protocol" — a contact-damage game chips hp every few seconds even
+        // on a tanky build, so the OLD "any instantaneous dip zeroes the
+        // clock" rule meant the 300 s proof essentially never completed).
+        // A blip shorter than dipGraceS (4 s) must NOT cost the streak:
+        T.resetCapLatch(); T.setSupers(4);
+        stableScene(5000);                       // proof clock starts
+        stableScene(5100, { hp: 380 });           // dip begins (under 97%) at t=100s in
+        stableScene(5102, { hp: 469 });           // back in the green 2s later — inside the 4s grace
+        pl = stableScene(5300);                  // 300 s after the ORIGINAL start: proof complete
+        test('a brief hp dip WITHIN dipGraceS does not reset the proof clock', () =>
+            assert.strictEqual(pl.capDive, true, JSON.stringify({ cd: pl.capDive, dbg: T.capDebug() })));
+        // ...but a dip that OUTLASTS the grace still resets fully, same as before:
+        T.resetCapLatch(); T.setSupers(4);
+        stableScene(6000);                       // proof clock starts
+        stableScene(6100, { hp: 380 });           // dip begins at t=100s in
+        stableScene(6106, { hp: 380 });           // still dipping 6s later — grace (4s) exceeded
+        test('...a dip that OUTLASTS dipGraceS resets the streak', () =>
+            assert.strictEqual(T.capDebug().capStableSince, null));
+        test('...and records WHICH leg broke it (hp)', () =>
+            assert.strictEqual(T.capDebug().capLastResetReason, 'hp'));
+        pl = stableScene(6500, { hp: 469 });      // healthy again, but the clock had to restart
+        test('...so the proof is not complete yet even 500s past the original start', () =>
             assert.strictEqual(pl.capDive, false));
+        // dipGraceS: 0 restores the strict all-or-nothing legacy behavior:
+        T.resetCapLatch(); T.setSupers(4);
+        pineBot.config.deepHell.capStable = Object.assign({}, CS, { dipGraceS: 0 });
+        stableScene(6600);
+        stableScene(6700, { hp: 380 });           // instantaneous dip, zero grace configured
+        test('dipGraceS: 0 resets on ANY dip, however brief', () =>
+            assert.strictEqual(T.capDebug().capStableSince, null));
+        pineBot.config.deepHell.capStable = CS;
         // supers under the floor never prove anything:
         T.resetCapLatch(); T.setSupers(1);
         stableScene(6000);
@@ -4774,6 +4841,66 @@ if (which === 'run-cap') {
         test('capStable.holdS = 0 disables the early cap', () =>
             assert.strictEqual(pl.capDive, false));
         pineBot.config.deepHell.capStable = CS;
+
+        // 6. v6.101.0 THE CAP LADDER. The smother is rung 1; if a build
+        //    somehow survives standing in the crowd, the run must STILL end.
+        //    This is the guarantee the 6.96.x/6.100.x cap never had, and the
+        //    reason a single window could sit on one run for four hours.
+        const STAND = pineBot.config.deepHell.capStandS;
+        const FORCE = pineBot.config.deepHell.capForceS;
+        test('the ladder ships capStandS 150 / capForceS 240', () =>
+            assert.ok(STAND === 150 && FORCE === 240, 'stand ' + STAND + ' force ' + FORCE));
+        const ladder = (gt) => {
+            global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
+            global.gameTime = gt;
+            let p2; for (let i = 0; i < 2; i++) p2 = T.planMove();
+            return p2;
+        };
+        T.resetCapLatch(); T.resetCapLadder();
+        ladder(CAP + 10);                       // engages here: capFirstGt = CAP+10
+        test('rung 1 while the smother has time to work', () =>
+            assert.strictEqual(ladder(CAP + 10 + STAND - 5).capStage, 1));
+        test('rung 2 once capStandS of standing in it did not kill', () =>
+            assert.strictEqual(ladder(CAP + 10 + STAND + 1).capStage, 2));
+        test('rung 3 once capForceS passed', () =>
+            assert.strictEqual(ladder(CAP + 10 + FORCE + 1).capStage, 3));
+        // 6b. RUNG 2 ACTUATES: the game's own hurtPlayer is called.
+        {
+            let hurt = 0, hurtArg = null;
+            global.hurtPlayer = (d) => { hurt++; hurtArg = d; };
+            global.gameTime = CAP + 10 + STAND + 1;
+            T.maybeAbilities({ hpRatio: 0.9, dx: 0, dy: 0, near: 2, adjacent: 18, danger: 0,
+                               toughness: 1, passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999,
+                               capDive: true, capStage: 2 });
+            test('rung 2 calls the game\'s own hurtPlayer', () =>
+                assert.ok(hurt >= 1, 'hurtPlayer called ' + hurt + 'x'));
+            test('...for more than any build\'s HP pool', () =>
+                assert.ok(hurtArg >= 1e5, 'dealt ' + hurtArg));
+            // rung 1 must NEVER touch it — an ordinary capped run dies by
+            // contact, and a damage hook firing early would fake every row.
+            hurt = 0;
+            T.maybeAbilities({ hpRatio: 0.9, dx: 0, dy: 0, near: 2, adjacent: 18, danger: 0,
+                               toughness: 1, passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999,
+                               capDive: true, capStage: 1 });
+            test('rung 1 does NOT call hurtPlayer', () => assert.strictEqual(hurt, 0));
+        }
+        // 6c. RUNG 3 ACTUATES: the run is navigated out whatever the game did.
+        {
+            let titled = 0;
+            global.backToTitle = () => { titled++; };
+            global.gameTime = CAP + 10 + FORCE + 1;
+            T.maybeAbilities({ hpRatio: 0.9, dx: 0, dy: 0, near: 2, adjacent: 18, danger: 0,
+                               toughness: 1, passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999,
+                               capDive: true, capStage: 3 });
+            test('rung 3 forces the game out to the title', () =>
+                assert.ok(titled >= 1, 'backToTitle called ' + titled + 'x'));
+            titled = 0;
+            T.maybeAbilities({ hpRatio: 0.9, dx: 0, dy: 0, near: 2, adjacent: 18, danger: 0,
+                               toughness: 1, passoutsNear: 0, poCentroidDist: 9999, poNearest: 9999,
+                               capDive: true, capStage: 1 });
+            test('rung 1 does NOT navigate away', () => assert.strictEqual(titled, 0));
+        }
         done();
     }, 700);
 }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.100.0
+// @version      6.101.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.100.0';
+    const SCRIPT_VERSION = '6.101.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -884,14 +884,46 @@
             // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
             // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
             runCapS: 9000,
-            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances
+            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances (unused from 6.101.0 — see capStandS)
+            // v6.101.0 THE CAP LADDER (user: "the bot is not dying even with
+            // the kill protocol"). Measured proof the 6.96.2 patrol failed:
+            // 6.100.0 booked runs at 25,141 s and 22,800 s against runCapS
+            // 9000 — the clock cap fired on time and the bot then survived
+            // FOUR AND A HALF MORE HOURS. mitigation-model.md says why that
+            // is impossible in sustained contact: hurtPlayer sets invuln=38
+            // frames, so contact lands 1.58 hits/s x ~9.8 = ~15.5 dps against
+            // a measured regen of 1.71-3.07 HP/s. Standing in real contact
+            // costs ~13 HP/s net and kills a 469-HP build in ~36 s. So the
+            // patrol was never IN contact — it toured the four corner regions,
+            // which is exactly where park/seat sits BECAUSE the corner
+            // geometry is safe. The cap was walking a circuit of the safest
+            // ground on the map. Three stages now, each escalating only if
+            // the one before it failed:
+            //   1. SMOTHER (0 -> capStandS): stand ON the nearest boss, or on
+            //      the crowd centroid, and STOP. No evasion, no dash, no ult.
+            //      36 s is the physics; capStandS is 4x that for margin.
+            //   2. capStandS -> capForceS: call the game's own hurtPlayer().
+            //      A natural death, booked through the normal over() path.
+            //   3. past capForceS: hard-book (finishRun) + backToTitle, so an
+            //      unattended farm can NEVER be parked on one immortal run
+            //      again whatever the game does.
+            capStandS: 150,        // stage 1 budget: stand in contact this long before escalating
+            capForceS: 240,        // stage 2 budget: past this, book the run and force a restart
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor
             // while measured defense >= defMin and supers >= supersMin, the
             // build is immortal-in-practice and the patrol engages early:
             // the remaining hours teach nothing, and the next run's day and
             // entry are where the learning lives. holdS: 0 disables.
-            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300 },
+            // v6.100.1 (user: "the bot is not dying even with the kill
+            // protocol"): 6.99.3 zeroed capStableSince on ANY instantaneous
+            // hp dip below hpFloor, but this is a contact-damage game — a
+            // tanky build still gets chipped every few seconds, so a real
+            // 300 s streak with zero blips essentially never completes.
+            // dipGraceS tolerates a blip shorter than this many game-seconds
+            // (the clock keeps running, just doesn't reset); a dip that
+            // outlasts the grace still resets fully. 0 = old strict behavior.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2056,6 +2088,17 @@
     // prove immortality?" and the capStable.fromS floor can be tuned from
     // measured latch times instead of guesses.
     let capFirstGt = null;
+    // v6.100.1: dip-grace bookkeeping + live diagnostics for pineBot.capStatus()
+    // — see the capStable.dipGraceS comment. capDipSince marks when the CURRENT
+    // blip started (null = not currently dipping); capBestStreakS is the
+    // longest continuous stable streak this run got to before either latching
+    // or breaking (so a stuck run's report can show "45s of 300s needed, then
+    // hp fell to 0.89" instead of nothing at all); capLastResetReason records
+    // which leg (hp/def/supers) broke the most recent streak.
+    let capDipSince = null, capBestStreakS = 0, capLastResetReason = null;
+    // v6.101.0 cap ladder actuator state: gt of the last hurtPlayer poke
+    // (stage 2) and whether the hard book (stage 3) has already run.
+    let capHurtAt = 0, capForcedThisRun = false;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {
@@ -5439,6 +5482,8 @@
         capWpIdx = 0; capWpUntil = 0;   // v6.96.2: the cap patrol restarts its circuit
         capStableSince = null; capEarly = false;   // v6.99.3: the stability proof is per-run
         capFirstGt = null;                          // v6.99.4: capAt telemetry is per-run
+        capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
+        capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -8202,7 +8247,7 @@
         const gtFund = typeof G.gameTime === 'number' ? G.gameTime : 0;
         const fundRush = (M.fundRush !== false) && dayPhaseNow &&
             (ultReadyNow || ultInS <= M.ultHarvestLeadS) &&
-            gtFund < (M.entryPrepFromS != null ? M.entryPrepFromS : 900) &&
+            gtFund < (M.entryPrepFromS != null ? M.entryPrepFromS : 1050) &&
             hpRatio >= (M.fundRushHp != null ? M.fundRushHp : 0.65);
         const projTight = th.projectiles.some(q =>
             Math.hypot(q.x - p.x, q.y - p.y) < q.r + (M.fundProjPx != null ? M.fundProjPx : 45));
@@ -9136,7 +9181,7 @@
                 // expires with the rush at entryPrepFromS.
                 (apDefT == null || ((liveDefense() || 0) >= apDefT) ||
                  ((MH2.fundRush !== false) && ultReadyNow &&
-                  gtT < (MH2.entryPrepFromS != null ? MH2.entryPrepFromS : 900))) &&
+                  gtT < (MH2.entryPrepFromS != null ? MH2.entryPrepFromS : 1050))) &&
                 (apHpT == null || hpRatio >= apHpT) &&   // v6.95.1 fragile profile
                 !hpPanic && !th.rival && !rainbowRecent && !flight;
             if (trekGates) {
@@ -9322,13 +9367,35 @@
         {
             const CS = DHp.capStable || {};
             if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
-                const stableNow =
-                    hpRatio >= (CS.hpFloor != null ? CS.hpFloor : 0.97) &&
-                    (liveDefense() || 0) >= (CS.defMin != null ? CS.defMin : 35) &&
-                    (typeof supersThisRun === 'number' ? supersThisRun : 0) >= (CS.supersMin != null ? CS.supersMin : 3);
-                if (!stableNow) capStableSince = null;
-                else if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
-                else if (gtCap - capStableSince >= CS.holdS) capEarly = true;
+                const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
+                const defMin = CS.defMin != null ? CS.defMin : 35;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const defNow = liveDefense() || 0;
+                const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
+                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
+                const stableNow = hpOk && defOk && supOk;
+                if (stableNow) {
+                    capDipSince = null;   // v6.100.1: back in the green — the grace clock stands down
+                    if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
+                    else {
+                        const streak = gtCap - capStableSince;
+                        if (streak > capBestStreakS) capBestStreakS = streak;
+                        if (streak >= CS.holdS) capEarly = true;
+                    }
+                } else if (capStableSince != null) {
+                    // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
+                    // the old code zeroed the WHOLE hold on any instantaneous
+                    // dip, which a contact-damage game trips constantly. A
+                    // blip shorter than dipGraceS pauses the clock (streak
+                    // keeps counting once we're back over the floor); a dip
+                    // that outlasts the grace still resets fully, same as before.
+                    const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
+                    if (capDipSince == null) capDipSince = gtCap;
+                    if (grace <= 0 || (gtCap - capDipSince) > grace) {
+                        capStableSince = null; capDipSince = null;
+                        capLastResetReason = !hpOk ? 'hp' : !defOk ? 'def' : 'supers';
+                    }
+                }
             }
         }
         const capDive = ((DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS) || capEarly;
@@ -9336,9 +9403,16 @@
         // not hunt at all — it zeroes movement, so a boss the gather now sees
         // would still be ignored. Ordering them here keeps both as overrides
         // and makes the precedence explicit rather than emergent.
+        // v6.101.0: which rung of the cap ladder we are on. 0 = not capped.
+        // 1 = smother, 2 = the game's own hurtPlayer, 3 = hard book + restart.
+        // 06 actuates 2 and 3; see the capStandS config comment.
+        let capStage = 0;
         if (capDive) {
             capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
             if (capFirstGt == null) capFirstGt = gtCap;   // v6.99.4: WHEN it engaged (early vs clock)
+            const capEl = Math.max(0, gtCap - capFirstGt);
+            capStage = capEl >= (DHp.capForceS != null ? DHp.capForceS : 240) ? 3
+                     : capEl >= (DHp.capStandS != null ? DHp.capStandS : 150) ? 2 : 1;
             // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
             // needs to walk around the map and doesn't need to dash and it
             // will keep getting hit by the common projectile mobs." Both
@@ -9352,14 +9426,36 @@
             // and the ranged mobs' crossfire does the rest. No target, no
             // gather dependence: the patrol runs even on a tick that sees no
             // enemies at all.
-            const WPS = [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85]];
-            const wp = WPS[capWpIdx % WPS.length];
-            const wx = fieldW * wp[0], wy = fieldH * wp[1];
-            const dW = Math.hypot(wx - p.x, wy - p.y);
-            if (dW < 30 || (capWpUntil && gtCap >= capWpUntil)) {
-                capWpIdx++; capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
-            } else if (!capWpUntil) capWpUntil = gtCap + (DHp.capLegS != null ? DHp.capLegS : 8);
-            vx = (wx - p.x) / (dW || 1); vy = (wy - p.y) / (dW || 1);
+            // v6.101.0 THE SMOTHER (replaces the 6.96.2 five-point patrol —
+            // see the capStandS config comment for the measurement that
+            // convicted it: 25,141 s and 22,800 s runs against a 9000 s cap).
+            // The patrol's own waypoints were four CORNER regions, i.e. the
+            // safest ground on the map — the same geometry park/seat is built
+            // on. A tour of the safe spots never establishes the sustained
+            // contact the kill depends on, and contact is the only damage a
+            // maxed build cannot out-regen (~15.5 dps vs 1.71-3.07 HP/s).
+            // So: walk ONTO the hardest-hitting body available and STAND
+            // there. Bosses first (biggest contactDmg), else the live crowd's
+            // centroid, else the middle of the field while the crowd arrives.
+            // Once inside contact range the velocity goes to ZERO — no
+            // evasion, no kiting, no dash, no ult. That is the user's own
+            // instruction: "just get constant contact damage."
+            let sx = 0, sy = 0, sn = 0, capBoss = null, capBossD = Infinity;
+            for (const e of th.enemies) {
+                if (e.wall || e.dormant || e.distant) continue;
+                sx += e.x; sy += e.y; sn++;
+                if (e.boss) {
+                    const dB = Math.hypot(e.x - p.x, e.y - p.y);
+                    if (dB < capBossD) { capBossD = dB; capBoss = e; }
+                }
+            }
+            let ctx2, cty2, ctR;
+            if (capBoss) { ctx2 = capBoss.x; cty2 = capBoss.y; ctR = (capBoss.r || 20) + (p.r || 7.2); }
+            else if (sn) { ctx2 = sx / sn; cty2 = sy / sn; ctR = 0; }
+            else { ctx2 = fieldW * 0.5; cty2 = fieldH * 0.5; ctR = 0; }
+            const dSm = Math.hypot(ctx2 - p.x, cty2 - p.y);
+            if (dSm <= Math.max(ctR, 6)) { vx = 0; vy = 0; }   // STAND IN IT
+            else { vx = (ctx2 - p.x) / dSm; vy = (cty2 - p.y) / dSm; }
         } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
@@ -9452,6 +9548,7 @@
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
             capDive,   // v6.96.0: the run is being ended on purpose
+            capStage,  // v6.101.0: 0 none, 1 smother, 2 hurtPlayer, 3 hard book
             dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
@@ -9521,6 +9618,40 @@
         if (lastUlt > clockMs) lastUlt = 0;
         if (lastDash > clockMs) lastDash = 0;
         const A = CONFIG.abilities;
+        // v6.101.0 THE CAP LADDER, RUNGS 2 AND 3. Stage 1 (the smother) is
+        // pure movement and lives in 05. These two are game calls, so they
+        // live here — the layer that owns them. They only ever run on a run
+        // that is ALREADY past the cap and has already failed to die by
+        // standing in the crowd, so neither can touch an ordinary run.
+        if (plan.capStage >= 2) {
+            // RUNG 2: the game's own damage function. hurtPlayer is a
+            // top-level `function` declaration, so unlike the game's `let`
+            // globals it really is on window (see the LEXICAL GLOBAL ACCESS
+            // note). It sets invuln=38 frames itself, so a poke every half
+            // game-second is already the maximum the game will honour.
+            const gtH = safe(() => (typeof gameTime === 'number' ? gameTime : 0), 0) || 0;
+            if (hasGame('hurtPlayer') && (gtH - capHurtAt >= 0.5 || gtH < capHurtAt)) {
+                capHurtAt = gtH;
+                callGame('hurtPlayer', 1e6);
+            }
+        }
+        if (plan.capStage >= 3) {
+            // RUNG 3: the guarantee. If the crowd would not kill us and the
+            // game exposes no damage hook, the run still ENDS — booked
+            // through the same finishRun() path a natural death uses (it is
+            // idempotent, so a later real death cannot double-book it), then
+            // navigated out so the unattended farm starts a fresh run. An
+            // immortal build can no longer park a window for four hours.
+            if (runActive) {
+                deathSnapshot = deathSnapshot || snapshotStats();
+                finishRun();
+                setStatus('RUN CAP: booked by force at stage 3');
+            }
+            if (!capForcedThisRun) { capForcedThisRun = true; log('run cap: hard book + restart'); }
+            releaseAll();
+            callFirst(['backToTitle']);
+            return;   // nothing else this tick — the run is over
+        }
         // DASH (defensive): the lower our HP, the earlier we bail out — and
         // standing inside a telegraphed blast zone is an emergency that
         // overrides the normal danger threshold entirely.
@@ -9611,7 +9742,20 @@
         // the dash is a 0.16 s escape burst, i.e. exactly the tool that keeps
         // carrying the bot OUT of the projectile paths that are supposed to
         // end the run. Holstered like the ult while the cap patrol walks.
-        if (plan.capDive !== true && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
+        // v6.101.0 THE DASH HOLSTER GETS THE ULT'S BELT AND BRACES. The ult
+        // gate below has ALWAYS carried its own `gtU >= runCapS` clock check
+        // as well as reading plan.capDive; the dash gate read the plan alone.
+        // So any tick whose plan lacked the flag re-armed the dash past the
+        // cap while the ult stayed correctly holstered — and one dash is not
+        // cosmetic here: it is a 0.16 s movement burst that BREAKS the
+        // sustained contact the kill depends on and resets the ~36 s clock.
+        // The user watched exactly this ("using dashes even after when it's
+        // supposed to just get constant contact damage"). Now both gates
+        // answer the same question the same way.
+        const gtDash = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const capHolster = plan.capDive === true ||
+            ((CONFIG.deepHell.runCapS || 0) > 0 && gtDash >= CONFIG.deepHell.runCapS);
+        if (!capHolster && A.dashEnabled && dashProductive && hasGame('tryDash') && clockMs - lastDash > dashGate &&
             (plan.danger > dashThreshold || inBlastZone || plan.projImminent || plan.laneUrgent ||
                 plan.rivalUrgent || plan.frozenUrgent || plan.sprinterUrgent || plan.contactImminent ||
                 plan.flight || blastImminent)) {
@@ -10434,7 +10578,11 @@
                     // v6.99.3: the early-cap stability proof reads the run's
                     // supers count; the test arranges it directly.
                     setSupers: n => { supersThisRun = n; },
-                    resetCapLatch: () => { capStableSince = null; capEarly = false; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
+                    // v6.101.0: the ladder's own clock, so a scenario can put
+                    // the run at a chosen rung without replaying 4 minutes.
+                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; },
+                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.
@@ -10683,6 +10831,51 @@
                 phaseAudit = { rows: [] };
                 try { localStorage.removeItem(PHASE_AUDIT_KEY); } catch (e) { }
                 return 'phase audit cleared';
+            };
+            // v6.100.1 (user: "the bot is not dying even with the kill
+            // protocol"): a LIVE inspector for the early-cap stability proof,
+            // so a run that "should" be immortal but keeps dashing can be
+            // checked mid-run instead of guessed at. Call this while a hell
+            // run is past capStable.fromS and read WHY capEarly hasn't
+            // latched: streakS vs holdS needed, which leg (hp/def/supers) is
+            // short, and bestStreakS (the closest this run has gotten).
+            window.pineBot.capStatus = () => {
+                const CS = (CONFIG.deepHell && CONFIG.deepHell.capStable) || {};
+                const gt = safe(() => gameTime, 0) || 0;
+                const p = safe(() => player, null);
+                const hp = p && typeof p.hp === 'number' && typeof p.maxHp === 'number' && p.maxHp > 0
+                    ? p.hp / p.maxHp : null;
+                const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
+                const defMin = CS.defMin != null ? CS.defMin : 35;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const def = liveDefense();
+                return {
+                    gt: Math.round(gt),
+                    fromS: CS.fromS != null ? CS.fromS : 3600,
+                    holdS: CS.holdS != null ? CS.holdS : 300,
+                    dipGraceS: CS.dipGraceS != null ? CS.dipGraceS : 0,
+                    capEarly, capFiredThisRun,
+                    runCapS: (CONFIG.deepHell && CONFIG.deepHell.runCapS) || 0,
+                    // v6.101.0 the ladder: which rung, and how long it has been climbing
+                    capAt: capFirstGt == null ? null : Math.round(capFirstGt),
+                    cappedForS: capFirstGt == null ? 0 : Math.round(gt - capFirstGt),
+                    stage: capFirstGt == null ? 0
+                        : (gt - capFirstGt) >= (CONFIG.deepHell.capForceS != null ? CONFIG.deepHell.capForceS : 240) ? 3
+                        : (gt - capFirstGt) >= (CONFIG.deepHell.capStandS != null ? CONFIG.deepHell.capStandS : 150) ? 2 : 1,
+                    forced: capForcedThisRun,
+                    streakS: capStableSince == null ? 0 : Math.round(gt - capStableSince),
+                    bestStreakS: Math.round(capBestStreakS),
+                    inDip: capDipSince != null,
+                    dipForS: capDipSince == null ? 0 : Math.round(gt - capDipSince),
+                    lastResetReason: capLastResetReason,
+                    live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
+                    need: { hpFloor, defMin, supersMin },
+                    short: {
+                        hp: hp != null && hp < hpFloor,
+                        def: def != null && def < defMin,
+                        supers: (typeof supersThisRun === 'number' ? supersThisRun : 0) < supersMin
+                    }
+                };
             };
             // v6.97.1 (user: "let's build this combined probe now"):
             // pineBot.report() — the whole statistics picture in ONE paste.
