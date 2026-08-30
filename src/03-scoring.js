@@ -1711,7 +1711,7 @@
             supersThisRun = supersMade.size;
         }
         else if (best.type === 'evolve') craftsThisRun++;
-        else if (best.type === 'rainbowup') { rainbowThisRun = true; rainbowAt = Date.now(); }
+        else if (best.type === 'rainbowup') { rainbowThisRun = true; rainbowAt = gameMs(); }
 
         // v6.87.3: close the loop — which of the bad options did we eat?
         if (forcedGunPool && gunForcedLog.length) gunForcedLog[gunForcedLog.length - 1].took = best.name;
@@ -1724,7 +1724,7 @@
         log('level-up:', scored.map(s => `${s.name}(${s.type})=${s.score.toFixed(0)}`).join('   '));
         setStatus('picked ' + best.name);
 
-        lastLevelUpAt = Date.now();
+        lastLevelUpAt = gameMs();
         return true;   // v6.88.1 L2: the pick already landed, above.
     }
 

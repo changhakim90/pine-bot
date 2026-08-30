@@ -64,6 +64,11 @@
             r += hellTimeBonus(stats.time || 0);
         }
         if (rainbowThisRun) r += ms.rainbow;
+        // v6.108.0: a PROVEN cap is a milestone, not a truncation. capEarly
+        // means the stability proof or the saturation detector fired — the
+        // run demonstrated it could not be killed. A bare runCapS timeout is
+        // excluded on purpose: reaching a clock proves nothing about a build.
+        if (capEarly && ms.immortal) r += ms.immortal;
         return r;
     }
 
@@ -81,7 +86,7 @@
         lastPoolRef = null;
         levelupStuckAt = 0;
         hellDetected = pendingHellEntry;   // we took the hell entrance — this run IS hell
-        hellEnteredAt = pendingHellEntry ? Date.now() : 0;
+        hellEnteredAt = pendingHellEntry ? gameMs() : 0;
         pendingHellEntry = false;
         deathSnapshot = null;
         dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };
@@ -103,6 +108,8 @@
         capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
         capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
         capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
+        capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
+        spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -115,7 +122,7 @@
         supersThisRun = 0; craftsThisRun = 0; rainbowThisRun = false; dayClearedThisRun = false;
         rainbowAt = 0;
         rainbowChoice = null;
-        lastLevelUpAt = Date.now();
+        lastLevelUpAt = gameMs();
         supersMade = new Set();
         runPickCtx = [];
         beginTrial();
@@ -156,7 +163,21 @@
             capAt: capFirstGt == null ? null : Math.round(capFirstGt),
             // v6.102.0: gt the build met armour+supers. Answers "when is a
             // build actually complete?" across runs, cap-out or not.
-            readyAt: capReadyGt == null ? null : Math.round(capReadyGt)
+            readyAt: capReadyGt == null ? null : Math.round(capReadyGt),
+            // v6.108.0 THE STALL SIGNATURE, on every row. A probe of the run
+            // that would not end measured 0.021 game-seconds per wall-second
+            // with enemies pinned at 260 and HP flat. None of that was
+            // visible in any audit — this makes it visible without a probe.
+            //   spd  = median game-sec per wall-sec (1.0 = healthy page)
+            //   spdLo= worst sample of the run
+            //   enMax= peak live enemy count (the entity cap is ~260)
+            //   why  = what armed the cap: 'saturated' names the new arm
+            spd: (() => { if (!spdSamples.length) return null;
+                const a = spdSamples.slice().sort((x, y) => x - y);
+                return a[Math.floor(a.length / 2)]; })(),
+            spdLo: spdWorst,
+            enMax: satPeakEn || null,
+            why: capFiredThisRun ? (capLastResetReason || null) : null
         };
     }
 
@@ -539,8 +560,8 @@
     }
     function latchHellDuringPlay() {
         if (hellDetected) return;
-        if (hellLexicalFlag()) { hellDetected = true; hellEnteredAt = Date.now(); log('HELL run latched (lexical flag)'); return; }
-        if (CONFIG.hellModeRegex.test(bodyText())) { hellDetected = true; hellEnteredAt = Date.now(); log('HELL run latched (HUD text)'); }
+        if (hellLexicalFlag()) { hellDetected = true; hellEnteredAt = gameMs(); log('HELL run latched (lexical flag)'); return; }
+        if (CONFIG.hellModeRegex.test(bodyText())) { hellDetected = true; hellEnteredAt = gameMs(); log('HELL run latched (HUD text)'); }
     }
 
     function looksLikeNameEntry() {
@@ -927,7 +948,7 @@
                     hellTries++;
                     captureGiveUp('finale-failsafe');
                     if (callGame('enterHell').ok) {
-                        hellDetected = true; hellEnteredAt = Date.now(); dayClearedThisRun = true;
+                        hellDetected = true; hellEnteredAt = gameMs(); dayClearedThisRun = true;
                         setStatus('FAILSAFE: enterHell() called directly at finale');
                         return true;
                     }
@@ -954,7 +975,7 @@
                     if (CONFIG.autoEnterHell) {
                         if (hellBtn ? clickEl(hellBtn) : (hasGame('enterHell') && callGame('enterHell').ok)) {
                             hellDetected = true;
-                            hellEnteredAt = Date.now();
+                            hellEnteredAt = gameMs();
                             dayClearedThisRun = true;
                             setStatus('AFTER-HOURS · HELL entered, same run continues');
                         }

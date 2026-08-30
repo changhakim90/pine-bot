@@ -936,6 +936,63 @@ if (which === 'gun-veto') {
         assert.ok(/gun-BANNED/.test(g.why), g.why);
         assert.ok(g.score < -500, 'score ' + g.score);
     });
+    // v6.107.0 — THE BAN OUTRANKS THE NEW LEARNED LAYERS TOO.
+    // Two learned terms were added in 6.107.0 (`ctx-learn` +/-12 per card,
+    // `tag-learn` +/-8 per attack type) and both are ADDITIVE into the same
+    // score the guards live in. The promise made when they were bounded was
+    // that recipe-book knowledge and user directives keep the casting vote.
+    // This is where that promise is actually checked.
+    //
+    // FIRST DRAFT OF THIS TEST WAS TOOTHLESS and saying why is the point:
+    // it saturated the tag layer and scored RAINBOW GUN itself, which carries
+    // NO tags — so `tagLearnBonus` returned 0 early and the assertion passed
+    // with the +/-8 bound removed entirely. The gun card was never reachable
+    // by that layer, so testing it proved nothing about the bound.
+    test('RAINBOW GUN carries no tags at all — the tag layer cannot reach it', () =>
+        assert.strictEqual(pineBot.test.tagsOf('RAINBOW GUN').length, 0,
+            JSON.stringify(pineBot.test.tagsOf('RAINBOW GUN'))));
+    // The gun is not actually reached through the gun CARD, though — it is
+    // reached by opening a SIXTH super line, and the structural guard is the
+    // arming cap refusing that line's key. LIME is GIMLET's key, it carries a
+    // real tag (`dps`), and it is therefore the card where a saturated
+    // learned layer could actually do damage. This is the honest version.
+    // MEASURED MARGIN, not a vibe: LIME@5 scores -673 clean and -665 with the
+    // tag layer saturated at maximum reward for 200 credits. The learned
+    // layer moves it by exactly 8 — its bound — against a 700-point arming
+    // cap. The ban is 265 points clear of anything the learned layers can do.
+    //
+    // Two assertions, and only the second is a change guard:
+    //  (a) an INVARIANT: the key stays refused. This does NOT fail when the
+    //      bound is removed (unbounded, the layer adds ~150 and -673 becomes
+    //      -523, still refused) — it fails if someone ever weakens the cap.
+    //  (b) the real guard on the bound: the saturated delta must EQUAL the
+    //      declared +/-8. That does fail the moment the bound is widened.
+    test('the gun-line key stays refused under a saturated learned layer', () => {
+        const T = pineBot.test;
+        assert.ok(T.tagsOf('LIME').length > 0, 'LIME has no tags — pick another key card');
+        T.setTagUcb({});
+        const clean = T.scoreCard({ n: 'LIME', type: 'passive', lv: 5, maxlv: 6 }, 0, []).score;
+        for (let i = 0; i < 200; i++)
+            T.creditTagPicks([{ name: 'LIME' }, { name: 'GIMLET' }, { name: 'SIDECAR' }], 4.5);
+        const k = T.scoreCard({ n: 'LIME', type: 'passive', lv: 5, maxlv: 6 }, 0, []);
+        assert.ok(k.score < -400, 'LIME@5 climbed to ' + Math.round(k.score) + ' — ' + k.why);
+        assert.ok(/arming-cap/.test(k.why), k.why);
+        // (b) the bound itself, which is what actually protects the guards.
+        assert.ok(k.score - clean <= 8.001,
+            'the tag layer moved a guarded card by ' + (k.score - clean).toFixed(1) +
+            ' — its declared bound is 8');
+        T.setTagUcb({});
+    });
+    // ...and the same for the day-order and armour-tier reshuffles of
+    // 6.106.0/6.107.0: moving ranks around must never move a guard.
+    test('no 6.106/6.107 ordering change can outbid the ban', () => {
+        const T = pineBot.test;
+        T.setParam('movement.armorTierFromS', 0);
+        const a = T.scoreCard({ n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 6 }, 0, []);
+        T.setParam('movement.armorTierFromS', 300);
+        const b = T.scoreCard({ n: 'RAINBOW GUN', type: 'rainbowup', lv: 0, maxlv: 6 }, 0, []);
+        assert.ok(a.score < -500 && b.score < -500, 'a ' + Math.round(a.score) + ' b ' + Math.round(b.score));
+    });
     test('the ban outranks the learned policy and the timing window', () => {
         // even inside the old 25-30 min "take" window, with the policy set to
         // take, the ban still wins — it is not a tuning knob any more
@@ -4007,7 +4064,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -5939,6 +5996,172 @@ if (which === 'learn-probe') {
     test('the anchor reports its arming count for the run', () => {
         const a = pineBot.learning().anchor;
         assert.ok(a && typeof a.armedTicksThisRun === 'number', JSON.stringify(a));
+    });
+    done();
+}
+
+// ---------------------------------------------------------------------
+// v6.108.0 THE STALL. Measured, not theorised: a console probe of a run
+// that would not end recorded, across all 18 samples, enemies pinned at
+// 260-261 (the game's entity cap), HP 1.00, ZERO drop marks, ZERO road
+// lines, and pickups climbing 79 -> 238 uncollected. gameTime advanced
+// 358 seconds across ~4.8 WALL-HOURS — 0.021 game-sec per wall-sec, with
+// a 10 s timer firing every ~1000 s.
+//
+// Three consequences, each guarded below:
+//   1. the ladder's budgets are GAME seconds, so rung 1 took 12 wall-min
+//      and rung 3 arrived 1.6 wall-hours in;
+//   2. capStable refused to call it immortal because it asks what the
+//      BUILD looks like (2 supers vs supersMin 3), not what the run does;
+//   3. four movement gates are wall-ms and ran ~48x fast against the game.
+// ---------------------------------------------------------------------
+if (which === 'stall-escape') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 4600, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const C = pineBot.config;
+
+    // --- (1) THE WALL-CLOCK ESCAPE.
+    // The two arms are sized so the GAME budgets still govern a healthy run
+    // and only a starved page ever reaches the wall arm first. Asserted as
+    // an ordering, so nobody can later set a wall budget under the game one
+    // and silently make the ladder fire early on a normal cap-out.
+    test('the game budgets are the tighter pair at healthy speed', () => {
+        assert.ok(C.deepHell.capStandS < C.deepHell.capStandWallS,
+            'capStandS ' + C.deepHell.capStandS + ' >= wall ' + C.deepHell.capStandWallS);
+        assert.ok(C.deepHell.capForceS < C.deepHell.capForceWallS,
+            'capForceS ' + C.deepHell.capForceS + ' >= wall ' + C.deepHell.capForceWallS);
+    });
+    // ...and the escape actually escalates on wall time with the game clock
+    // FROZEN — which is the measured condition, not a hypothetical.
+    test('with gameTime frozen, the ladder still escalates on real time', () => {
+        T.resetCapLadder();
+        T.armCap();                              // arm the cap
+        global.gameTime = 4600;                  // and never advance it again
+        let p = T.planMove();
+        assert.strictEqual(p.capStage, 1, 'stage should open at 1, got ' + p.capStage);
+        T.ageCapWall(C.deepHell.capStandWallS * 1000 + 500);
+        p = T.planMove();
+        assert.strictEqual(p.capStage, 2, 'wall arm did not reach rung 2 (stage ' + p.capStage + ')');
+        T.ageCapWall((C.deepHell.capForceWallS - C.deepHell.capStandWallS) * 1000 + 500);
+        p = T.planMove();
+        assert.strictEqual(p.capStage, 3, 'wall arm did not reach rung 3 (stage ' + p.capStage + ')');
+    });
+
+    // --- (2) SATURATION. The predicate asks what the RUN is doing, so it
+    // must fire on a build capStable would refuse. This scene is the probe:
+    // 260 enemies, full HP, and only TWO supers — the exact shape that sat
+    // at the clock cap because `supersMin: 3` refused it.
+    const flood = n => { global.enemies = []; for (let i = 0; i < n; i++)
+        global.enemies.push({ type: 'drunk', x: 60 + (i * 37) % 420, y: 60 + (i * 71) % 420,
+                              r: 12, hp: 40, maxHp: 40, speed: 1.2, moving: true }); };
+    test('a saturated field arms the cap even with supers BELOW capStable', () => {
+        T.resetCapLadder();
+        global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5 };
+        global.gameTime = 4600;
+        T.setSupers(2);                                  // under capStable.supersMin 3
+        flood(C.deepHell.saturation.enemyMin + 20);
+        T.planMove();                                    // seeds the hold
+        assert.strictEqual(T.capState().capEarly, false, 'armed before the hold elapsed');
+        T.ageSat(C.deepHell.saturation.holdWallS * 1000 + 500);
+        T.planMove();
+        assert.strictEqual(T.capState().capEarly, true, 'saturation never armed the cap');
+        assert.strictEqual(T.capState().lastResetReason, 'saturated');
+    });
+    test('...and a field BELOW the entity threshold never arms it', () => {
+        T.resetCapLadder();
+        flood(C.deepHell.saturation.enemyMin - 40);
+        T.planMove();
+        T.ageSat(C.deepHell.saturation.holdWallS * 1000 + 500);
+        T.planMove();
+        assert.strictEqual(T.capState().capEarly, false, 'armed on a merely dense field');
+    });
+    // HP is the other half: a saturated field the bot is LOSING is a real
+    // fight, not a stall, and must be left alone to die naturally.
+    test('...nor does a saturated field while the bot is taking damage', () => {
+        T.resetCapLadder();
+        flood(C.deepHell.saturation.enemyMin + 20);
+        global.player.hp = 60;                            // under saturation.hpFloor
+        T.planMove();
+        T.ageSat(C.deepHell.saturation.holdWallS * 1000 + 500);
+        T.planMove();
+        assert.strictEqual(T.capState().capEarly, false, 'armed while the bot was losing HP');
+        global.player.hp = 100;
+    });
+    // --- (3) THE FOUR MOVEMENT CLOCKS. 6.100.0 moved the ABILITY gates off
+    // wall-ms and left these four behind. At the measured 0.021x they run
+    // ~48x fast against the game: cadenceHunger pins at 1.0 permanently and
+    // hellRecent expires within TWO game-seconds. Asserted by FREEZING wall
+    // time's influence — advancing only gameTime — and checking the gate
+    // moves, which it could not do while it was reading Date.now().
+    test('hellRecent is measured in GAME time, not wall time', () => {
+        global.gameTime = 1200; global.hell = true;
+        pineBot.test.handleScreens();                    // latches hellEnteredAt at gt 1200
+        global.enemies = [];
+        global.gameTime = 1230;                          // 30 GAME seconds in
+        assert.strictEqual(T.planMove().hellRecent, true, 'should still be inside the 90 s window');
+        global.gameTime = 1200 + 95;                     // past 90 GAME seconds
+        assert.strictEqual(T.planMove().hellRecent, false, 'window did not close on the GAME clock');
+    });
+    // killRate is the one with teeth beyond posture: it gates the drop
+    // anchor's feasibility test and feeds dpsDeficit into card scoring, so a
+    // starved page was making every build look weaker than it is.
+    test('killRate is kills per GAME second', () => {
+        global.gameTime = 2000; global.killCount = 0;
+        T.setKillRate(0);
+        T.planMove();
+        global.killCount = 100; global.gameTime = 2010;  // 100 kills in 10 GAME seconds
+        for (let i = 0; i < 40; i++) { T.planMove(); }
+        assert.ok(T.killRate() > 0.05, 'killRate stayed at ' + T.killRate() + ' across 10 game-seconds of kills');
+        global.gameTime = 4600;
+    });
+
+    // --- (4) THE MILESTONE. A proven cap is a milestone, not a truncation.
+    test('a PROVEN cap pays ms.immortal; a bare clock timeout does not', () => {
+        const base = T.reward({ time: 4000, downs: 20000, sales: 50000000 }, { hell: true, cap: false });
+        const prov = T.reward({ time: 4000, downs: 20000, sales: 50000000 }, { hell: true, cap: true });
+        assert.ok(Math.abs((prov - base) - C.milestones.immortal) < 1e-6,
+            'proven cap paid ' + (prov - base) + ', expected ' + C.milestones.immortal);
+    });
+    test('...and the epoch was bumped, so epoch-3 rows cannot be pooled with these', () =>
+        assert.ok(T.rewardEpoch() >= 4, 'epoch ' + T.rewardEpoch()));
+
+    // --- (5) TELEMETRY. The stall was only visible through a hand-pasted
+    // console probe; the bot itself had no idea the page had collapsed.
+    test('the phase row carries the stall signature', () => {
+        const r = T.phaseRow(4600, true);
+        for (const k of ['spd', 'spdLo', 'enMax', 'why'])
+            assert.ok(k in r, 'phase row is missing ' + k + ': ' + Object.keys(r).join(','));
+    });
+    // Self-contained: handleScreens() above can re-enter startRun, which
+    // resets the per-run peak. The claim under test is that the counter reads
+    // the RAW field rather than gatherThreats' range-filtered neighbourhood,
+    // so it has to be established in the same breath as it is read.
+    test('...and enMax reports the PEAK field size, not the gathered subset', () => {
+        T.resetCapLadder();
+        global.gameTime = 4600;
+        global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5 };
+        flood(C.deepHell.saturation.enemyMin + 20);
+        T.planMove();
+        const peak = T.capState().satPeakEn;
+        assert.ok(peak >= C.deepHell.saturation.enemyMin,
+            'peak ' + peak + ' — gatherThreats range-filters, the raw field must be counted');
+        // and prove it is NOT the gathered list, which is much smaller
+        assert.ok(peak > T.gatherThreats(global.player).enemies.length,
+            'peak ' + peak + ' equals the gathered count — reading the filtered list again');
+    });
+
+    // ...and it stays out of the day and the entrance entirely.
+    test('saturation cannot fire before minGtS', () => {
+        T.resetCapLadder();
+        global.gameTime = C.deepHell.saturation.minGtS - 100;
+        flood(C.deepHell.saturation.enemyMin + 20);
+        T.planMove();
+        T.ageSat(C.deepHell.saturation.holdWallS * 1000 + 500);
+        T.planMove();
+        assert.strictEqual(T.capState().capEarly, false, 'armed before minGtS');
+        global.gameTime = 4600;
     });
     done();
 }

@@ -746,7 +746,7 @@
         // pace) and re-weights the whole loot hunt toward XP, tips, and
         // farm kills until the cadence recovers.
         const gtH = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        const cadenceHunger = Math.min(1, Math.max(0, (Date.now() - (lastLevelUpAt || Date.now())) / 45000));
+        const cadenceHunger = Math.min(1, Math.max(0, (lastLevelUpAt ? Math.min(45000, stampAge(lastLevelUpAt)) : 0) / 45000));
         const expectedSupers = Math.max(0, Math.min(6, (gtH - 480) / 160));
         const paceHunger = Math.min(1, Math.max(0, (expectedSupers - supersThisRun) / 2));
         const buildHunger = Math.max(cadenceHunger, paceHunger);
@@ -801,7 +801,7 @@
 
         // ---- Enemy scaling: MEASURE the difficulty curve ----------------
         // Kill rate (our real DPS output, kills/sec, rolling):
-        const kc = G.killCount, nowMs = Date.now();
+        const kc = G.killCount, nowMs = gameMs();
         if (typeof kc === 'number') {
             if (lastKillCount != null && nowMs > lastKillAt) {
                 const inst = Math.max(0, kc - lastKillCount) / ((nowMs - lastKillAt) / 1000);
@@ -824,7 +824,7 @@
         // Hell-entry onslaught: enterHell() resets spawn timers and queues a
         // surge + first boss immediately — the data shows runs dying 1–2 min
         // after entry. Maximum caution for the first 90 seconds of hell.
-        const hellRecent = hellDetected && hellEnteredAt && (Date.now() - hellEnteredAt) < 90000;
+        const hellRecent = hellDetected && !!hellEnteredAt && stampAge(hellEnteredAt) < 90000;
         // DEEP-HELL DEPTH (v6.82.0): 0 before CONFIG.deepHell.startS, 1 at
         // fullS. Drives the contact posture below — nothing else.
         const DH = CONFIG.deepHell;
@@ -833,7 +833,7 @@
         // FRESH-GUN WINDOW (user-verified): for ~2.5 min after taking the
         // Rainbow Gun, DPS has cratered and normal play gets the bot killed
         // on contact — survival posture only until the gun scales up.
-        const rainbowRecent = rainbowThisRun && rainbowAt && (Date.now() - rainbowAt) < 150000;
+        const rainbowRecent = rainbowThisRun && !!rainbowAt && stampAge(rainbowAt) < 150000;
         // Surge awareness: the game's own surge window is readable.
         const su = G.surgeUntil, gt = G.gameTime;
         const surgeActive = typeof su === 'number' && typeof gt === 'number' && su > gt;
@@ -3165,6 +3165,52 @@
                 }
             }
         }
+        // =================================================================
+        // v6.108.0 SATURATION — the third way to arm the cap, and the one
+        // the measured stall actually needed.
+        // =================================================================
+        // A live probe of the run that would not end recorded, in all 18
+        // samples: enemies pinned at 260-261 (the game's entity cap), HP
+        // 1.00, ZERO drop marks, ZERO road lines, and pickups climbing
+        // 79 -> 238 uncollected on the floor. That is not a build winning.
+        // It is a deadlock: the bot cannot die and cannot clear, the page
+        // has collapsed to 0.021x real time under the bodies it cannot
+        // remove, and the run produces no information at any price.
+        //
+        // WHY NOT capStable. That proof asks what the BUILD looks like —
+        // `stableNow = hpOk && defOk && supOk`, so the HP hold only
+        // accumulates while the build gates also pass. Two of the three runs
+        // that reached the 9000 s clock cap had 2 supers against
+        // `supersMin: 3` and therefore banked ZERO seconds of proof while
+        // demonstrably immortal. Saturation asks what the RUN is doing, and
+        // needs no build gate at all: a build that is not finished cannot
+        // hold the entity cap at full HP in the first place.
+        //
+        // THE HOLD IS IN WALL SECONDS, for the same reason the ladder's
+        // escape is. Saturation IS a wall-clock phenomenon; a game-second
+        // hold would take ~48x longer to satisfy exactly when it matters.
+        const SAT = (CONFIG.deepHell && CONFIG.deepHell.saturation) || {};
+        if (!capEarly && (SAT.enemyMin || 0) > 0) {
+            // THE RAW FIELD, not `th.enemies` — gatherThreats drops anything
+            // past `threat.enemyRange` (line ~211), so the gathered list is a
+            // local neighbourhood and would never reach the entity cap. The
+            // probe measured `enemies.length`, and that is the number that
+            // describes the stall: 260 bodies ON THE MAP, most of them far
+            // away and none of them dying.
+            const enAll = G.enemies;
+            const enN = Array.isArray(enAll) ? enAll.length : 0;
+            if (enN > satPeakEn) satPeakEn = enN;
+            const satNow = enN >= SAT.enemyMin &&
+                hpRatio >= (SAT.hpFloor != null ? SAT.hpFloor : 0.97) &&
+                gtCap >= (SAT.minGtS != null ? SAT.minGtS : 1800);
+            if (satNow) {
+                if (satSince == null) satSince = Date.now();
+                else if ((Date.now() - satSince) / 1000 >= (SAT.holdWallS != null ? SAT.holdWallS : 60)) {
+                    capEarly = true;
+                    capLastResetReason = 'saturated';
+                }
+            } else satSince = null;   // any dip in either signal restarts the hold
+        }
         const capDive = ((DHp.runCapS || 0) > 0 && gtCap >= DHp.runCapS) || capEarly;
         // v6.91.0: the hunt outranks the park. Park is the reason the bot could
         // not hunt at all — it zeroes movement, so a boss the gather now sees
@@ -3177,9 +3223,43 @@
         if (capDive) {
             capFiredThisRun = true;   // v6.96.2: the phase audit books this run as a cap-out
             if (capFirstGt == null) capFirstGt = gtCap;   // v6.99.4: WHEN it engaged (early vs clock)
+            if (capFirstWall === 0) capFirstWall = Date.now();
             const capEl = Math.max(0, gtCap - capFirstGt);
-            capStage = capEl >= (DHp.capForceS != null ? DHp.capForceS : 240) ? 3
-                     : capEl >= (DHp.capStandS != null ? DHp.capStandS : 150) ? 2 : 1;
+            // =============================================================
+            // v6.108.0 THE WALL-CLOCK ESCAPE
+            // =============================================================
+            // MEASURED, and it is the whole reason this version exists. A
+            // live probe of a saturated run (260 enemies pinned at the entity
+            // cap, HP 1.00 in all 18 samples) recorded the page advancing
+            // 0.021 GAME-seconds per WALL-second — 358 game-seconds across
+            // 4.8 wall-HOURS, with a 10 s timer firing every ~1000 s.
+            //
+            // Both budgets below are GAME seconds, so at that rate:
+            //     rung 1 (capStandS 15)   = 12 wall-MINUTES
+            //     rung 3 (capForceS 120)  = 1.6 wall-HOURS
+            // and `runCapS` 9000 from gt 4599 is another ~59 wall-hours. The
+            // protocol was 50x slowed by the exact condition it exists to
+            // escape, which is why a run that should have been booked in two
+            // minutes sat there for a working day.
+            //
+            // THIS INVERTS 6.100.0 ON PURPOSE, and only here. That version
+            // moved the ability clocks to game time because a wall-ms gate
+            // drifts against game BALANCE — one ult ask per 200 game-seconds
+            // at a frame multiplier. That reasoning is right for anything
+            // affecting how the bot plays. The ladder is not balance: it is
+            // "end this run in the real world", and the real world is exactly
+            // what a game clock cannot see.
+            //
+            // MAX of the two, never a replacement. At healthy speed the game
+            // budgets are the smaller ones and still govern (15 game-s beats
+            // capStandWallS 45); under starvation the wall budgets arrive
+            // first. So this changes nothing about a normal cap-out.
+            const capWallS = (Date.now() - capFirstWall) / 1000;
+            const gStage = capEl >= (DHp.capForceS != null ? DHp.capForceS : 240) ? 3
+                         : capEl >= (DHp.capStandS != null ? DHp.capStandS : 150) ? 2 : 1;
+            const wStage = capWallS >= (DHp.capForceWallS != null ? DHp.capForceWallS : 180) ? 3
+                         : capWallS >= (DHp.capStandWallS != null ? DHp.capStandWallS : 45) ? 2 : 1;
+            capStage = Math.max(gStage, wStage);
             // v6.96.2 THE PATROL (user, watching the live cap-out): "it just
             // needs to walk around the map and doesn't need to dash and it
             // will keep getting hit by the common projectile mobs." Both

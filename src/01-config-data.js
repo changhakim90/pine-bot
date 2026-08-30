@@ -143,7 +143,10 @@
     //   2. This version decouples that term from the live board (below).
     // Either alone requires the bump; the first one had already happened
     // silently, which is exactly what the epoch counter exists to prevent.
-    const REWARD_EPOCH = 3;
+    // v6.108.0 -> 4: `milestones.immortal` changes the reward SHAPE, so rows
+    // from epoch 3 are not comparable. Wipes hof/genHistory/history; keeps
+    // the CEM mean/sigma and every bandit stat.
+    const REWARD_EPOCH = 4;
 
     // =================================================================
     // CONFIG
@@ -964,6 +967,22 @@
             // costing the farm a minute per cap on a bet that keeps losing.
             capStandS: 15,         // stage 1 budget: stand in contact this long before escalating
             capForceS: 120,        // stage 2 budget: past this, book the run and force a restart
+            // v6.108.0 WALL-CLOCK TWINS of the two budgets above. The ladder
+            // escalates on max(game stage, wall stage) — see the escape block
+            // in 05-movement for the 0.021x measurement that forced this.
+            // Sized so the GAME budgets still govern a healthy run (15 < 45
+            // and 120 < 180 at speed 1.0) and only a starved page ever
+            // reaches these first. Set either to 0 to disable that arm.
+            capStandWallS: 45,
+            capForceWallS: 180,
+            // v6.108.0 SATURATION ARM. Measured on the stalled run: enemies
+            // pinned at 260-261, HP 1.00, marks and lines zero, pickups
+            // 79 -> 238 uncollected. enemyMin sits below the observed 260 cap
+            // so a field that is merely dense does not trip it, and the hold
+            // is a full minute of REAL time with both signals continuously
+            // true. minGtS keeps it out of the day and the entrance entirely.
+            // Full reasoning at the saturation block in 05-movement.
+            saturation: { enemyMin: 200, hpFloor: 0.97, holdWallS: 60, minGtS: 1800 },
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor
             // while measured defense >= defMin and supers >= supersMin, the
@@ -1214,7 +1233,21 @@
         // the horizon the bot is actually competing in (its best ever is 15390).
         // The LIVE crown is still read for the STOP threshold, which is its
         // correct use: knowing when a run has actually won.
-        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0, hellDepth: 0.25, crownProgress: 2.0, crownRefS: 15150 },
+        // v6.108.0 `immortal` — the fix for a bias that was silently
+        // punishing the best builds. `capFiredThisRun` was written to the
+        // phase row and read NOWHERE else, so a capped run booked its
+        // TRUNCATED reward into the CEM and all four bandits exactly as if it
+        // had died at the cap. hellTimeBonus is 1.79 at 9000 s against 0.42
+        // at 2100 s, so every time the protocol got better at ending immortal
+        // runs early it told the optimizer the immortal build was worth ~1.3
+        // LESS. Cap aggressively without this and the search walks away from
+        // the very build we are trying to find — and it would read as an
+        // unexplained regression.
+        // Paid once, for a run the protocol PROVED stable or saturated (not
+        // for a plain clock-cap timeout, which proves nothing). Sized at 1.3
+        // to cancel the truncation it replaces, so proving immortality at 35
+        // minutes scores like surviving to 150.
+        milestones: { superUnlock: 0.06, craft: 0.05, dayCleared: 0.25, hellEntered: 0.15, rainbow: 0, hellDepth: 0.25, crownProgress: 2.0, crownRefS: 15150, immortal: 1.3 },
 
         hellModeRegex: /\bHELL\b/i,
         stopOnHellRecord: true,
@@ -2270,6 +2303,48 @@
     // v6.101.0 cap ladder actuator state: gt of the last hurtPlayer poke
     // (stage 2) and whether the hard book (stage 3) has already run.
     let capHurtAt = 0, capForcedThisRun = false;
+    // v6.108.0: WALL-clock stamp for the ladder's escape arm. Deliberately
+    // Date.now() and not gameTime — the whole point is to see real elapsed
+    // time on a page whose game clock has been starved to 0.021x.
+    // =================================================================
+    // v6.108.0 SPEED-INVARIANT MOVEMENT CLOCK
+    // =================================================================
+    // 6.100.0 moved the ABILITY gates off wall-ms for this exact reason and
+    // left four in the movement loop. A live probe of a saturated run
+    // measured the page at 0.021 GAME-seconds per WALL-second, and at that
+    // rate every wall-ms gate runs ~48x fast against the game:
+    //   cadenceHunger  (45 s)  pins at 1.0 permanently
+    //   hellRecent     (90 s)  expires within TWO game-seconds
+    //   rainbowRecent (150 s)  same
+    //   killRate       kills per WALL second, so a starved page makes the
+    //                  build look weaker than it is — and that number gates
+    //                  the drop anchor's feasibility test AND feeds
+    //                  dpsDeficit into card scoring.
+    // So the bot plays its late game in a degenerate state that has nothing
+    // to do with the game state. Every one of those four now reads GAME ms,
+    // and every STAMP that feeds them is written in game ms too — changing
+    // the reads alone would have compared two different clocks.
+    // Falls back to wall time when gameTime is unreadable (title screens,
+    // pre-boot), which is what the old behaviour was everywhere.
+    function gameMs() {
+        const gt = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+        return gt != null ? gt * 1000 : Date.now();
+    }
+    // A stamp from a previous run cannot survive into this one: gameTime
+    // restarts at 0, so a stamp in the future is stale. Same guard 6.100.0
+    // used for lastUlt/lastDash.
+    const stampAge = st => { const n = gameMs(); return (!st || st > n) ? Infinity : n - st; };
+    let capFirstWall = 0;
+    // v6.108.0 SATURATION: consecutive wall-ms the field has been pinned at
+    // the entity cap with HP flat. `null` = not currently saturated.
+    let satSince = null, satPeakEn = 0;
+    // v6.108.0 SPEED TELEMETRY. The stall that motivated this version was
+    // only visible through a hand-pasted console probe; nothing in the bot
+    // knew the page had collapsed to 0.021x. gameTime is frame-counted and
+    // Date.now() is not, so their RATIO is the frame health, free to compute.
+    // Sampled on a wall-clock cadence (a game-clock cadence cannot measure a
+    // starved game clock) and carried into the phase row.
+    let spdLastGt = null, spdLastWall = 0, spdSamples = [], spdWorst = null;
     // v6.102.0: gt at which the BUILD first met its armour+supers bars —
     // the measurement that sets capStable.fromS from data instead of guesswork.
     let capReadyGt = null;

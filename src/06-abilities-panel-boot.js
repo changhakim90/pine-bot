@@ -350,6 +350,25 @@
         if (!running) return;
         try {
             const now = Date.now();
+            // v6.108.0 SPEED SAMPLE — game-seconds advanced per wall-second.
+            // 1.0 is a healthy page; the measured stall ran at 0.021, i.e.
+            // 358 game-seconds across 4.8 wall-HOURS. Every 5 wall-seconds,
+            // and only while a run is live so title screens do not dilute it.
+            if (runActive) {
+                const gtS = safe(() => (typeof gameTime === 'number' ? gameTime : null), null);
+                if (gtS != null) {
+                    if (spdLastGt == null || gtS < spdLastGt) { spdLastGt = gtS; spdLastWall = now; }
+                    else if (now - spdLastWall >= 5000) {
+                        const sp = (gtS - spdLastGt) / ((now - spdLastWall) / 1000);
+                        if (isFinite(sp)) {
+                            spdSamples.push(+sp.toFixed(3));
+                            if (spdSamples.length > 400) spdSamples.shift();
+                            if (spdWorst == null || sp < spdWorst) spdWorst = +sp.toFixed(3);
+                        }
+                        spdLastGt = gtS; spdLastWall = now;
+                    }
+                }
+            }
 
             if (now - lastOverlay >= CONFIG.overlayMs) {
                 lastOverlay = now;
@@ -1118,7 +1137,25 @@
                     resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
                     // v6.101.0: the ladder's own clock, so a scenario can put
                     // the run at a chosen rung without replaying 4 minutes.
-                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null; },
+                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null;
+                        capEarly = false; capStableSince = null; capLastResetReason = null;
+                        capFirstWall = 0; satSince = null; satPeakEn = 0; },
+                    // v6.108.0 hooks. The two escapes are WALL-clock by
+                    // design, so a test cannot advance them with gameTime —
+                    // it has to age the stamps directly.
+                    ageCapWall: ms => { if (capFirstWall) capFirstWall -= (ms || 0); },
+                    ageSat: ms => { if (satSince) satSince -= (ms || 0); },
+                    armCap: () => { capEarly = true; },
+                    killRate: () => killRate,
+                    reward: (stats, o) => { const sh = hellRunEnded, sc = capEarly;
+                        hellRunEnded = !!(o && o.hell); capEarly = !!(o && o.cap);
+                        const r = computeReward(stats); hellRunEnded = sh; capEarly = sc; return r; },
+                    rewardEpoch: () => REWARD_EPOCH,
+                    phaseRow: (t, hell) => buildPhaseRow(t, hell),
+                    capState: () => ({ capEarly, lastResetReason: capLastResetReason,
+                                       satSince, satPeakEn, capFirstWall }),
+                    setSupers: n => { supersThisRun = n; },
+                    speedSamples: () => spdSamples.slice(),
                     capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun, capReadyGt }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
@@ -1344,6 +1381,11 @@
                     // v6.102.0: when the BUILD was complete, cap-out or not —
                     // the datum capStable.fromS should be set from.
                     if (r.readyAt != null) { g.readyAts = g.readyAts || []; g.readyAts.push(r.readyAt); }
+                    // v6.108.0 the stall signature, aggregated per version.
+                    if (r.spd != null) { g.spds = g.spds || []; g.spds.push(r.spd); }
+                    if (r.spdLo != null) { g.spdLos = g.spdLos || []; g.spdLos.push(r.spdLo); }
+                    if (r.enMax != null) { g.enMaxes = g.enMaxes || []; g.enMaxes.push(r.enMax); }
+                    if (r.why === 'saturated') g.satCaps = (g.satCaps || 0) + 1;
                     if (r.def != null) g.defs.push(r.def);
                     if (r.regen != null) g.regens.push(r.regen);
                     if (r.ultLv != null) g.ults.push(r.ultLv);
@@ -1365,7 +1407,15 @@
                         medianReadyAt: med(g.readyAts || []),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
-                        medianTimeS: med(g.times)
+                        medianTimeS: med(g.times),
+                        // v6.108.0: 1.0 is a healthy page. The stall that
+                        // motivated this version ran at 0.021 with enemies
+                        // pinned at the ~260 entity cap. satCaps counts the
+                        // runs the new saturation arm ended.
+                        medianSpeed: med(g.spds || []),
+                        worstSpeed: (g.spdLos || []).length ? Math.min.apply(null, g.spdLos) : null,
+                        medianPeakEnemies: med(g.enMaxes || []),
+                        satCaps: g.satCaps || 0
                     }))
                 };
             };
