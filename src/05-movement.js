@@ -7,6 +7,34 @@
         return ENEMY_PROFILE[t] || ENEMY_PROFILE._default;
     }
 
+    // v6.107.0 — THE LEARNED PER-TYPE THREAT MULTIPLIER, RE-APPLIED.
+    // Withdrawn in 6.85.23 after the worst regression of the project. Three
+    // things had to change before it could come back, and all three have:
+    //   1. ATTRIBUTION. Only sole-candidate contact events now feed it (see
+    //      05-movement's damage classifier). Nearest-type guessing is what
+    //      ratcheted every common mob to the cap.
+    //   2. TARGET. 1+3*share -> 1+1.2*share at the write site, so the 2.2
+    //      store clamp is an asymptote rather than the resting state.
+    //   3. AUTHORITY. The APPLIED band is 0.8-1.4, far tighter than the 0.6-2.2
+    //      the store may hold, and nothing applies below `enemyMulMinN` sole
+    //      events for that type. The failure mode was the bot fearing drunks
+    //      at 2.2x and refusing to farm; at 1.4 max that outcome is not
+    //      reachable even if the attribution is wrong again.
+    // CONFIG.learning.enemyMulApply = false turns it off as one live dial.
+    function typeMul(t) {
+        try {
+            const L = CONFIG.learning || {};
+            if (L.enemyMulApply === false) return 1;
+            const m = learn && learn.enemyTypeMul && learn.enemyTypeMul[t];
+            if (!isFinite(m)) return 1;
+            const n = (learn.enemyTypeN && learn.enemyTypeN[t]) || 0;
+            if (n < (L.enemyMulMinN != null ? L.enemyMulMinN : 8)) return 1;
+            const lo = L.enemyMulFloor != null ? L.enemyMulFloor : 0.8;
+            const hi = L.enemyMulCeil != null ? L.enemyMulCeil : 1.4;
+            return Math.max(lo, Math.min(hi, m));
+        } catch (e) { return 1; }
+    }
+
     function gatherThreats(p) {
         const out = {
             enemies: [], projectiles: [], marks: [], lines: [], near: 0, boss: false,
@@ -279,7 +307,10 @@
                     // farming. Attribution keeps recording (instrument only,
                     // pineBot.enemyThreat()); applying it again requires
                     // sole-candidate attribution, not nearest-type.
-                    w: prof.weight * armorEase,
+                    // v6.107.0: that precondition is now MET — see typeMul()
+                    // at the top of this file for the three changes and the
+                    // 0.8-1.4 applied band that bounds the old failure.
+                    w: prof.weight * armorEase * typeMul(t),
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the
@@ -982,17 +1013,51 @@
                 if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
             }
             // v6.85.22: nearest gathered enemy type within 140px carries
-            // the per-type attribution for the learned threat multiplier.
+            // the per-type attribution. TELEMETRY ONLY — see below.
             let nearT = null, nearTD = 140;
             for (const e2 of th.enemies) {
                 const dd2 = Math.hypot(e2.x - p.x, e2.y - p.y);
                 if (dd2 < nearTD) { nearTD = dd2; nearT = e2.t || (e2.boss ? 'boss' : 'mob'); }
             }
             if (nearT) {
-                hitTypeRun[nearT] = (hitTypeRun[nearT] || 0) + loss;
                 const bt = dmgAudit.byType || (dmgAudit.byType = {});
                 const b2 = bt[nearT] || (bt[nearT] = { n: 0, hp: 0 });
                 b2.n++; b2.hp += loss;
+            }
+            // =========================================================
+            // v6.107.0 SOLE-CANDIDATE ATTRIBUTION
+            // =========================================================
+            // 6.85.23 withdrew the learned per-type threat multiplier after
+            // the worst regression of the project (n=273, median 843, supers
+            // 0.1, z=-3.1) and left the precondition for ever applying it
+            // again IN WRITING at the application site: "applying it again
+            // requires sole-candidate attribution, not nearest-type."
+            //
+            // This is that. `nearT` above books EVERY damage event to
+            // whatever body happened to be within 140px — so mark, proj, DoT
+            // and line damage all landed on the commonest mob type, which is
+            // exactly how the common types ratcheted to the 2.2 cap in ~10
+            // runs and the bot ended up fearing drunks at 2.2x and refusing
+            // to farm. `nearT` keeps feeding dmgAudit.byType, because as RAW
+            // TELEMETRY it was never the problem.
+            //
+            // The LEARNER now only gets events where contact was the ONLY
+            // hazard class in range (`cands.length === 1`), so the damage
+            // provably came from touching a body — and it is attributed to
+            // the body actually inside contact reach, not the nearest one on
+            // screen. Everything ambiguous is dropped rather than guessed.
+            // Sample counts ride alongside so the application site can refuse
+            // to act on a type it has barely seen.
+            if (cands.length === 1 && cands[0] === 'contact') {
+                let soleT = null, soleGap = contactReach;
+                for (const e2 of th.enemies) {
+                    const gap = Math.hypot(e2.x - p.x, e2.y - p.y) - e2.r;
+                    if (gap < soleGap) { soleGap = gap; soleT = e2.t || (e2.boss ? 'boss' : 'mob'); }
+                }
+                if (soleT) {
+                    hitTypeRun[soleT] = (hitTypeRun[soleT] || 0) + loss;
+                    hitTypeN[soleT] = (hitTypeN[soleT] || 0) + 1;
+                }
             }
             dmgAudit.ev.push({
                 gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
@@ -2048,6 +2113,61 @@
                                        // exits the stance and restores the sweep.
         }
 
+        // =================================================================
+        // v6.107.0 THE DROP ANCHOR (user)
+        // =================================================================
+        // "maintain some sort of anchor even if there's danger, because if
+        //  you kill a rushing mob with powerful weapons, you can pick up
+        //  lucky items like time pause, flame cross, or tequila shots."
+        //
+        // This was structurally absent, and the absence was self-concealing.
+        // `gatherLoot` values pickups that ALREADY EXIST on the floor. A pack
+        // that has not died yet has dropped nothing, so it registers as pure
+        // danger; the field pushes the bot off it; the pack never dies; the
+        // drops never spawn; and no evidence of the missed value is ever
+        // produced. The CEM could not learn its way out of that because there
+        // was no gradient to climb — nothing in the planner represented the
+        // loot a killable pack is ABOUT to become.
+        //
+        // The anchor is that representation: a pull toward the centre of a
+        // pack the bot can actually clear, competing against the danger field
+        // on the same terms as every other gain.
+        //
+        // DELIBERATELY A GAIN, NOT A DANGER DISCOUNT. Suppressing fear while
+        // "anchored" would also suppress mark, line and projectile fear —
+        // the three things that actually end runs — and this project has a
+        // long file of regressions from exactly that kind of blanket
+        // multiplier (6.85.22's enemy-type ratchet being the worst). Holding
+        // ground through danger emerges when anchorValue is high enough to
+        // outbid the fear, and the CEM decides how high that is. The box
+        // opens at ZERO on purpose: if the idea does not pay, the search can
+        // switch it off entirely and say so.
+        //
+        // FEASIBILITY IS THE WHOLE GATE. "Killable" is measured, not assumed:
+        // the pack must be clearable inside anchorTtkS at the kill rate this
+        // run is actually achieving. A bot with no weapons standing in a
+        // crowd is how runs end, so with killRate at 0 the anchor never arms.
+        let anchorOn = false, anchorX = 0, anchorY = 0, anchorN = 0, anchorTtk = null;
+        if (!hpPanic && !th.rival && !wallFocus && (M.anchorValue || 0) > 0 &&
+            hpRatio > (M.anchorMinHp != null ? M.anchorMinHp : 0.55)) {
+            let sx = 0, sy = 0, n = 0;
+            for (const e of th.enemies) {
+                if (e.wall || e.boss || e.dormant || e.distant) continue;
+                if (Math.hypot(e.x - p.x, e.y - p.y) > (M.anchorRange != null ? M.anchorRange : 190)) continue;
+                sx += e.x; sy += e.y; n++;
+            }
+            // killRate is kills/second (rolling), so pack size over kill rate
+            // is seconds-to-clear in the units the tracker actually produces.
+            if (n >= (M.anchorMinPack != null ? M.anchorMinPack : 3) && killRate > 0.05) {
+                const ttk = n / killRate;
+                if (ttk <= (M.anchorTtkS != null ? M.anchorTtkS : 5)) {
+                    anchorOn = true; anchorX = sx / n; anchorY = sy / n;
+                    anchorN = n; anchorTtk = ttk;
+                }
+            }
+        }
+        if (anchorOn) { dropAnchorTicks++; dropAnchorLastGt = typeof G.gameTime === 'number' ? G.gameTime : 0; }
+
         let best = null;
         const N = M.samples;
         for (let i = 0; i <= N; i++) {
@@ -2222,6 +2342,15 @@
                 gain += pull * it.v * (d0 - d1) / Math.max(30, d0);
             }
 
+            // v6.107.0 THE DROP ANCHOR — see the arming block above. Same
+            // gradient shape as the loot pull, because it IS a loot pull: the
+            // difference is only that this loot has not been dropped yet.
+            if (anchorOn) {
+                const a0 = Math.hypot(p.x - anchorX, p.y - anchorY);
+                const a1 = Math.hypot(nx - anchorX, ny - anchorY);
+                gain += M.anchorValue * (a0 - a1) / Math.max(40, a0);
+            }
+
             // Siege the NO BOOKING walls: they never chase, they block the
             // map, and killing them pays gold + XP. Hold a firing ring just
             // outside their contact zone so weapons melt them — the hard
@@ -2309,6 +2438,32 @@
                                     : Math.max(e.r + 55, Math.min(e.reach + 10, 150)))
                                 : Math.max(e.reach + 60, 240))
                             : Math.max(e.reach + 10, e.r + 40));
+                    // ---------------------------------------------------------
+                    // v6.107.0 THE RING IS NOW SEARCHABLE.
+                    // ---------------------------------------------------------
+                    // Until now the CEM could tune how much the bot WANTS to
+                    // engage a boss (movement.bossEngageValue, 10-36) but never
+                    // WHERE IT STANDS while doing it — the distance was this
+                    // hand-written expression and nothing else. Every number in
+                    // it was fitted by hand from demo measurements, and the
+                    // user's standing note applies with force here: this game is
+                    // AI-built, "has several bugs and misclassifications", and
+                    // "the truth is what's being observed in the game itself".
+                    // A hand-fitted constant is a hypothesis; a searchable
+                    // multiplier lets the runs falsify it.
+                    //
+                    // A MULTIPLIER, not a replacement: the phase structure
+                    // (day far out, early hell inside SOUTH SIDE's reach, giant
+                    // bosses proportional again, gun-era point-blank) is
+                    // measured knowledge and is preserved exactly. The search
+                    // only scales it, and the box is deliberately narrow
+                    // (0.8-1.25) because this distance is the difference
+                    // between landing the burn and eating a one-hit.
+                    // BOTH GUARDS STILL WIN: bossFloor is applied AFTER the
+                    // multiplier, so a low draw cannot walk inside the
+                    // per-character hard minimum, and the off-canvas collapse
+                    // below still overrides everything.
+                    ring *= (M.bossRingMul != null ? M.bossRingMul : 1);
                     if (bossFloor && ring < bossFloor) ring = bossFloor;
                     // v6.85.19 (user: "the bot is still not able to register
                     // the hit radius that's invisible ... outside the visible
@@ -2468,7 +2623,16 @@
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
                         : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105);
-                    let ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                    // v6.107.0: the FARMING ring joins the boss ring in the
+                    // search box. Same reasoning (see bossRingMul above): the
+                    // 115+ramp hell curve and the 118/112/105 day curve are
+                    // hand-fitted from demo measurements of an AI-built game,
+                    // so they are hypotheses worth letting the runs test.
+                    // The multiplier scales the STANDOFF only — `po.r` is the
+                    // body's real radius and is added afterwards, so no draw
+                    // can ever park the bot inside the hitbox it is farming.
+                    const poMul = M.poRingMul != null ? M.poRingMul : 1;
+                    let ring = po.r + poMul * ((hellDetected || gtRing > 1200) ? hellRing * slowPad
                         : dayRing * slowPad);
                     const zone = po.r + 18;
                     // v6.85.9 (user): "pat also needs to use flame cross to kill
@@ -3158,6 +3322,9 @@
 
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
+            // v6.107.0 drop anchor: exposed so a test can assert the ARMING
+            // conditions directly rather than inferring them from a vector.
+            dropAnchor: anchorOn, anchorN, anchorTtk,   // v6.107.0 (NOT `anchor` — that is the farm stance, set below)
             capDive,   // v6.96.0: the run is being ended on purpose
             capStage,  // v6.101.0: 0 none, 1 smother, 2 hurtPlayer, 3 hard book
             dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable

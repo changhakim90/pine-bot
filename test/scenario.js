@@ -1012,26 +1012,66 @@ if (which === 'learned') {
     test('and the bot drifts onto the passout pile to detonate', () =>
         assert.ok(ph.dx > pf.dx + 0.2, 'cold ' + pf.dx.toFixed(2) + ' ready ' + ph.dx.toFixed(2)));
     pineBot.test.applyDefaults();
-    // --- (c) learned enemy-type weight multiplies the danger field.
+    // --- (c) v6.107.0: the learned enemy-type weight is APPLIED again.
+    // 6.85.23 withdrew it and this test froze that withdrawal ("the weight
+    // must NOT move"). It comes back under three bounds, and each bound is
+    // asserted here rather than trusted: a minimum sample count, a tight
+    // APPLIED band (0.8-1.4) far inside the 0.6-2.2 the store may hold, and
+    // one live off switch. The 6.85.22 failure was the bot fearing ordinary
+    // mobs at 2.2x and refusing to farm; the ceiling makes it unreachable.
     global.enemies = [{ type: 'bomber', x: 340, y: 270, r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true }];
     pineBot.test.setEnemyMul({});
+    pineBot.test.setEnemyN({});
     const w1 = pineBot.test.gatherThreats(global.player).enemies[0].w;
-    pineBot.test.setEnemyMul({ bomber: 2.0 });
-    const w2 = pineBot.test.gatherThreats(global.player).enemies[0].w;
-    // v6.85.23: the multiplier is INSTRUMENT-ONLY — applying it caused the
-    // worst regression of the project (fear of common types ratcheted to the
-    // 2.2 cap and the bot stopped farming). The weight must NOT move.
-    test('a stored 2x multiplier does NOT change the danger-field weight', () =>
-        assert.ok(Math.abs(w2 / w1 - 1) < 0.01, 'w1 ' + w1 + ' w2 ' + w2));
-    // --- (d) damage near a typed enemy is attributed to that type.
-    pineBot.test.setEnemyMul({});
-    global.player.hp = 170;
-    pineBot.test.planMove();
-    global.player.hp = 150;
-    pineBot.test.planMove();
+    // UNDER the sample floor, a stored multiplier does nothing at all.
+    pineBot.test.setEnemyMul({ bomber: 1.3 });
+    pineBot.test.setEnemyN({ bomber: 3 });
+    const wLow = pineBot.test.gatherThreats(global.player).enemies[0].w;
+    test('under enemyMulMinN a stored multiplier is ignored', () =>
+        assert.ok(Math.abs(wLow / w1 - 1) < 0.01, 'w1 ' + w1 + ' wLow ' + wLow));
+    // OVER it, the danger field actually moves.
+    pineBot.test.setEnemyN({ bomber: 40 });
+    const wOn = pineBot.test.gatherThreats(global.player).enemies[0].w;
+    test('past the sample floor, a learned 1.3x DOES move the danger weight', () =>
+        assert.ok(Math.abs(wOn / w1 - 1.3) < 0.02, 'w1 ' + w1 + ' wOn ' + wOn));
+    // ...and the ratchet that caused the regression cannot be reproduced.
+    pineBot.test.setEnemyMul({ bomber: 2.2 });
+    const wCap = pineBot.test.gatherThreats(global.player).enemies[0].w;
+    test('a 2.2 store value is clamped to the 1.4 APPLIED ceiling', () =>
+        assert.ok(Math.abs(wCap / w1 - 1.4) < 0.02, 'w1 ' + w1 + ' wCap ' + wCap));
+    test('enemyMulApply:false restores the static profile weight exactly', () => {
+        pineBot.test.setParam('learning.enemyMulApply', false);
+        const wOff = pineBot.test.gatherThreats(global.player).enemies[0].w;
+        pineBot.test.setParam('learning.enemyMulApply', true);
+        assert.ok(Math.abs(wOff / w1 - 1) < 0.01, 'w1 ' + w1 + ' wOff ' + wOff);
+    });
+    // --- (d) v6.107.0 SOLE-CANDIDATE ATTRIBUTION. The learner is fed only by
+    // damage events where contact was the ONE hazard class in range, and the
+    // credited type is the body inside contact reach — not, as before, the
+    // nearest body within 140px, which booked mark/proj/DoT damage onto
+    // whatever mob happened to be standing there. That guess is precisely
+    // what ratcheted the common types to the cap in ~10 runs.
+    pineBot.test.setEnemyMul({}); pineBot.test.setEnemyN({});
+    pineBot.test.applyDefaults();
+    // A bomber 3px off the player's skin: gap 3 < contactReach 7.2, and no
+    // projectile, mark, line or rival exists — so contact is the sole candidate.
+    global.enemies = [{ type: 'bomber', x: 287, y: 270, r: 14, hp: 400, maxHp: 400, speed: 1.2, moving: true }];
+    global.player.hp = 170; pineBot.test.planMove();
+    global.player.hp = 150; pineBot.test.planMove();
     const ht = pineBot.test.hitTypes();
-    test('the HP drop is attributed to the nearby enemy type', () =>
+    test('a sole-candidate contact hit IS attributed to the touching type', () =>
         assert.ok(ht.bomber >= 19, JSON.stringify(ht)));
+    // The counterpart, and the whole point: the same HP drop next to the same
+    // enemy, but with a projectile also in range, is AMBIGUOUS and dropped.
+    // Under the old rule this landed on 'bomber' with equal confidence.
+    pineBot.test.resetHitTypes();
+    global.eprojectiles = [{ x: 276, y: 270, r: 6, vx: -1, vy: 0 }];
+    global.player.hp = 150; pineBot.test.planMove();
+    global.player.hp = 130; pineBot.test.planMove();
+    const ht2 = pineBot.test.hitTypes();
+    test('...but an ambiguous hit (proj also in range) is dropped, not guessed', () =>
+        assert.ok(!ht2.bomber, JSON.stringify(ht2)));
+    global.eprojectiles = [];
     done();
 }
 
@@ -1228,8 +1268,16 @@ if (which === 'tank-holdout') {
     // entry-armor checkpoint stands down — this test measures the tank
     // premium's DECAY, not the (separately tested) entry checkpoint.
     global.player = Object.assign({}, global.player, { defense: 6 * 5.832 });
+    // v6.107.0: the armour TIER (a time-gated hold on the pure-defence
+    // ingredients before armorTierFromS, so the user's damage-first phase
+    // comes first) would otherwise dominate the gt-60 sample and invert this
+    // comparison. It is switched off here so this test keeps measuring the
+    // one thing it names — the TANK premium's decay — and is asserted on its
+    // own terms in the `armor-tier` scenario.
+    pineBot.test.setParam('movement.armorTierFromS', 0);
     global.gameTime = 60; const early = oliveAt();
     global.gameTime = 1150; const late = oliveAt();
+    pineBot.test.setParam('movement.armorTierFromS', 300);
     test('a tank pays an early premium for the armour lines', () =>
         assert.ok(/tank-armor-early/.test(early.why), early.why));
     test('the premium has decayed away by the finale', () =>
@@ -3959,7 +4007,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -5087,6 +5135,45 @@ if (which === 'store-guard') {
     delete store.pineBotUCB_v5_joe;   // the vanished-key variant of the same failure
     test('a MISSING primary heals from the backup too', () =>
         assert.strictEqual(T.loadLearn().runs, 42));
+    // 1b. v6.107.0 — FOUR NEW CEM DIMENSIONS AGAINST A 6.106.0 STORE.
+    // The TUNABLE comment warns that adding a dimension to a LIVE learner
+    // requires seeding mean=default and sigma=(max-min)/4 first, because the
+    // 6.85.22 accident added six dims with no seed, drew NaN for every one,
+    // and poisoned the batch/hof/step-size state across 27 refits. The loader
+    // has since been hardened to seed unconditionally — this asserts that,
+    // rather than trusting it, because four dims land at once in this version.
+    const old6106 = Object.assign({}, good, {
+        cem: { gen: 9, batch: [], mean: { 'movement.standoff': 120 }, sigma: { 'movement.standoff': 20 } }
+    });
+    store.pineBotUCB_v5_joe = JSON.stringify(old6106);
+    delete store.pineBotUCB_v5_joe__bak;
+    const migrated = T.loadLearn();
+    const NEWDIMS = ['movement.bossRingMul', 'movement.poRingMul',
+                     'movement.anchorValue', 'movement.anchorTtkS'];
+    test('a 6.106.0 store seeds every new dimension with a FINITE mean', () => {
+        for (const k of NEWDIMS)
+            assert.ok(isFinite(migrated.cem.mean[k]),
+                k + ' mean ' + migrated.cem.mean[k] + ' — this is the 6.85.22 NaN failure');
+    });
+    test('...at the documented default, not at a box edge', () => {
+        const box = T.tunable();
+        for (const k of NEWDIMS) {
+            const m = migrated.cem.mean[k];
+            assert.ok(m > box[k].min - 1e-9 && m < box[k].max + 1e-9,
+                k + ' mean ' + m + ' outside ' + JSON.stringify([box[k].min, box[k].max]));
+        }
+    });
+    test('...with a sigma wide enough to actually explore the new box', () => {
+        const box = T.tunable();
+        for (const k of NEWDIMS) {
+            const range = box[k].max - box[k].min;
+            assert.ok(migrated.cem.sigma[k] > range * 0.05,
+                k + ' sigma ' + migrated.cem.sigma[k] + ' vs range ' + range);
+        }
+    });
+    test('and the dimension the old store DID hold is preserved untouched', () =>
+        assert.strictEqual(migrated.cem.mean['movement.standoff'], 120));
+
     // 2. QUOTA: a save that throws once must trim its reporting bulk and
     //    land, and a successful save must leave a fresh backup behind.
     const L = T.getLearn();
@@ -5474,5 +5561,384 @@ if (which === 'arming-cap') {
     test('GIMLET cannot be armed even if the pool forces the cocktail', () =>
         assert.ok(sc(pineBot.test.superKey('GIMLET'), 'passive', 5) < -400,
             'LIME @lv5 ' + Math.round(sc('LIME', 'passive', 5))));
+    done();
+}
+
+// ---------------------------------------------------------------------
+// v6.107.0 TAG BANDIT — the learned layer keyed on ATTACK TYPE.
+// The per-card LinUCB needs a card's own history before it can say
+// anything, so a card picked five times is still a stranger. Tags are the
+// shared structure across cards: what `freeze` is worth in a boss-heavy
+// field is learned from every card that carries it at once.
+//
+// This scenario also guards the table itself. The user's standing note is
+// that this game is AI-built, "has several bugs and misclassifications",
+// and that "the truth is what's being observed in the game itself" — so
+// WEAPON_TAGS is a hypothesis. These tests assert the MACHINERY that lets
+// play falsify it, not that any particular tag is correct.
+// ---------------------------------------------------------------------
+if (which === 'tag-learn') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 500 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const why = n => T.scoreCard({ n, type: 'weapon', lv: 0, maxlv: 6 }, 0, []).why || '';
+    const sc = n => T.scoreCard({ n, type: 'weapon', lv: 0, maxlv: 6 }, 0, []).score;
+
+    // --- the user's correction to the table (they play the game; the recipe
+    // book does not). "gin and vodka tonic slow the bosses, not exactly
+    // freeze." Only WHISKY SOUR fully freezes, and a full freeze STOPS a
+    // boss — which is why it alone carries the defensive `freeze-scarce`
+    // bonus in hell. Asserted as the DEGREE distinction, since that is the
+    // thing the bot had no word for before this version.
+    test('GIN TONIC is tagged slow, NOT freeze', () => {
+        const t = T.tagsOf('GIN TONIC');
+        assert.ok(t.includes('slow') && !t.includes('freeze'), JSON.stringify(t));
+    });
+    test('VODKA TONIC is tagged slow and control, NOT freeze', () => {
+        const t = T.tagsOf('VODKA TONIC');
+        assert.ok(t.includes('slow') && t.includes('control') && !t.includes('freeze'), JSON.stringify(t));
+    });
+    test('WHISKY SOUR keeps the real freeze', () =>
+        assert.ok(T.tagsOf('WHISKY SOUR').includes('freeze'), JSON.stringify(T.tagsOf('WHISKY SOUR'))));
+    // ...and `control` stays the umbrella, so every rule written against it
+    // keeps working. This is what makes the change additive rather than a
+    // rewrite of four scoring sites.
+    test('every slow card still carries the control umbrella', () => {
+        for (const n of ['GIN TONIC', 'VODKA TONIC'])
+            assert.ok(T.tagsOf(n).includes('control'), n + ' ' + JSON.stringify(T.tagsOf(n)));
+    });
+
+    // --- the degree is worth different amounts against bosses.
+    // The distinction is BOSS-CONDITIONAL, so the field has to actually hold
+    // bosses — enemyMix is maintained by the movement gather, not by config.
+    global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5 };
+    global.enemies = [
+        { type: 'boss', x: 360, y: 270, r: 40, hp: 4000, maxHp: 4000, speed: 0.9, moving: true },
+        { type: 'boss', x: 180, y: 300, r: 40, hp: 4000, maxHp: 4000, speed: 0.9, moving: true }
+    ];
+    for (let i = 0; i < 4; i++) T.planMove();
+    test('against bosses a full freeze outscores a slow, and both beat neither', () => {
+        const base = T.enemyContextBonus('NEGRONI');       // defense, no control
+        const slow = T.enemyContextBonus('GIN TONIC');
+        const frz  = T.enemyContextBonus('WHISKY SOUR');
+        assert.ok(frz > slow, 'freeze ' + frz + ' slow ' + slow + ' base ' + base);
+        assert.ok(slow > 0, 'slow ' + slow + ' scored nothing — is enemyMix.boss populated?');
+    });
+    global.enemies = [];
+
+    // --- the bandit itself: a tag credited with a good reward raises EVERY
+    // card carrying it, including one the card bandit has never seen.
+    T.setTagUcb({});
+    const before = sc('GIN TONIC');
+    test('with no tag evidence the tag layer contributes nothing', () =>
+        assert.ok(/tag-learn\+0\b|tag-learn0\b|!/.test(why('GIN TONIC')) || !/tag-learn[-+]?[1-9]/.test(why('GIN TONIC')), why('GIN TONIC')));
+    // Teach `slow` from a DIFFERENT card than the one we then score.
+    T.creditTagPicks([{ name: 'VODKA TONIC' }], 2.4);
+    T.creditTagPicks([{ name: 'VODKA TONIC' }], 2.4);
+    T.creditTagPicks([{ name: 'VODKA TONIC' }], 2.4);
+    const after = sc('GIN TONIC');
+    test('a tag learned from ANOTHER card raises this one (the whole point)', () =>
+        assert.ok(after > before, 'before ' + Math.round(before) + ' after ' + Math.round(after)));
+    test('...and it is visible in the audit as its own term', () =>
+        assert.ok(/tag-learn/.test(why('GIN TONIC')), why('GIN TONIC')));
+
+    // --- the generalisation must never outvote a card's own record.
+    test('the tag layer is bounded tighter than the per-card layer', () => {
+        for (let i = 0; i < 60; i++) T.creditTagPicks([{ name: 'VODKA TONIC' }], 4.5);
+        const b = T.tagLearnBonusOf('GIN TONIC');
+        assert.ok(Math.abs(b) <= 8.001, 'tag bonus ' + b + ' exceeded the +/-8 bound');
+    });
+    // --- a card with four tags must not beat a card with one just for
+    // carrying more labels: the table's granularity is an artefact of how it
+    // was written, not a property of the weapon.
+    test('the tag bonus is a MEAN over tags, not a sum', () => {
+        // GIN TONIC carries FOUR tags, NEGRONI one. Credit each exactly once
+        // with the same small reward, so every tag involved ends up with
+        // IDENTICAL evidence and neither result is near the +/-8 clamp (a
+        // clamp would hide a sum by flattening both to the bound — that is
+        // what made the first version of this test toothless).
+        // Under a mean the two bonuses are equal; under a sum the four-tag
+        // card is ~4x, which is the bug: a card would outscore another purely
+        // for carrying more labels, and the label count is an artefact of how
+        // the table was written, not a property of the weapon.
+        T.setTagUcb({});
+        T.creditTagPicks([{ name: 'GIN TONIC' }], 0.1);
+        const four = T.tagLearnBonusOf('GIN TONIC');
+        T.setTagUcb({});
+        T.creditTagPicks([{ name: 'NEGRONI' }], 0.1);
+        const one = T.tagLearnBonusOf('NEGRONI');
+        assert.ok(Math.abs(four) < 7.5 && Math.abs(one) < 7.5,
+            'clamped, so this proves nothing: four ' + four + ' one ' + one);
+        assert.ok(Math.abs(four - one) < 0.5, 'four-tag ' + four + ' vs one-tag ' + one);
+    });
+    done();
+}
+
+// ---------------------------------------------------------------------
+// v6.107.0 THE DROP ANCHOR + SEARCHABLE RING GEOMETRY.
+//
+// User: "maintain some sort of anchor even if there's danger, because if
+// you kill a rushing mob with powerful weapons, you can pick up lucky
+// items like time pause, flame cross, or tequila shots."
+//
+// The absence was self-concealing: gatherLoot values only pickups already
+// on the floor, so a pack that has not died yet is pure danger, the bot is
+// pushed off it, the pack never dies, and no evidence of the missed value
+// is ever produced. There was no gradient for the CEM to climb.
+// ---------------------------------------------------------------------
+if (which === 'drop-anchor') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 500 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    // A clearable pack sitting EAST. Nothing else on the field, so the only
+    // reason to move toward it is the anchor and the only reason to move away
+    // is its own danger.
+    const pack = () => ([
+        { type: 'drunk', x: 390, y: 250, r: 12, hp: 40, maxHp: 40, speed: 1.3, moving: true },
+        { type: 'drunk', x: 400, y: 270, r: 12, hp: 40, maxHp: 40, speed: 1.3, moving: true },
+        { type: 'drunk', x: 395, y: 290, r: 12, hp: 40, maxHp: 40, speed: 1.3, moving: true },
+        { type: 'drunk', x: 410, y: 262, r: 12, hp: 40, maxHp: 40, speed: 1.3, moving: true }
+    ]);
+    const settle = () => { let q; for (let i = 0; i < 8; i++) q = T.planMove(); return q; };
+
+    // --- ARMING. The gate is FEASIBILITY, measured from the run's real kill
+    // rate. This is the whole safety story: a bot with no weapons standing in
+    // a crowd is how runs end.
+    global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5 };
+    global.enemies = pack();
+    T.setKillRate(0);
+    test('with NO kill rate the anchor never arms (nothing is killable)', () =>
+        assert.strictEqual(settle().dropAnchor, false));
+    T.setKillRate(1.5);                     // 4 bodies / 1.5 per s = 2.7s to clear
+    const on = settle();
+    test('with a real kill rate and a clearable pack, the anchor arms', () =>
+        assert.strictEqual(on.dropAnchor, true));
+    test('...and it reports the pack size and the measured time-to-clear', () =>
+        assert.ok(on.anchorN === 4 && on.anchorTtk > 2 && on.anchorTtk < 3.5,
+            'n ' + on.anchorN + ' ttk ' + on.anchorTtk));
+    T.setKillRate(0.12);                    // 4 / 0.12 = 33s: not clearable
+    test('a pack too slow to clear does NOT arm it', () =>
+        assert.strictEqual(settle().dropAnchor, false));
+    T.setKillRate(1.5);
+    global.player.hp = 40;                  // below anchorMinHp 0.55
+    test('and it never arms while hurt, whatever the pack', () =>
+        assert.strictEqual(settle().dropAnchor, false));
+    global.player.hp = 100;
+
+    // --- BEHAVIOUR. The point of the term is that the bot holds toward the
+    // pack instead of being pushed off it. Compared against the SAME scene
+    // with the term at zero, which is the only honest control.
+    T.setParam('movement.anchorValue', 0);
+    const off = settle();
+    // 90 is inside the measured hold band. Swept on this exact scene: at 34
+    // (the first draft's ceiling) the direction moved ONE candidate slot and
+    // the bot still fled; the hold appears between 34 and 80. A ceiling below
+    // that would have shipped a permanently decorative term — the same
+    // mistake as the 6.91.4 flat +12 freeze bonus, which could not move a
+    // pick either. The box is 0-120 for that reason.
+    T.setParam('movement.anchorValue', 90);
+    const held = settle();
+    test('the anchor HOLDS: the bot turns into the pack instead of fleeing it', () =>
+        assert.ok(off.dx < -0.5 && held.dx > 0.5,
+            'off dx ' + off.dx.toFixed(2) + ' held dx ' + held.dx.toFixed(2)));
+    // ...and the box opens at zero on purpose: the search is allowed to
+    // conclude the idea does not pay. Asserted so nobody "helpfully" raises
+    // the floor later and removes the CEM's ability to refuse it.
+    test('anchorValue is searchable from ZERO — the CEM may switch it off', () =>
+        assert.strictEqual(pineBot.test.tunable()['movement.anchorValue'].min, 0));
+
+    // --- THE SAFETY PROPERTY. This is a GAIN, never a danger discount.
+    // Suppressing fear while anchored would suppress mark, line and
+    // projectile fear too — the three things that actually end runs — and
+    // this project has a long file of regressions from blanket multipliers.
+    // An armed drop mark must still be dodged with the anchor at full weight.
+    // isHazard requires a real `dmg` (passout landing markers ride in the
+    // same array and are loot, not hazards), and `at` is the gameTime the
+    // blast lands — gt is 500 in this scene, so 501 is one second out.
+    // The mark sits BETWEEN the bot and the pack, on the path the anchor is
+    // pulling along, which is the only placement that tests anything.
+    global.dropMarks = [{ x: 340, y: 270, r: 46, dmg: 93, at: 501 }];
+    const marked = settle();
+    test('an armed mark on the path STILL breaks the hold (a gain, not a fear discount)', () =>
+        assert.ok(held.dx > 0.5 && marked.dx < 0,
+            'held ' + held.dx.toFixed(2) + ' marked ' + marked.dx.toFixed(2)));
+    global.dropMarks = [];
+    pineBot.test.applyDefaults();
+
+    // --- RING GEOMETRY IS SEARCHABLE. Until now the CEM could tune how much
+    // the bot WANTED to engage but never where it stood.
+    global.enemies = [{ type: 'boss', x: 470, y: 270, r: 40, reach: 120, hp: 4000, maxHp: 4000, speed: 0.9, moving: true }];
+    global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5 };
+    T.setParam('movement.bossRingMul', 0.8);
+    const tight = settle();
+    T.setParam('movement.bossRingMul', 1.25);
+    const wide = settle();
+    test('bossRingMul moves the firing ring: a wider ring stands further off', () =>
+        assert.ok(wide.dx < tight.dx - 0.05, 'tight dx ' + tight.dx.toFixed(2) + ' wide dx ' + wide.dx.toFixed(2)));
+    pineBot.test.applyDefaults();
+    // The per-character hard floor is applied AFTER the multiplier, so no
+    // low draw can walk the bot inside the distance a character must keep.
+    test('bossFloor still wins over a low bossRingMul draw', () => {
+        T.setChar('pat');
+        T.setParam('movement.bossRingMul', 0.8);
+        const fl = T.charProfile().bossFloor || 0;
+        const r = T.bossRing();
+        assert.ok(fl === 0 || r >= fl, 'ring ' + r + ' floor ' + fl);
+        T.setChar('joe');
+        pineBot.test.applyDefaults();
+    });
+    done();
+}
+
+// ---------------------------------------------------------------------
+// v6.107.0 THE ARMOUR TIER. User's stated phasing:
+//   "(1) Mojito, gin tonic, vodka tonic, southside, ultimate, shaking up
+//    as the first picks for damage to survive the initial 5 minutes.
+//    (2) olives, sweet vermouth, sugar, negroni for armor in 5-10 minutes."
+// The day order was STATIC — identical at gt 0 and gt 1199 — so phase 2
+// did not exist. Scored against a fresh build at 6.7 min the ranking came
+// out ULTIMATE 785, STIRRING 531, OLIVE 373, SOUTH SIDE 359: the armour
+// anchor was the third pick of the run, ahead of every cocktail, from
+// second one.
+// ---------------------------------------------------------------------
+if (which === 'armor-tier') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 120 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const at = (gt, n, type, lv) => { global.gameTime = gt; return T.scoreCard({ n, type: type || 'passive', lv: lv || 0, maxlv: 6 }, 0, []); };
+
+    test('before armorTierFromS the hold is applied and tagged', () =>
+        assert.ok(/armor-tier-hold/.test(at(120, 'OLIVE').why), at(120, 'OLIVE').why));
+    test('...and after it, the hold is gone', () =>
+        assert.ok(!/armor-tier-hold/.test(at(600, 'OLIVE').why), at(600, 'OLIVE').why));
+    test('OLIVE scores strictly higher once the tier opens', () =>
+        assert.ok(at(600, 'OLIVE').score > at(120, 'OLIVE').score,
+            'early ' + Math.round(at(120, 'OLIVE').score) + ' later ' + Math.round(at(600, 'OLIVE').score)));
+
+    // The point of the change: in the opening minutes a damage cocktail must
+    // beat the armour anchor, which it did NOT before this version.
+    test('in the first 5 minutes SOUTH SIDE now outranks OLIVE', () => {
+        const ss = at(120, 'SOUTH SIDE', 'weapon').score, ol = at(120, 'OLIVE').score;
+        assert.ok(ss > ol, 'SOUTH SIDE ' + Math.round(ss) + ' OLIVE ' + Math.round(ol));
+    });
+    // ...and the ordering goes BACK once armour is the phase, so this is a
+    // phase gate and not a permanent demotion of armour.
+    test('...and after the gate OLIVE leads again', () => {
+        const ss = at(600, 'SOUTH SIDE', 'weapon').score, ol = at(600, 'OLIVE').score;
+        assert.ok(ol > ss, 'OLIVE ' + Math.round(ol) + ' SOUTH SIDE ' + Math.round(ss));
+    });
+
+    // THE SUPER KEYS ARE NOT ARMOUR. The user listed SUGAR under phase 2,
+    // but SUGAR is MOJITO's super key and TONIC opens two lines; holding
+    // them back would starve exactly the supers 6.106.0 promoted after
+    // measuring that entry deaths were 65% zero-supers against 0% for
+    // survivors. Only the pure-defence ingredients are held.
+    test('the super keys are NEVER held back, whatever the phase', () => {
+        for (const k of ['TONIC', 'MINT', 'SUGAR'])
+            assert.ok(!/armor-tier-hold/.test(at(120, k).why), k + ' ' + at(120, k).why);
+    });
+
+    // A BOUNDED SUBTRACTION, NOT A VETO: a pool that offers nothing else has
+    // to leave the card takeable. The failure mode being guarded is a hold so
+    // large it turns into a refusal.
+    test('the hold never turns OLIVE into a refusal', () =>
+        assert.ok(at(120, 'OLIVE').score > 0, 'OLIVE ' + Math.round(at(120, 'OLIVE').score)));
+    test('and the hold is bounded by armorTierHold, not open-ended', () => {
+        const withHold = at(120, 'OLIVE').score;
+        T.setParam('movement.armorTierFromS', 0);
+        const without = at(120, 'OLIVE').score;
+        T.setParam('movement.armorTierFromS', 300);
+        assert.ok(Math.abs((without - withHold) - 60) < 0.01, 'delta ' + (without - withHold));
+    });
+
+    // HELL IS EXEMPT. The tier is a DAY funding doctrine; a hell run that has
+    // not capped armour must never be told to wait.
+    // INVARIANT GUARD, declared as one: the exemption comes from the enclosing
+    // `dayBuild = !hellDetected && gtOrd < 1200` guard, not from anything in
+    // the tier block. Deleting a `!hellDetected` written inside the block
+    // changed nothing, which is how that redundancy was found and removed.
+    // This test does not fail when the tier is reverted — it fails if anyone
+    // ever moves the tier out from under `dayBuild`.
+    test('hell runs are exempt from the hold entirely', () => {
+        global.hell = true;
+        pineBot.test.handleScreens();   // the playing handler latches hellDetected off the lexical flag
+        assert.ok(!/armor-tier-hold/.test(at(120, 'OLIVE').why), at(120, 'OLIVE').why);
+        global.hell = false;
+    });
+    done();
+}
+
+// ---------------------------------------------------------------------
+// v6.107.0 THE LEARNING PROBE. Four new machines shipped in this version
+// and none is legible from the four existing report blocks. The user's
+// ask was explicit: "go back through the pinebot report to be able to see
+// what's working and what needs tuning."
+//
+// These assertions guard SHAPE and HONESTY, not values: that the probe
+// reports sample counts next to every estimate (so a big weight at n=2
+// cannot be read as a finding), and that it reports what the danger field
+// ACTUALLY applied rather than what the store happens to hold. Reporting a
+// proxy as the quantity is the recurring failure in this project's history.
+// ---------------------------------------------------------------------
+if (which === 'learn-probe') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 500 } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+
+    test('report() carries the learning block', () => {
+        const r = pineBot.report();
+        assert.ok(r && r.learning, Object.keys(r || {}).join(','));
+    });
+    // --- tags: never an estimate without its sample count beside it.
+    T.setTagUcb({});
+    T.creditTagPicks([{ name: 'WHISKY SOUR' }], 2.0);
+    test('a credited tag appears with BOTH a weight and its n', () => {
+        const t = pineBot.learning().tags;
+        assert.ok(t.freeze && typeof t.freeze.weight === 'number' && typeof t.freeze.n === 'number',
+            JSON.stringify(t));
+    });
+    test('...and the tags the same card carries are all credited', () => {
+        const t = pineBot.learning().tags;
+        for (const k of ['freeze', 'line', 'control']) assert.ok(t[k], k + ' missing: ' + JSON.stringify(Object.keys(t)));
+    });
+    // --- enemy types: report the APPLIED value, not just the stored one.
+    // A store may hold 2.2 while the danger field is using 1.4; printing the
+    // store alone would be reading a proxy and calling it the quantity.
+    T.setEnemyMul({ bomber: 2.2 }); T.setEnemyN({ bomber: 40 });
+    test('the enemy table reports stored mul AND what was actually applied', () => {
+        const e = pineBot.learning().enemy.bomber;
+        assert.ok(e && Math.abs(e.mul - 2.2) < 0.01 && Math.abs(e.applied - 1.4) < 0.01,
+            JSON.stringify(e));
+    });
+    test('...and a type under the sample floor reports applied 1, not its store value', () => {
+        T.setEnemyN({ bomber: 2 });
+        const e = pineBot.learning().enemy.bomber;
+        assert.ok(Math.abs(e.applied - 1) < 0.01 && e.soleHits === 2, JSON.stringify(e));
+    });
+    // --- the new CEM dims: live value, mean, sigma and BOX, so a mean pinned
+    // at an edge is visible as such rather than needing to be inferred.
+    test('the four new CEM dimensions report their box alongside the mean', () => {
+        const p = pineBot.learning().params;
+        for (const k of ['movement.bossRingMul', 'movement.poRingMul', 'movement.anchorValue', 'movement.anchorTtkS']) {
+            assert.ok(p[k] && Array.isArray(p[k].box) && p[k].box.length === 2, k + ' ' + JSON.stringify(p[k]));
+            assert.ok(typeof p[k].mean === 'number', k + ' has no mean: ' + JSON.stringify(p[k]));
+        }
+    });
+    test('...and every new box CONTAINS its default, so a fresh store starts centred', () => {
+        const p = pineBot.learning().params;
+        for (const k of Object.keys(p))
+            assert.ok(p[k].live >= p[k].box[0] && p[k].live <= p[k].box[1],
+                k + ' default ' + p[k].live + ' outside box ' + JSON.stringify(p[k].box));
+    });
+    // --- the anchor reports whether it FIRED, which is the question that
+    // comes before whether it pays.
+    test('the anchor reports its arming count for the run', () => {
+        const a = pineBot.learning().anchor;
+        assert.ok(a && typeof a.armedTicksThisRun === 'number', JSON.stringify(a));
+    });
     done();
 }

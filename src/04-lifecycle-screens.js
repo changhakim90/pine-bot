@@ -110,6 +110,7 @@
         hellUnbanApplied = false;
         if (hellDetected) applyHellUnban();
         killRate = 0; lastKillCount = null; lastKillAt = 0;
+        dropAnchorTicks = 0; dropAnchorLastGt = 0;   // v6.107.0: anchor telemetry is per-run
         pressureAvg = 0; toughnessAvg = 1; dpsDeficit = 0; passoutAvg = 0;
         supersThisRun = 0; craftsThisRun = 0; rainbowThisRun = false; dayClearedThisRun = false;
         rainbowAt = 0;
@@ -207,6 +208,7 @@
         const base = baseline();
         creditItems(reward);
         creditLinUcb(reward);
+        creditTagUcb(reward);   // v6.107.0: the same run also teaches the attack-type layer
         if (primaryCocktail) {
             const b = learn.builds[primaryCocktail] || { n: 0, sum: 0 };
             b.n = b.n * CONFIG.learning.decay + 1;
@@ -255,16 +257,25 @@
             const totalHit = Object.values(hitTypeRun).reduce((a, b) => a + b, 0);
             if (totalHit > 0) {
                 const mul = learn.enemyTypeMul || (learn.enemyTypeMul = {});
+                const cnt = learn.enemyTypeN || (learn.enemyTypeN = {});
                 for (const k of Object.keys(hitTypeRun)) {
                     const share = hitTypeRun[k] / totalHit;
-                    const target = 1 + 3 * share;
+                    // v6.107.0: TARGET NARROWED 1+3*share -> 1+1.2*share.
+                    // The old target let a type that took most of one run's
+                    // contact damage aim at 4.0 and sit against the 2.2 clamp
+                    // permanently; a clamp that is the resting state is not a
+                    // clamp. 1.2 puts a type that took ALL of a run's contact
+                    // damage at 2.2 as its ASYMPTOTE, so the cap is reached
+                    // only by a type that does it run after run.
+                    const target = 1 + 1.2 * share;
                     mul[k] = Math.max(0.6, Math.min(2.2, 0.85 * (mul[k] || 1) + 0.15 * target));
+                    cnt[k] = (cnt[k] || 0) + (hitTypeN[k] || 0);
                 }
                 for (const k of Object.keys(learn.enemyTypeMul)) {
                     if (!(k in hitTypeRun)) learn.enemyTypeMul[k] = 0.9 * learn.enemyTypeMul[k] + 0.1;
                 }
             }
-            hitTypeRun = {};
+            hitTypeRun = {}; hitTypeN = {};
         } catch (e) { }
         // v6.85.13: persist the damage audit so a page reload does not lose it.
         // Written once per run, not per damage event — this is on the run-end

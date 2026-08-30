@@ -683,6 +683,30 @@
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
+            // v6.107.0 RING MULTIPLIERS — the CEM could tune how much the bot
+            // WANTS to engage (the *Value weights above) but never WHERE IT
+            // STANDS. Both rings were hand-fitted constants; these scale them
+            // so the search can test the fit. Narrow boxes: this distance is
+            // the difference between landing the burn and eating a one-hit.
+            bossRingMul: 1.0,
+            poRingMul: 1.0,
+            // v6.107.0 ARMOUR TIER (user's phasing: damage first 5 minutes,
+            // armour 5-10). Before this game-time the pure-defence
+            // ingredients give up part of their day-order rank; after it they
+            // get all of it back. A bounded subtraction, never a veto — a
+            // pool offering nothing else must still be takeable.
+            armorTierFromS: 300,
+            armorTierHold: 60,
+            // v6.107.0 THE DROP ANCHOR (user: "if you kill a rushing mob with
+            // powerful weapons, you can pick up lucky items like time pause,
+            // flame cross, or tequila shots"). Pull toward a pack the bot can
+            // actually clear, so the drops get a chance to exist. Full
+            // reasoning at the arming block in 05-movement.
+            anchorValue: 14,      // searchable from 0: the CEM may switch it off
+            anchorTtkS: 5,        // seconds-to-clear that still counts as "killable"
+            anchorRange: 190,     // pack radius considered
+            anchorMinPack: 3,     // fewer bodies than this is not a pack
+            anchorMinHp: 0.55,    // never anchor while hurt — fixed, not searchable
             wallWeight: 2.2,
             panicHp: 0.55,        // below this HP ratio, survival dominates
             panicLootDiscount: 0.35,
@@ -1074,6 +1098,15 @@
             baselineWindow: 12,
             decay: 0.985,
             tuningWarmupRuns: 3,
+            // v6.107.0 LEARNED PER-TYPE THREAT MULTIPLIER (see typeMul() in
+            // 05-movement for the full history). The store may hold 0.6-2.2;
+            // these bound what is actually APPLIED to the danger field.
+            // The 6.85.22 failure was the bot fearing ordinary mobs at 2.2x
+            // and refusing to farm — a 1.4 ceiling makes that unreachable.
+            enemyMulApply: true,   // one live dial: false restores static fear
+            enemyMulMinN: 8,       // sole-candidate contact events before a type counts at all
+            enemyMulFloor: 0.8,
+            enemyMulCeil: 1.4,
             // CEM (Cross-Entropy Method) optimizer for movement/dodge params:
             // sample from a Gaussian per parameter, batch runs, refit the
             // distribution toward the top-ranked runs. Rank-based selection
@@ -1755,6 +1788,29 @@
     //   aoe/swarm/aura/orbit/line/zones: clears crowds
     //   control/freeze/knockback: slows or repels (anti-contact)
     //   defense/lifesteal/summon: survivability
+    // v6.107.0 — SLOW IS NOT FREEZE (user, correcting this table directly):
+    // "gin and vodka tonic slow the bosses, not exactly freeze."
+    // The degree matters and the bot had no word for it. A full FREEZE stops a
+    // boss outright — a stopped boss deals no contact damage, which is why
+    // WHISKY SOUR is scored as a defensive pick (`freeze-scarce`, 03-scoring).
+    // A SLOW only reduces speed; it buys kiting room, not immunity.
+    //
+    // `control` stays the UMBRELLA and every slow/freeze card still carries it,
+    // so every rule already reading 'control' keeps its exact behaviour. The
+    // new 'slow' tag and the existing 'freeze' tag are the DEGREE underneath.
+    // VODKA TONIC also gains 'control', which it always should have had.
+    //
+    // ONLY the three cards the user named are re-tagged. COSMOPOLITAN,
+    // WHISKEY HIGHBALL, VODKA CRANBERRY and DRY MARTINI have comments that
+    // say "freezing"/"slowing" too, but none is user-verified and none is on
+    // the roster — they keep bare 'control' until someone actually checks.
+    // v6.107.0 — the armour ingredients, held back before armorTierFromS so
+    // the user's phase 1 (damage) precedes phase 2 (armour). NOT the super
+    // keys: SUGAR is MOJITO's key and TONIC opens two lines, so although the
+    // user listed SUGAR under armour, holding it back would starve the very
+    // supers 6.106.0 promoted. Only the pure-defence ingredients are held.
+    const ARMOR_TIER = new Set(['OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'BLACK VERMOUTH']);
+
     const WEAPON_TAGS = {
         'GIMLET': ['chain', 'tanky'],                       // lightning chains, slow, hard-hitting
         'MANHATTAN': ['boss', 'burst', 'aoe'],              // cherry-bombs the TOUGHEST enemy, huge blast
@@ -1762,9 +1818,9 @@
         'SIDECAR': ['pierce', 'swarm'],                     // wall ricochet, piercing & bursting
         'MOJITO': ['boss', 'sniper', 'swarm'],              // sniper at toughest + shotgun pellets
         'COSMOPOLITAN': ['boss', 'sustained', 'control'],   // gatling freezing darts
-        'GIN TONIC': ['aura', 'swarm', 'control'],          // freeze/poison aura, 2x damage
+        'GIN TONIC': ['aura', 'swarm', 'control', 'slow'],  // SLOWING/poison aura, 2x damage
         'WHISKEY HIGHBALL': ['sustained', 'control'],       // gatling fizzy freeze blasts
-        'VODKA TONIC': ['homing', 'boss'],                  // roaming ice familiars hunt on their own
+        'VODKA TONIC': ['homing', 'boss', 'control', 'slow'], // roaming ice familiars hunt on their own AND slow what they hit
         'VODKA CRANBERRY': ['control', 'lifesteal'],        // freezing lifesteal whip
         'SOUTH SIDE': ['aoe', 'swarm', 'zones'],            // flame rain leaves burning zones
         'MARGARITA': ['line', 'swarm'],                     // boomerangs hit out AND back
@@ -1894,7 +1950,29 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 }
+        'movement.bossEngageValue': { min: 10, max: 36 },
+        // v6.107.0 — FOUR NEW DIMENSIONS. The comment below warns that adding
+        // one to a live learner requires seeding mean=default and
+        // sigma=(max-min)/4 first. That seeding is now UNCONDITIONAL: the
+        // loader at 02-learning.js:209-227 fills any TUNABLE key missing from
+        // a stored CEM with DEFAULT_PARAMS[k] and a full sigmaInit, per key,
+        // on every load — hardening that postdates the 6.85.22 accident this
+        // warning was written about. `store-guard` asserts it.
+        // All four boxes CONTAIN their default, so a store that has never
+        // seen them starts centred rather than being dragged somewhere new.
+        'movement.bossRingMul': { min: 0.8, max: 1.25 },
+        'movement.poRingMul': { min: 0.8, max: 1.3 },
+        // MEASURED BOX, not a guessed one. The anchor has to outbid the danger
+        // of the very bodies it points at, so its useful scale is larger than
+        // the other *Value weights. Swept on a 4-body pack 125px out: 34 moved
+        // the chosen direction by ONE candidate slot (dx -0.98 -> -0.83) and
+        // the bot still fled; the hold appears between 34 and 80 (dx +0.98 at
+        // 80). A 34 ceiling would have made this term permanently decorative —
+        // the same mistake as the 6.91.4 flat +12 freeze bonus, which could
+        // not move a pick either. The DEFAULT stays low so v6.107.0 behaves
+        // close to 6.106.0 out of the box and the search walks into the rest.
+        'movement.anchorValue': { min: 0, max: 120 },   // opens at ZERO: the search may refuse the idea
+        'movement.anchorTtkS': { min: 2, max: 10 }
         // v6.85.23: the six 6.85.22 dims are WITHDRAWN from the search.
         // They never actually sampled (the stored CEM state had no mean or
         // sigma for them, so every draw was NaN and applyParams skipped it)
@@ -1981,7 +2059,12 @@
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
     // v6.85.22: HP lost near each enemy TYPE this run. Feeds the learned
     // per-type threat multiplier at run end — measured fear, not static fear.
-    let hitTypeRun = {};
+    // v6.107.0: SOLE-CANDIDATE ONLY. Written in 05-movement exclusively for
+    // damage events where contact was the one hazard class in range, and
+    // attributed to the body inside contact reach. `hitTypeN` counts those
+    // events so the application site can refuse a type it has barely seen —
+    // an EMA alone cannot tell one sample from fifty.
+    let hitTypeRun = {}, hitTypeN = {};
     // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
     // `dangerAccum`'s own classifier is left byte-identical so death verdicts
     // stay comparable with the 145-run 6.85.12 sample. This records the
@@ -2265,6 +2348,10 @@
     let enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };  // rolling: what we're fighting
     // Enemy-scaling telemetry: measure the difficulty curve instead of assuming it.
     let killRate = 0, lastKillCount = null, lastKillAt = 0;   // kills/sec, rolling
+    // v6.107.0 DROP ANCHOR telemetry — how often the anchor actually armed
+    // and when it last did. Per-run; reported so the user can tell whether
+    // the term is firing at all before asking whether it is paying.
+    let dropAnchorTicks = 0, dropAnchorLastGt = 0;
     let passoutAvg = 0;                                       // rolling passout presence — loot piles waiting
     let pressureAvg = 0;                                      // avg nearby enemies, rolling
     let toughnessAvg = 1;                                     // avg enemy HP vs early-game reference

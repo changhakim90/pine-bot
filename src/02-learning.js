@@ -171,6 +171,7 @@
             });
         }
         d.linucb = d.linucb || {};        // card name -> diagonal LinUCB model {n, A[d], b[d]}
+        d.tagucb = d.tagucb || {};        // v6.107.0: attack-type tag -> the same model, shared across every card carrying it
         d.rainbowPolicy = d.rainbowPolicy || {};   // 'take' | 'skip' -> {n, sum} (crown-path bandit)
         d.spawnIntel = d.spawnIntel || {};         // enemy class -> {n, sum} of first-seen gameTime (measured timetable)
         // Bartender priors. The hell crown board is the strongest evidence we
@@ -537,7 +538,21 @@
             // v6.85.23: the 6.85.22 enemy-type multipliers stopped being
             // applied, and stored ratcheted values must not linger in case a
             // future version applies them again. Cleared once here.
-            if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+            // v6.107.0: that future version is this one, and the wipe now runs
+            // EXACTLY ONCE per store instead of every trial. Deleting it every
+            // trial made the table permanently unlearnable — 04-lifecycle
+            // wrote it at the end of every run and this erased it before the
+            // next, so it has been dead state for twenty-odd versions.
+            // The one-time wipe still matters: a store may hold values
+            // ratcheted to the 2.2 cap by the old nearest-type attribution,
+            // and those must not survive into a version that APPLIES them.
+            // The counts start empty too, so nothing is applied until
+            // `enemyMulMinN` fresh sole-candidate events exist per type.
+            if (!learn.enemyMulEpoch6107) {
+                learn.enemyMulEpoch6107 = 1;
+                if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+                if (learn.enemyTypeN) delete learn.enemyTypeN;
+            }
         } catch (e) { }
     }
 
@@ -1084,6 +1099,74 @@
         // layer nudges but never overrules the knowledge-based score
         const v = est * 8 + alpha * Math.sqrt(unc) * 2;
         return Math.max(-12, Math.min(12, Math.round(v * 10) / 10));
+    }
+    // =================================================================
+    // v6.107.0 TAG BANDIT — the same LinUCB, keyed on ATTACK TYPE.
+    // =================================================================
+    // The card bandit above is per-NAME, so "freeze pays when bosses are the
+    // live threat" has to be relearned from scratch for every freeze card,
+    // and a card picked five times never gets there. Tags are the shared
+    // structure: WHISKY SOUR's `freeze`, GIN TONIC's `slow`, SOUTH SIDE's
+    // `zones` are each measured across every card that carries them, so one
+    // pass of runs teaches all of them.
+    //
+    // WHY THIS MATTERS MORE THAN IT LOOKS (user): the game is AI-built and
+    // "has several bugs and misclassifications — the truth is what's being
+    // observed in the game itself." WEAPON_TAGS is a HYPOTHESIS derived from
+    // the recipe book, and two of its entries were wrong until the user
+    // corrected them from play. This bandit is how the hypothesis gets
+    // MEASURED: a tag whose learned weight never separates from zero is a tag
+    // that does not describe anything real, and `pineBot.report().tags` is
+    // where that shows up. It is evidence about the table, not just a bonus.
+    //
+    // Deliberately bounded TIGHTER than the per-card layer (+/-8 vs +/-12): a
+    // generalisation across cards should never outvote a card's own record.
+    // Shares CTX_D and the context vector, so no stored-shape migration.
+    function tagsOf(name) {
+        const w = (typeof WEAPON_TAGS !== 'undefined' && WEAPON_TAGS[name]) || null;
+        const i = (typeof INGREDIENT_TAGS !== 'undefined' && INGREDIENT_TAGS[name]) || null;
+        return w || i || [];
+    }
+    function tagLearnBonus(name, x) {
+        const tags = tagsOf(name);
+        if (!tags.length || !learn.tagucb) return 0;
+        const lam = 1, alpha = 1.0;
+        let sum = 0, seen = 0;
+        for (const t of tags) {
+            const m = learn.tagucb[t];
+            if (!m || !Array.isArray(m.A) || !Array.isArray(m.b)) continue;
+            let est = 0, unc = 0;
+            for (let i = 0; i < CTX_D; i++) {
+                const Ai = (isFinite(m.A[i]) ? m.A[i] : 0) + lam;
+                est += ((isFinite(m.b[i]) ? m.b[i] : 0) / Ai) * x[i];
+                unc += (x[i] * x[i]) / Ai;
+            }
+            sum += est * 8 + alpha * Math.sqrt(unc) * 2;
+            seen++;
+        }
+        if (!seen) return 0;
+        // MEAN, not sum: a card with four tags must not outscore a card with
+        // one purely by carrying more labels. The table's granularity is an
+        // artefact of how it was written, not a property of the weapon.
+        const v = sum / seen;
+        return Math.max(-8, Math.min(8, Math.round(v * 10) / 10));
+    }
+    function creditTagUcb(reward) {
+        if (!learn.tagucb) learn.tagucb = {};
+        const total = Math.max(1, runPickCtx.length);
+        for (let i = 0; i < runPickCtx.length; i++) {
+            const { name, x } = runPickCtx[i];
+            const w = 1.5 - 0.5 * (i / total);
+            for (const t of tagsOf(name)) {
+                const m = learn.tagucb[t] || { n: 0, A: new Array(CTX_D).fill(0), b: new Array(CTX_D).fill(0) };
+                for (let j = 0; j < CTX_D; j++) {
+                    m.A[j] = (isFinite(m.A[j]) ? m.A[j] : 0) * 0.999 + w * x[j] * x[j];
+                    m.b[j] = (isFinite(m.b[j]) ? m.b[j] : 0) * 0.999 + w * reward * x[j];
+                }
+                m.n = (m.n || 0) + w;
+                learn.tagucb[t] = m;
+            }
+        }
     }
     function creditLinUcb(reward) {
         const total = Math.max(1, runPickCtx.length);

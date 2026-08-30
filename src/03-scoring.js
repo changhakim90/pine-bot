@@ -119,6 +119,13 @@
         if (bossP && tags.some(t => ['boss', 'sniper', 'homing', 'burst', 'tanky'].includes(t))) b += 8;
         if (bossP && tags.includes('knockback')) b += 5;
         if (lastDeathCause === 'contact' && tags.some(t => ['control', 'knockback', 'freeze', 'defense'].includes(t))) b += 6;
+        // v6.107.0 THE DEGREE OF CONTROL, against bosses (user: "gin and vodka
+        // tonic slow the bosses, not exactly freeze"). A full freeze STOPS a
+        // boss and a stopped boss deals no contact damage at all; a slow only
+        // buys kiting room. Ranked, not equal — and mutually exclusive so a
+        // card carrying both tags is paid once, at the higher rate.
+        if (bossP && tags.includes('freeze')) b += 7;
+        else if (bossP && tags.includes('slow')) b += 4;
         return b;
     }
 
@@ -871,6 +878,41 @@
             // a priority that outranks one. Capped at 200 total so every guard
             // in the scorer still dominates it.
             if (rank >= 0) add(200 - rank * 11, 'day-order' + (rank + 1));
+            // =========================================================
+            // v6.107.0 THE ARMOUR TIER IS TIME-GATED
+            // =========================================================
+            // User's stated phasing, verbatim: "(1) Mojito, gin tonic, vodka
+            // tonic, southside, ultimate, shaking up as the first picks for
+            // damage to survive the initial 5 minutes. (2) olives, sweet
+            // vermouth, sugar, negroni for armor in 5-10 minutes."
+            //
+            // The day order is STATIC — it reads the same at gt 0 as at gt
+            // 1199 — so phase 2 did not exist. Scored against a fresh build at
+            // 6.7 min the ranking came out ULTIMATE 785, STIRRING 531, OLIVE
+            // 373, SOUTH SIDE 359: the armour anchor was the third pick of the
+            // run and ahead of every cocktail, from second one.
+            //
+            // This is a SUPPRESSION with an expiry, not a reordering: before
+            // `armorTierFromS` the armour ingredients give up part of their
+            // rank bonus, and after it they get all of it back. Deliberately
+            // NOT a veto — a pool that offers nothing else must still be
+            // takeable, which is why it subtracts a bounded amount instead of
+            // refusing the card.
+            // 6.105.0's entry-armour checkpoint (+18 from 750s, +40 from
+            // 1050s) is untouched and lands long after this expires, so
+            // armour is still capped before the 1200s entrance.
+            // (no `!hellDetected` here: the enclosing `dayBuild` guard is
+            // already `!hellDetected && gtOrd < 1200`. Writing it again read
+            // as a second safeguard and was dead code — teeth-verified by
+            // deleting it and watching nothing fail. The hell exemption is
+            // real, it just lives one block up, and `armor-tier` guards it
+            // there as an invariant.)
+            const armorFrom = CONFIG.movement.armorTierFromS;
+            if (rank >= 0 && armorFrom != null && gtOrd < armorFrom &&
+                ARMOR_TIER.has(name)) {
+                add(-(CONFIG.movement.armorTierHold != null ? CONFIG.movement.armorTierHold : 60),
+                    'armor-tier-hold');
+            }
             // v6.88.6 SLOT LOCKOUT (user): "the choices become limited towards
             // building a rainbow gun as the game was designed that way ...
             // allowing the bot to fill the cocktail space earlier in the run
@@ -1398,7 +1440,13 @@
         // dragging picks toward off-plan measured favorites. Once an item has
         // real data (n>=3), the ucb term is halved to a tiebreaker.
         add(ucbScore(name) * (((learn.items[name] || {}).n || 0) >= 3 ? 0.5 : 1), 'ucb');
-        add(ctxLearnBonus(name, pickContext()), 'ctx-learn');   // contextual bandit layer (LinUCB)
+        {
+            // v6.107.0: both learned layers read ONE context vector. Building
+            // it twice would be two different game states in the same pick.
+            const xCtx = pickContext();
+            add(ctxLearnBonus(name, xCtx), 'ctx-learn');   // contextual bandit layer (LinUCB), per card name
+            add(tagLearnBonus(name, xCtx), 'tag-learn');   // the same layer generalised over ATTACK TYPE
+        }
 
         // PLAN-FIRST DISCIPLINE (user): off-plan, un-owned cards yield to
         // live in-plan options in the same pool — a good measured mean

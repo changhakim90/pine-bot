@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.106.0
+// @version      6.107.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.106.0';
+    const SCRIPT_VERSION = '6.107.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -685,6 +685,30 @@
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
+            // v6.107.0 RING MULTIPLIERS — the CEM could tune how much the bot
+            // WANTS to engage (the *Value weights above) but never WHERE IT
+            // STANDS. Both rings were hand-fitted constants; these scale them
+            // so the search can test the fit. Narrow boxes: this distance is
+            // the difference between landing the burn and eating a one-hit.
+            bossRingMul: 1.0,
+            poRingMul: 1.0,
+            // v6.107.0 ARMOUR TIER (user's phasing: damage first 5 minutes,
+            // armour 5-10). Before this game-time the pure-defence
+            // ingredients give up part of their day-order rank; after it they
+            // get all of it back. A bounded subtraction, never a veto — a
+            // pool offering nothing else must still be takeable.
+            armorTierFromS: 300,
+            armorTierHold: 60,
+            // v6.107.0 THE DROP ANCHOR (user: "if you kill a rushing mob with
+            // powerful weapons, you can pick up lucky items like time pause,
+            // flame cross, or tequila shots"). Pull toward a pack the bot can
+            // actually clear, so the drops get a chance to exist. Full
+            // reasoning at the arming block in 05-movement.
+            anchorValue: 14,      // searchable from 0: the CEM may switch it off
+            anchorTtkS: 5,        // seconds-to-clear that still counts as "killable"
+            anchorRange: 190,     // pack radius considered
+            anchorMinPack: 3,     // fewer bodies than this is not a pack
+            anchorMinHp: 0.55,    // never anchor while hurt — fixed, not searchable
             wallWeight: 2.2,
             panicHp: 0.55,        // below this HP ratio, survival dominates
             panicLootDiscount: 0.35,
@@ -1076,6 +1100,15 @@
             baselineWindow: 12,
             decay: 0.985,
             tuningWarmupRuns: 3,
+            // v6.107.0 LEARNED PER-TYPE THREAT MULTIPLIER (see typeMul() in
+            // 05-movement for the full history). The store may hold 0.6-2.2;
+            // these bound what is actually APPLIED to the danger field.
+            // The 6.85.22 failure was the bot fearing ordinary mobs at 2.2x
+            // and refusing to farm — a 1.4 ceiling makes that unreachable.
+            enemyMulApply: true,   // one live dial: false restores static fear
+            enemyMulMinN: 8,       // sole-candidate contact events before a type counts at all
+            enemyMulFloor: 0.8,
+            enemyMulCeil: 1.4,
             // CEM (Cross-Entropy Method) optimizer for movement/dodge params:
             // sample from a Gaussian per parameter, batch runs, refit the
             // distribution toward the top-ranked runs. Rank-based selection
@@ -1757,6 +1790,29 @@
     //   aoe/swarm/aura/orbit/line/zones: clears crowds
     //   control/freeze/knockback: slows or repels (anti-contact)
     //   defense/lifesteal/summon: survivability
+    // v6.107.0 — SLOW IS NOT FREEZE (user, correcting this table directly):
+    // "gin and vodka tonic slow the bosses, not exactly freeze."
+    // The degree matters and the bot had no word for it. A full FREEZE stops a
+    // boss outright — a stopped boss deals no contact damage, which is why
+    // WHISKY SOUR is scored as a defensive pick (`freeze-scarce`, 03-scoring).
+    // A SLOW only reduces speed; it buys kiting room, not immunity.
+    //
+    // `control` stays the UMBRELLA and every slow/freeze card still carries it,
+    // so every rule already reading 'control' keeps its exact behaviour. The
+    // new 'slow' tag and the existing 'freeze' tag are the DEGREE underneath.
+    // VODKA TONIC also gains 'control', which it always should have had.
+    //
+    // ONLY the three cards the user named are re-tagged. COSMOPOLITAN,
+    // WHISKEY HIGHBALL, VODKA CRANBERRY and DRY MARTINI have comments that
+    // say "freezing"/"slowing" too, but none is user-verified and none is on
+    // the roster — they keep bare 'control' until someone actually checks.
+    // v6.107.0 — the armour ingredients, held back before armorTierFromS so
+    // the user's phase 1 (damage) precedes phase 2 (armour). NOT the super
+    // keys: SUGAR is MOJITO's key and TONIC opens two lines, so although the
+    // user listed SUGAR under armour, holding it back would starve the very
+    // supers 6.106.0 promoted. Only the pure-defence ingredients are held.
+    const ARMOR_TIER = new Set(['OLIVE', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'BLACK VERMOUTH']);
+
     const WEAPON_TAGS = {
         'GIMLET': ['chain', 'tanky'],                       // lightning chains, slow, hard-hitting
         'MANHATTAN': ['boss', 'burst', 'aoe'],              // cherry-bombs the TOUGHEST enemy, huge blast
@@ -1764,9 +1820,9 @@
         'SIDECAR': ['pierce', 'swarm'],                     // wall ricochet, piercing & bursting
         'MOJITO': ['boss', 'sniper', 'swarm'],              // sniper at toughest + shotgun pellets
         'COSMOPOLITAN': ['boss', 'sustained', 'control'],   // gatling freezing darts
-        'GIN TONIC': ['aura', 'swarm', 'control'],          // freeze/poison aura, 2x damage
+        'GIN TONIC': ['aura', 'swarm', 'control', 'slow'],  // SLOWING/poison aura, 2x damage
         'WHISKEY HIGHBALL': ['sustained', 'control'],       // gatling fizzy freeze blasts
-        'VODKA TONIC': ['homing', 'boss'],                  // roaming ice familiars hunt on their own
+        'VODKA TONIC': ['homing', 'boss', 'control', 'slow'], // roaming ice familiars hunt on their own AND slow what they hit
         'VODKA CRANBERRY': ['control', 'lifesteal'],        // freezing lifesteal whip
         'SOUTH SIDE': ['aoe', 'swarm', 'zones'],            // flame rain leaves burning zones
         'MARGARITA': ['line', 'swarm'],                     // boomerangs hit out AND back
@@ -1896,7 +1952,29 @@
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 }
+        'movement.bossEngageValue': { min: 10, max: 36 },
+        // v6.107.0 — FOUR NEW DIMENSIONS. The comment below warns that adding
+        // one to a live learner requires seeding mean=default and
+        // sigma=(max-min)/4 first. That seeding is now UNCONDITIONAL: the
+        // loader at 02-learning.js:209-227 fills any TUNABLE key missing from
+        // a stored CEM with DEFAULT_PARAMS[k] and a full sigmaInit, per key,
+        // on every load — hardening that postdates the 6.85.22 accident this
+        // warning was written about. `store-guard` asserts it.
+        // All four boxes CONTAIN their default, so a store that has never
+        // seen them starts centred rather than being dragged somewhere new.
+        'movement.bossRingMul': { min: 0.8, max: 1.25 },
+        'movement.poRingMul': { min: 0.8, max: 1.3 },
+        // MEASURED BOX, not a guessed one. The anchor has to outbid the danger
+        // of the very bodies it points at, so its useful scale is larger than
+        // the other *Value weights. Swept on a 4-body pack 125px out: 34 moved
+        // the chosen direction by ONE candidate slot (dx -0.98 -> -0.83) and
+        // the bot still fled; the hold appears between 34 and 80 (dx +0.98 at
+        // 80). A 34 ceiling would have made this term permanently decorative —
+        // the same mistake as the 6.91.4 flat +12 freeze bonus, which could
+        // not move a pick either. The DEFAULT stays low so v6.107.0 behaves
+        // close to 6.106.0 out of the box and the search walks into the rest.
+        'movement.anchorValue': { min: 0, max: 120 },   // opens at ZERO: the search may refuse the idea
+        'movement.anchorTtkS': { min: 2, max: 10 }
         // v6.85.23: the six 6.85.22 dims are WITHDRAWN from the search.
         // They never actually sampled (the stored CEM state had no mean or
         // sigma for them, so every draw was NaN and applyParams skipped it)
@@ -1983,7 +2061,12 @@
     let dangerAccum = { contact: 0, proj: 0, mark: 0, line: 0, rival: 0 };    // death-cause telemetry
     // v6.85.22: HP lost near each enemy TYPE this run. Feeds the learned
     // per-type threat multiplier at run end — measured fear, not static fear.
-    let hitTypeRun = {};
+    // v6.107.0: SOLE-CANDIDATE ONLY. Written in 05-movement exclusively for
+    // damage events where contact was the one hazard class in range, and
+    // attributed to the body inside contact reach. `hitTypeN` counts those
+    // events so the application site can refuse a type it has barely seen —
+    // an EMA alone cannot tell one sample from fifty.
+    let hitTypeRun = {}, hitTypeN = {};
     // v6.85.13 DAMAGE AUDIT — an INSTRUMENT, not a change of behaviour.
     // `dangerAccum`'s own classifier is left byte-identical so death verdicts
     // stay comparable with the 145-run 6.85.12 sample. This records the
@@ -2267,6 +2350,10 @@
     let enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };  // rolling: what we're fighting
     // Enemy-scaling telemetry: measure the difficulty curve instead of assuming it.
     let killRate = 0, lastKillCount = null, lastKillAt = 0;   // kills/sec, rolling
+    // v6.107.0 DROP ANCHOR telemetry — how often the anchor actually armed
+    // and when it last did. Per-run; reported so the user can tell whether
+    // the term is firing at all before asking whether it is paying.
+    let dropAnchorTicks = 0, dropAnchorLastGt = 0;
     let passoutAvg = 0;                                       // rolling passout presence — loot piles waiting
     let pressureAvg = 0;                                      // avg nearby enemies, rolling
     let toughnessAvg = 1;                                     // avg enemy HP vs early-game reference
@@ -2716,6 +2803,7 @@
             });
         }
         d.linucb = d.linucb || {};        // card name -> diagonal LinUCB model {n, A[d], b[d]}
+        d.tagucb = d.tagucb || {};        // v6.107.0: attack-type tag -> the same model, shared across every card carrying it
         d.rainbowPolicy = d.rainbowPolicy || {};   // 'take' | 'skip' -> {n, sum} (crown-path bandit)
         d.spawnIntel = d.spawnIntel || {};         // enemy class -> {n, sum} of first-seen gameTime (measured timetable)
         // Bartender priors. The hell crown board is the strongest evidence we
@@ -3082,7 +3170,21 @@
             // v6.85.23: the 6.85.22 enemy-type multipliers stopped being
             // applied, and stored ratcheted values must not linger in case a
             // future version applies them again. Cleared once here.
-            if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+            // v6.107.0: that future version is this one, and the wipe now runs
+            // EXACTLY ONCE per store instead of every trial. Deleting it every
+            // trial made the table permanently unlearnable — 04-lifecycle
+            // wrote it at the end of every run and this erased it before the
+            // next, so it has been dead state for twenty-odd versions.
+            // The one-time wipe still matters: a store may hold values
+            // ratcheted to the 2.2 cap by the old nearest-type attribution,
+            // and those must not survive into a version that APPLIES them.
+            // The counts start empty too, so nothing is applied until
+            // `enemyMulMinN` fresh sole-candidate events exist per type.
+            if (!learn.enemyMulEpoch6107) {
+                learn.enemyMulEpoch6107 = 1;
+                if (learn.enemyTypeMul) delete learn.enemyTypeMul;
+                if (learn.enemyTypeN) delete learn.enemyTypeN;
+            }
         } catch (e) { }
     }
 
@@ -3630,6 +3732,74 @@
         const v = est * 8 + alpha * Math.sqrt(unc) * 2;
         return Math.max(-12, Math.min(12, Math.round(v * 10) / 10));
     }
+    // =================================================================
+    // v6.107.0 TAG BANDIT — the same LinUCB, keyed on ATTACK TYPE.
+    // =================================================================
+    // The card bandit above is per-NAME, so "freeze pays when bosses are the
+    // live threat" has to be relearned from scratch for every freeze card,
+    // and a card picked five times never gets there. Tags are the shared
+    // structure: WHISKY SOUR's `freeze`, GIN TONIC's `slow`, SOUTH SIDE's
+    // `zones` are each measured across every card that carries them, so one
+    // pass of runs teaches all of them.
+    //
+    // WHY THIS MATTERS MORE THAN IT LOOKS (user): the game is AI-built and
+    // "has several bugs and misclassifications — the truth is what's being
+    // observed in the game itself." WEAPON_TAGS is a HYPOTHESIS derived from
+    // the recipe book, and two of its entries were wrong until the user
+    // corrected them from play. This bandit is how the hypothesis gets
+    // MEASURED: a tag whose learned weight never separates from zero is a tag
+    // that does not describe anything real, and `pineBot.report().tags` is
+    // where that shows up. It is evidence about the table, not just a bonus.
+    //
+    // Deliberately bounded TIGHTER than the per-card layer (+/-8 vs +/-12): a
+    // generalisation across cards should never outvote a card's own record.
+    // Shares CTX_D and the context vector, so no stored-shape migration.
+    function tagsOf(name) {
+        const w = (typeof WEAPON_TAGS !== 'undefined' && WEAPON_TAGS[name]) || null;
+        const i = (typeof INGREDIENT_TAGS !== 'undefined' && INGREDIENT_TAGS[name]) || null;
+        return w || i || [];
+    }
+    function tagLearnBonus(name, x) {
+        const tags = tagsOf(name);
+        if (!tags.length || !learn.tagucb) return 0;
+        const lam = 1, alpha = 1.0;
+        let sum = 0, seen = 0;
+        for (const t of tags) {
+            const m = learn.tagucb[t];
+            if (!m || !Array.isArray(m.A) || !Array.isArray(m.b)) continue;
+            let est = 0, unc = 0;
+            for (let i = 0; i < CTX_D; i++) {
+                const Ai = (isFinite(m.A[i]) ? m.A[i] : 0) + lam;
+                est += ((isFinite(m.b[i]) ? m.b[i] : 0) / Ai) * x[i];
+                unc += (x[i] * x[i]) / Ai;
+            }
+            sum += est * 8 + alpha * Math.sqrt(unc) * 2;
+            seen++;
+        }
+        if (!seen) return 0;
+        // MEAN, not sum: a card with four tags must not outscore a card with
+        // one purely by carrying more labels. The table's granularity is an
+        // artefact of how it was written, not a property of the weapon.
+        const v = sum / seen;
+        return Math.max(-8, Math.min(8, Math.round(v * 10) / 10));
+    }
+    function creditTagUcb(reward) {
+        if (!learn.tagucb) learn.tagucb = {};
+        const total = Math.max(1, runPickCtx.length);
+        for (let i = 0; i < runPickCtx.length; i++) {
+            const { name, x } = runPickCtx[i];
+            const w = 1.5 - 0.5 * (i / total);
+            for (const t of tagsOf(name)) {
+                const m = learn.tagucb[t] || { n: 0, A: new Array(CTX_D).fill(0), b: new Array(CTX_D).fill(0) };
+                for (let j = 0; j < CTX_D; j++) {
+                    m.A[j] = (isFinite(m.A[j]) ? m.A[j] : 0) * 0.999 + w * x[j] * x[j];
+                    m.b[j] = (isFinite(m.b[j]) ? m.b[j] : 0) * 0.999 + w * reward * x[j];
+                }
+                m.n = (m.n || 0) + w;
+                learn.tagucb[t] = m;
+            }
+        }
+    }
     function creditLinUcb(reward) {
         const total = Math.max(1, runPickCtx.length);
         for (let i = 0; i < runPickCtx.length; i++) {
@@ -3808,6 +3978,13 @@
         if (bossP && tags.some(t => ['boss', 'sniper', 'homing', 'burst', 'tanky'].includes(t))) b += 8;
         if (bossP && tags.includes('knockback')) b += 5;
         if (lastDeathCause === 'contact' && tags.some(t => ['control', 'knockback', 'freeze', 'defense'].includes(t))) b += 6;
+        // v6.107.0 THE DEGREE OF CONTROL, against bosses (user: "gin and vodka
+        // tonic slow the bosses, not exactly freeze"). A full freeze STOPS a
+        // boss and a stopped boss deals no contact damage at all; a slow only
+        // buys kiting room. Ranked, not equal — and mutually exclusive so a
+        // card carrying both tags is paid once, at the higher rate.
+        if (bossP && tags.includes('freeze')) b += 7;
+        else if (bossP && tags.includes('slow')) b += 4;
         return b;
     }
 
@@ -4560,6 +4737,41 @@
             // a priority that outranks one. Capped at 200 total so every guard
             // in the scorer still dominates it.
             if (rank >= 0) add(200 - rank * 11, 'day-order' + (rank + 1));
+            // =========================================================
+            // v6.107.0 THE ARMOUR TIER IS TIME-GATED
+            // =========================================================
+            // User's stated phasing, verbatim: "(1) Mojito, gin tonic, vodka
+            // tonic, southside, ultimate, shaking up as the first picks for
+            // damage to survive the initial 5 minutes. (2) olives, sweet
+            // vermouth, sugar, negroni for armor in 5-10 minutes."
+            //
+            // The day order is STATIC — it reads the same at gt 0 as at gt
+            // 1199 — so phase 2 did not exist. Scored against a fresh build at
+            // 6.7 min the ranking came out ULTIMATE 785, STIRRING 531, OLIVE
+            // 373, SOUTH SIDE 359: the armour anchor was the third pick of the
+            // run and ahead of every cocktail, from second one.
+            //
+            // This is a SUPPRESSION with an expiry, not a reordering: before
+            // `armorTierFromS` the armour ingredients give up part of their
+            // rank bonus, and after it they get all of it back. Deliberately
+            // NOT a veto — a pool that offers nothing else must still be
+            // takeable, which is why it subtracts a bounded amount instead of
+            // refusing the card.
+            // 6.105.0's entry-armour checkpoint (+18 from 750s, +40 from
+            // 1050s) is untouched and lands long after this expires, so
+            // armour is still capped before the 1200s entrance.
+            // (no `!hellDetected` here: the enclosing `dayBuild` guard is
+            // already `!hellDetected && gtOrd < 1200`. Writing it again read
+            // as a second safeguard and was dead code — teeth-verified by
+            // deleting it and watching nothing fail. The hell exemption is
+            // real, it just lives one block up, and `armor-tier` guards it
+            // there as an invariant.)
+            const armorFrom = CONFIG.movement.armorTierFromS;
+            if (rank >= 0 && armorFrom != null && gtOrd < armorFrom &&
+                ARMOR_TIER.has(name)) {
+                add(-(CONFIG.movement.armorTierHold != null ? CONFIG.movement.armorTierHold : 60),
+                    'armor-tier-hold');
+            }
             // v6.88.6 SLOT LOCKOUT (user): "the choices become limited towards
             // building a rainbow gun as the game was designed that way ...
             // allowing the bot to fill the cocktail space earlier in the run
@@ -5087,7 +5299,13 @@
         // dragging picks toward off-plan measured favorites. Once an item has
         // real data (n>=3), the ucb term is halved to a tiebreaker.
         add(ucbScore(name) * (((learn.items[name] || {}).n || 0) >= 3 ? 0.5 : 1), 'ucb');
-        add(ctxLearnBonus(name, pickContext()), 'ctx-learn');   // contextual bandit layer (LinUCB)
+        {
+            // v6.107.0: both learned layers read ONE context vector. Building
+            // it twice would be two different game states in the same pick.
+            const xCtx = pickContext();
+            add(ctxLearnBonus(name, xCtx), 'ctx-learn');   // contextual bandit layer (LinUCB), per card name
+            add(tagLearnBonus(name, xCtx), 'tag-learn');   // the same layer generalised over ATTACK TYPE
+        }
 
         // PLAN-FIRST DISCIPLINE (user): off-plan, un-owned cards yield to
         // live in-plan options in the same pool — a good measured mean
@@ -5594,6 +5812,7 @@
         hellUnbanApplied = false;
         if (hellDetected) applyHellUnban();
         killRate = 0; lastKillCount = null; lastKillAt = 0;
+        dropAnchorTicks = 0; dropAnchorLastGt = 0;   // v6.107.0: anchor telemetry is per-run
         pressureAvg = 0; toughnessAvg = 1; dpsDeficit = 0; passoutAvg = 0;
         supersThisRun = 0; craftsThisRun = 0; rainbowThisRun = false; dayClearedThisRun = false;
         rainbowAt = 0;
@@ -5691,6 +5910,7 @@
         const base = baseline();
         creditItems(reward);
         creditLinUcb(reward);
+        creditTagUcb(reward);   // v6.107.0: the same run also teaches the attack-type layer
         if (primaryCocktail) {
             const b = learn.builds[primaryCocktail] || { n: 0, sum: 0 };
             b.n = b.n * CONFIG.learning.decay + 1;
@@ -5739,16 +5959,25 @@
             const totalHit = Object.values(hitTypeRun).reduce((a, b) => a + b, 0);
             if (totalHit > 0) {
                 const mul = learn.enemyTypeMul || (learn.enemyTypeMul = {});
+                const cnt = learn.enemyTypeN || (learn.enemyTypeN = {});
                 for (const k of Object.keys(hitTypeRun)) {
                     const share = hitTypeRun[k] / totalHit;
-                    const target = 1 + 3 * share;
+                    // v6.107.0: TARGET NARROWED 1+3*share -> 1+1.2*share.
+                    // The old target let a type that took most of one run's
+                    // contact damage aim at 4.0 and sit against the 2.2 clamp
+                    // permanently; a clamp that is the resting state is not a
+                    // clamp. 1.2 puts a type that took ALL of a run's contact
+                    // damage at 2.2 as its ASYMPTOTE, so the cap is reached
+                    // only by a type that does it run after run.
+                    const target = 1 + 1.2 * share;
                     mul[k] = Math.max(0.6, Math.min(2.2, 0.85 * (mul[k] || 1) + 0.15 * target));
+                    cnt[k] = (cnt[k] || 0) + (hitTypeN[k] || 0);
                 }
                 for (const k of Object.keys(learn.enemyTypeMul)) {
                     if (!(k in hitTypeRun)) learn.enemyTypeMul[k] = 0.9 * learn.enemyTypeMul[k] + 0.1;
                 }
             }
-            hitTypeRun = {};
+            hitTypeRun = {}; hitTypeN = {};
         } catch (e) { }
         // v6.85.13: persist the damage audit so a page reload does not lose it.
         // Written once per run, not per damage event — this is on the run-end
@@ -6526,6 +6755,34 @@
         return ENEMY_PROFILE[t] || ENEMY_PROFILE._default;
     }
 
+    // v6.107.0 — THE LEARNED PER-TYPE THREAT MULTIPLIER, RE-APPLIED.
+    // Withdrawn in 6.85.23 after the worst regression of the project. Three
+    // things had to change before it could come back, and all three have:
+    //   1. ATTRIBUTION. Only sole-candidate contact events now feed it (see
+    //      05-movement's damage classifier). Nearest-type guessing is what
+    //      ratcheted every common mob to the cap.
+    //   2. TARGET. 1+3*share -> 1+1.2*share at the write site, so the 2.2
+    //      store clamp is an asymptote rather than the resting state.
+    //   3. AUTHORITY. The APPLIED band is 0.8-1.4, far tighter than the 0.6-2.2
+    //      the store may hold, and nothing applies below `enemyMulMinN` sole
+    //      events for that type. The failure mode was the bot fearing drunks
+    //      at 2.2x and refusing to farm; at 1.4 max that outcome is not
+    //      reachable even if the attribution is wrong again.
+    // CONFIG.learning.enemyMulApply = false turns it off as one live dial.
+    function typeMul(t) {
+        try {
+            const L = CONFIG.learning || {};
+            if (L.enemyMulApply === false) return 1;
+            const m = learn && learn.enemyTypeMul && learn.enemyTypeMul[t];
+            if (!isFinite(m)) return 1;
+            const n = (learn.enemyTypeN && learn.enemyTypeN[t]) || 0;
+            if (n < (L.enemyMulMinN != null ? L.enemyMulMinN : 8)) return 1;
+            const lo = L.enemyMulFloor != null ? L.enemyMulFloor : 0.8;
+            const hi = L.enemyMulCeil != null ? L.enemyMulCeil : 1.4;
+            return Math.max(lo, Math.min(hi, m));
+        } catch (e) { return 1; }
+    }
+
     function gatherThreats(p) {
         const out = {
             enemies: [], projectiles: [], marks: [], lines: [], near: 0, boss: false,
@@ -6798,7 +7055,10 @@
                     // farming. Attribution keeps recording (instrument only,
                     // pineBot.enemyThreat()); applying it again requires
                     // sole-candidate attribution, not nearest-type.
-                    w: prof.weight * armorEase,
+                    // v6.107.0: that precondition is now MET — see typeMul()
+                    // at the top of this file for the three changes and the
+                    // 0.8-1.4 applied band that bounds the old failure.
+                    w: prof.weight * armorEase * typeMul(t),
                     wall: isWall, boss: t === 'boss', stationary: isStationary, chaserFast, freezeAura,
                     frozen, frozenLeft, distant: distantBoss, t: t0,
                     // v6.85.19: centre beyond the field bounds — most of the
@@ -7501,17 +7761,51 @@
                 if (cands.length === 1) bump(dmgAudit.sole, cands[0]);
             }
             // v6.85.22: nearest gathered enemy type within 140px carries
-            // the per-type attribution for the learned threat multiplier.
+            // the per-type attribution. TELEMETRY ONLY — see below.
             let nearT = null, nearTD = 140;
             for (const e2 of th.enemies) {
                 const dd2 = Math.hypot(e2.x - p.x, e2.y - p.y);
                 if (dd2 < nearTD) { nearTD = dd2; nearT = e2.t || (e2.boss ? 'boss' : 'mob'); }
             }
             if (nearT) {
-                hitTypeRun[nearT] = (hitTypeRun[nearT] || 0) + loss;
                 const bt = dmgAudit.byType || (dmgAudit.byType = {});
                 const b2 = bt[nearT] || (bt[nearT] = { n: 0, hp: 0 });
                 b2.n++; b2.hp += loss;
+            }
+            // =========================================================
+            // v6.107.0 SOLE-CANDIDATE ATTRIBUTION
+            // =========================================================
+            // 6.85.23 withdrew the learned per-type threat multiplier after
+            // the worst regression of the project (n=273, median 843, supers
+            // 0.1, z=-3.1) and left the precondition for ever applying it
+            // again IN WRITING at the application site: "applying it again
+            // requires sole-candidate attribution, not nearest-type."
+            //
+            // This is that. `nearT` above books EVERY damage event to
+            // whatever body happened to be within 140px — so mark, proj, DoT
+            // and line damage all landed on the commonest mob type, which is
+            // exactly how the common types ratcheted to the 2.2 cap in ~10
+            // runs and the bot ended up fearing drunks at 2.2x and refusing
+            // to farm. `nearT` keeps feeding dmgAudit.byType, because as RAW
+            // TELEMETRY it was never the problem.
+            //
+            // The LEARNER now only gets events where contact was the ONLY
+            // hazard class in range (`cands.length === 1`), so the damage
+            // provably came from touching a body — and it is attributed to
+            // the body actually inside contact reach, not the nearest one on
+            // screen. Everything ambiguous is dropped rather than guessed.
+            // Sample counts ride alongside so the application site can refuse
+            // to act on a type it has barely seen.
+            if (cands.length === 1 && cands[0] === 'contact') {
+                let soleT = null, soleGap = contactReach;
+                for (const e2 of th.enemies) {
+                    const gap = Math.hypot(e2.x - p.x, e2.y - p.y) - e2.r;
+                    if (gap < soleGap) { soleGap = gap; soleT = e2.t || (e2.boss ? 'boss' : 'mob'); }
+                }
+                if (soleT) {
+                    hitTypeRun[soleT] = (hitTypeRun[soleT] || 0) + loss;
+                    hitTypeN[soleT] = (hitTypeN[soleT] || 0) + 1;
+                }
             }
             dmgAudit.ev.push({
                 gt: Math.round(typeof G.gameTime === 'number' ? G.gameTime : 0),
@@ -8567,6 +8861,61 @@
                                        // exits the stance and restores the sweep.
         }
 
+        // =================================================================
+        // v6.107.0 THE DROP ANCHOR (user)
+        // =================================================================
+        // "maintain some sort of anchor even if there's danger, because if
+        //  you kill a rushing mob with powerful weapons, you can pick up
+        //  lucky items like time pause, flame cross, or tequila shots."
+        //
+        // This was structurally absent, and the absence was self-concealing.
+        // `gatherLoot` values pickups that ALREADY EXIST on the floor. A pack
+        // that has not died yet has dropped nothing, so it registers as pure
+        // danger; the field pushes the bot off it; the pack never dies; the
+        // drops never spawn; and no evidence of the missed value is ever
+        // produced. The CEM could not learn its way out of that because there
+        // was no gradient to climb — nothing in the planner represented the
+        // loot a killable pack is ABOUT to become.
+        //
+        // The anchor is that representation: a pull toward the centre of a
+        // pack the bot can actually clear, competing against the danger field
+        // on the same terms as every other gain.
+        //
+        // DELIBERATELY A GAIN, NOT A DANGER DISCOUNT. Suppressing fear while
+        // "anchored" would also suppress mark, line and projectile fear —
+        // the three things that actually end runs — and this project has a
+        // long file of regressions from exactly that kind of blanket
+        // multiplier (6.85.22's enemy-type ratchet being the worst). Holding
+        // ground through danger emerges when anchorValue is high enough to
+        // outbid the fear, and the CEM decides how high that is. The box
+        // opens at ZERO on purpose: if the idea does not pay, the search can
+        // switch it off entirely and say so.
+        //
+        // FEASIBILITY IS THE WHOLE GATE. "Killable" is measured, not assumed:
+        // the pack must be clearable inside anchorTtkS at the kill rate this
+        // run is actually achieving. A bot with no weapons standing in a
+        // crowd is how runs end, so with killRate at 0 the anchor never arms.
+        let anchorOn = false, anchorX = 0, anchorY = 0, anchorN = 0, anchorTtk = null;
+        if (!hpPanic && !th.rival && !wallFocus && (M.anchorValue || 0) > 0 &&
+            hpRatio > (M.anchorMinHp != null ? M.anchorMinHp : 0.55)) {
+            let sx = 0, sy = 0, n = 0;
+            for (const e of th.enemies) {
+                if (e.wall || e.boss || e.dormant || e.distant) continue;
+                if (Math.hypot(e.x - p.x, e.y - p.y) > (M.anchorRange != null ? M.anchorRange : 190)) continue;
+                sx += e.x; sy += e.y; n++;
+            }
+            // killRate is kills/second (rolling), so pack size over kill rate
+            // is seconds-to-clear in the units the tracker actually produces.
+            if (n >= (M.anchorMinPack != null ? M.anchorMinPack : 3) && killRate > 0.05) {
+                const ttk = n / killRate;
+                if (ttk <= (M.anchorTtkS != null ? M.anchorTtkS : 5)) {
+                    anchorOn = true; anchorX = sx / n; anchorY = sy / n;
+                    anchorN = n; anchorTtk = ttk;
+                }
+            }
+        }
+        if (anchorOn) { dropAnchorTicks++; dropAnchorLastGt = typeof G.gameTime === 'number' ? G.gameTime : 0; }
+
         let best = null;
         const N = M.samples;
         for (let i = 0; i <= N; i++) {
@@ -8741,6 +9090,15 @@
                 gain += pull * it.v * (d0 - d1) / Math.max(30, d0);
             }
 
+            // v6.107.0 THE DROP ANCHOR — see the arming block above. Same
+            // gradient shape as the loot pull, because it IS a loot pull: the
+            // difference is only that this loot has not been dropped yet.
+            if (anchorOn) {
+                const a0 = Math.hypot(p.x - anchorX, p.y - anchorY);
+                const a1 = Math.hypot(nx - anchorX, ny - anchorY);
+                gain += M.anchorValue * (a0 - a1) / Math.max(40, a0);
+            }
+
             // Siege the NO BOOKING walls: they never chase, they block the
             // map, and killing them pays gold + XP. Hold a firing ring just
             // outside their contact zone so weapons melt them — the hard
@@ -8828,6 +9186,32 @@
                                     : Math.max(e.r + 55, Math.min(e.reach + 10, 150)))
                                 : Math.max(e.reach + 60, 240))
                             : Math.max(e.reach + 10, e.r + 40));
+                    // ---------------------------------------------------------
+                    // v6.107.0 THE RING IS NOW SEARCHABLE.
+                    // ---------------------------------------------------------
+                    // Until now the CEM could tune how much the bot WANTS to
+                    // engage a boss (movement.bossEngageValue, 10-36) but never
+                    // WHERE IT STANDS while doing it — the distance was this
+                    // hand-written expression and nothing else. Every number in
+                    // it was fitted by hand from demo measurements, and the
+                    // user's standing note applies with force here: this game is
+                    // AI-built, "has several bugs and misclassifications", and
+                    // "the truth is what's being observed in the game itself".
+                    // A hand-fitted constant is a hypothesis; a searchable
+                    // multiplier lets the runs falsify it.
+                    //
+                    // A MULTIPLIER, not a replacement: the phase structure
+                    // (day far out, early hell inside SOUTH SIDE's reach, giant
+                    // bosses proportional again, gun-era point-blank) is
+                    // measured knowledge and is preserved exactly. The search
+                    // only scales it, and the box is deliberately narrow
+                    // (0.8-1.25) because this distance is the difference
+                    // between landing the burn and eating a one-hit.
+                    // BOTH GUARDS STILL WIN: bossFloor is applied AFTER the
+                    // multiplier, so a low draw cannot walk inside the
+                    // per-character hard minimum, and the off-canvas collapse
+                    // below still overrides everything.
+                    ring *= (M.bossRingMul != null ? M.bossRingMul : 1);
                     if (bossFloor && ring < bossFloor) ring = bossFloor;
                     // v6.85.19 (user: "the bot is still not able to register
                     // the hit radius that's invisible ... outside the visible
@@ -8987,7 +9371,16 @@
                         // falls and contact do not. Tight day rings were the
                         // 7-12 minute contact deaths.
                         : (phR === 'early' ? 118 : phR === 'mid' ? 112 : 105);
-                    let ring = po.r + ((hellDetected || gtRing > 1200) ? hellRing * slowPad
+                    // v6.107.0: the FARMING ring joins the boss ring in the
+                    // search box. Same reasoning (see bossRingMul above): the
+                    // 115+ramp hell curve and the 118/112/105 day curve are
+                    // hand-fitted from demo measurements of an AI-built game,
+                    // so they are hypotheses worth letting the runs test.
+                    // The multiplier scales the STANDOFF only — `po.r` is the
+                    // body's real radius and is added afterwards, so no draw
+                    // can ever park the bot inside the hitbox it is farming.
+                    const poMul = M.poRingMul != null ? M.poRingMul : 1;
+                    let ring = po.r + poMul * ((hellDetected || gtRing > 1200) ? hellRing * slowPad
                         : dayRing * slowPad);
                     const zone = po.r + 18;
                     // v6.85.9 (user): "pat also needs to use flame cross to kill
@@ -9677,6 +10070,9 @@
 
         return {
             dx: vx, dy: vy, cornerward, markHere, parkOn, parked,
+            // v6.107.0 drop anchor: exposed so a test can assert the ARMING
+            // conditions directly rather than inferring them from a vector.
+            dropAnchor: anchorOn, anchorN, anchorTtk,   // v6.107.0 (NOT `anchor` — that is the farm stance, set below)
             capDive,   // v6.96.0: the run is being ended on purpose
             capStage,  // v6.101.0: 0 none, 1 smother, 2 hurtPlayer, 3 hard book
             dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
@@ -10823,7 +11219,26 @@
                     pickAudit: () => pickAudit.slice(),
                     setParam: (k, v) => setParam(k, v),
                     setEnemyMul: obj => { learn.enemyTypeMul = obj; },
+                    setEnemyN: obj => { learn.enemyTypeN = obj; },
+                    // v6.107.0 drop-anchor / ring hooks
+                    setKillRate: v => { killRate = v; },
+                    tunable: () => TUNABLE,
+                    bossRing: () => bossRingRef.v,
+                    // v6.107.0 tag-bandit hooks
+                    tagsOf, enemyContextBonus,
+                    setTagUcb: obj => { learn.tagucb = obj; },
+                    getTagUcb: () => learn.tagucb || {},
+                    tagLearnBonusOf: n => tagLearnBonus(n, pickContext()),
+                    // credit a synthetic pick list, exactly as a finished run would
+                    creditTagPicks: (picks, reward) => {
+                        const save = runPickCtx;
+                        runPickCtx = picks.map(q => ({ name: q.name, x: pickContext() }));
+                        creditTagUcb(reward);
+                        runPickCtx = save;
+                    },
                     hitTypes: () => Object.assign({}, hitTypeRun),
+                    hitTypeCounts: () => Object.assign({}, hitTypeN),
+                    resetHitTypes: () => { hitTypeRun = {}; hitTypeN = {}; },
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     sigmasAtFloor, paramDist, hofRecord,
@@ -11147,12 +11562,76 @@
             // separately: the version table, the phase funnel, the raw
             // per-run phase rows, and the damage attribution. Console use:
             //   copy(JSON.stringify(pineBot.report()))
+            // v6.107.0 — THE LEARNING PROBE. Four new machines shipped in this
+            // version (the tag bandit, the re-applied enemy-type multiplier,
+            // the drop anchor, and two searchable ring multipliers) and none
+            // of them is legible from the four probes above. `learning` is
+            // where they report.
+            //
+            // Built to be FALSIFIABLE, on the user's standing note that this
+            // game is AI-built, "has several bugs and misclassifications", and
+            // "the truth is what's being observed in the game itself". Every
+            // block below is evidence ABOUT a hypothesis the code encodes:
+            //   tags   — WEAPON_TAGS is a guess derived from the recipe book.
+            //            A tag whose weight never separates from zero is a tag
+            //            that does not describe anything real. `n` is the
+            //            credited weight, so read weight WITH n, never alone.
+            //   enemy  — what has actually been hurting this bartender, by the
+            //            game's OWN type labels. If those labels are wrong the
+            //            table still holds, because it measures whatever the
+            //            game calls that thing, not what it ought to be.
+            //   params — where the CEM has walked the four new dimensions.
+            //            A mean pinned at a box edge means the box is wrong.
+            //   anchor — did the drop anchor arm at all this run. Firing rate
+            //            comes before any question about whether it pays.
+            window.pineBot.learning = () => {
+                const round = (v, d) => (typeof v === 'number' && isFinite(v)) ? +v.toFixed(d == null ? 2 : d) : null;
+                const tags = {};
+                try {
+                    const tu = learn.tagucb || {};
+                    for (const k of Object.keys(tu)) {
+                        const m = tu[k];
+                        if (!m || !Array.isArray(m.b)) continue;
+                        // feature 0 is the bias: the tag's context-free value.
+                        const A0 = (isFinite(m.A[0]) ? m.A[0] : 0) + 1;
+                        tags[k] = { n: round(m.n, 1), weight: round((isFinite(m.b[0]) ? m.b[0] : 0) / A0, 3),
+                                    boss: round(((isFinite(m.b[7]) ? m.b[7] : 0) / ((isFinite(m.A[7]) ? m.A[7] : 0) + 1)), 3),
+                                    hell: round(((isFinite(m.b[4]) ? m.b[4] : 0) / ((isFinite(m.A[4]) ? m.A[4] : 0) + 1)), 3) };
+                    }
+                } catch (e) { }
+                const enemy = {};
+                try {
+                    const mm = learn.enemyTypeMul || {}, nn = learn.enemyTypeN || {};
+                    const minN = CONFIG.learning.enemyMulMinN;
+                    for (const k of new Set([].concat(Object.keys(mm), Object.keys(nn)))) {
+                        enemy[k] = { mul: round(mm[k], 3), soleHits: nn[k] || 0,
+                                     applied: (nn[k] || 0) >= minN ? round(typeMul(k), 3) : 1 };
+                    }
+                } catch (e) { }
+                const params = {};
+                try {
+                    for (const k of ['movement.bossRingMul', 'movement.poRingMul',
+                                     'movement.anchorValue', 'movement.anchorTtkS']) {
+                        params[k] = { live: round(getParam(k), 3), mean: round(learn.cem.mean[k], 3),
+                                      sigma: round(learn.cem.sigma[k], 3),
+                                      box: [TUNABLE[k].min, TUNABLE[k].max] };
+                    }
+                } catch (e) { }
+                return {
+                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: a mean pinned at a box edge means the box is wrong.',
+                    gen: safe(() => learn.cem.gen, null),
+                    runs: safe(() => learn.runs, null),
+                    tags, enemy, params,
+                    anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
+                };
+            };
             window.pineBot.report = () => ({
-                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution.',
+                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution, learning = the v6.107.0 learned layers (tags, enemy types, new CEM dims, drop anchor).',
                 compare: versionComparison(),
                 funnel: window.pineBot.phaseAudit(),
                 phases: (phaseAudit.rows || []).slice(),
-                damage: window.pineBot.damageAudit()
+                damage: window.pineBot.damageAudit(),
+                learning: window.pineBot.learning()
             });
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };

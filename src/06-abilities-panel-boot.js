@@ -1087,7 +1087,26 @@
                     pickAudit: () => pickAudit.slice(),
                     setParam: (k, v) => setParam(k, v),
                     setEnemyMul: obj => { learn.enemyTypeMul = obj; },
+                    setEnemyN: obj => { learn.enemyTypeN = obj; },
+                    // v6.107.0 drop-anchor / ring hooks
+                    setKillRate: v => { killRate = v; },
+                    tunable: () => TUNABLE,
+                    bossRing: () => bossRingRef.v,
+                    // v6.107.0 tag-bandit hooks
+                    tagsOf, enemyContextBonus,
+                    setTagUcb: obj => { learn.tagucb = obj; },
+                    getTagUcb: () => learn.tagucb || {},
+                    tagLearnBonusOf: n => tagLearnBonus(n, pickContext()),
+                    // credit a synthetic pick list, exactly as a finished run would
+                    creditTagPicks: (picks, reward) => {
+                        const save = runPickCtx;
+                        runPickCtx = picks.map(q => ({ name: q.name, x: pickContext() }));
+                        creditTagUcb(reward);
+                        runPickCtx = save;
+                    },
                     hitTypes: () => Object.assign({}, hitTypeRun),
+                    hitTypeCounts: () => Object.assign({}, hitTypeN),
+                    resetHitTypes: () => { hitTypeRun = {}; hitTypeN = {}; },
                     bossHitSamples: () => bossHitD.slice(),
                     applyDefaults: () => applyParams(DEFAULT_PARAMS),
                     sigmasAtFloor, paramDist, hofRecord,
@@ -1411,12 +1430,76 @@
             // separately: the version table, the phase funnel, the raw
             // per-run phase rows, and the damage attribution. Console use:
             //   copy(JSON.stringify(pineBot.report()))
+            // v6.107.0 — THE LEARNING PROBE. Four new machines shipped in this
+            // version (the tag bandit, the re-applied enemy-type multiplier,
+            // the drop anchor, and two searchable ring multipliers) and none
+            // of them is legible from the four probes above. `learning` is
+            // where they report.
+            //
+            // Built to be FALSIFIABLE, on the user's standing note that this
+            // game is AI-built, "has several bugs and misclassifications", and
+            // "the truth is what's being observed in the game itself". Every
+            // block below is evidence ABOUT a hypothesis the code encodes:
+            //   tags   — WEAPON_TAGS is a guess derived from the recipe book.
+            //            A tag whose weight never separates from zero is a tag
+            //            that does not describe anything real. `n` is the
+            //            credited weight, so read weight WITH n, never alone.
+            //   enemy  — what has actually been hurting this bartender, by the
+            //            game's OWN type labels. If those labels are wrong the
+            //            table still holds, because it measures whatever the
+            //            game calls that thing, not what it ought to be.
+            //   params — where the CEM has walked the four new dimensions.
+            //            A mean pinned at a box edge means the box is wrong.
+            //   anchor — did the drop anchor arm at all this run. Firing rate
+            //            comes before any question about whether it pays.
+            window.pineBot.learning = () => {
+                const round = (v, d) => (typeof v === 'number' && isFinite(v)) ? +v.toFixed(d == null ? 2 : d) : null;
+                const tags = {};
+                try {
+                    const tu = learn.tagucb || {};
+                    for (const k of Object.keys(tu)) {
+                        const m = tu[k];
+                        if (!m || !Array.isArray(m.b)) continue;
+                        // feature 0 is the bias: the tag's context-free value.
+                        const A0 = (isFinite(m.A[0]) ? m.A[0] : 0) + 1;
+                        tags[k] = { n: round(m.n, 1), weight: round((isFinite(m.b[0]) ? m.b[0] : 0) / A0, 3),
+                                    boss: round(((isFinite(m.b[7]) ? m.b[7] : 0) / ((isFinite(m.A[7]) ? m.A[7] : 0) + 1)), 3),
+                                    hell: round(((isFinite(m.b[4]) ? m.b[4] : 0) / ((isFinite(m.A[4]) ? m.A[4] : 0) + 1)), 3) };
+                    }
+                } catch (e) { }
+                const enemy = {};
+                try {
+                    const mm = learn.enemyTypeMul || {}, nn = learn.enemyTypeN || {};
+                    const minN = CONFIG.learning.enemyMulMinN;
+                    for (const k of new Set([].concat(Object.keys(mm), Object.keys(nn)))) {
+                        enemy[k] = { mul: round(mm[k], 3), soleHits: nn[k] || 0,
+                                     applied: (nn[k] || 0) >= minN ? round(typeMul(k), 3) : 1 };
+                    }
+                } catch (e) { }
+                const params = {};
+                try {
+                    for (const k of ['movement.bossRingMul', 'movement.poRingMul',
+                                     'movement.anchorValue', 'movement.anchorTtkS']) {
+                        params[k] = { live: round(getParam(k), 3), mean: round(learn.cem.mean[k], 3),
+                                      sigma: round(learn.cem.sigma[k], 3),
+                                      box: [TUNABLE[k].min, TUNABLE[k].max] };
+                    }
+                } catch (e) { }
+                return {
+                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: a mean pinned at a box edge means the box is wrong.',
+                    gen: safe(() => learn.cem.gen, null),
+                    runs: safe(() => learn.runs, null),
+                    tags, enemy, params,
+                    anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
+                };
+            };
             window.pineBot.report = () => ({
-                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution.',
+                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution, learning = the v6.107.0 learned layers (tags, enemy types, new CEM dims, drop anchor).',
                 compare: versionComparison(),
                 funnel: window.pineBot.phaseAudit(),
                 phases: (phaseAudit.rows || []).slice(),
-                damage: window.pineBot.damageAudit()
+                damage: window.pineBot.damageAudit(),
+                learning: window.pineBot.learning()
             });
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
