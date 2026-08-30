@@ -586,6 +586,20 @@
             // 1050 leaves the last 2.5 minutes for arriving armored; the
             // funding rush keeps the 17.5 minutes that produced the 0.15.
             entryPrepFromS: 1050,
+            // v6.105.0 THE ENTRANT IS ONE OLIVE LEVEL SHORT — measured four
+            // times over. medianEntryDef reads 29.2 on 6.100.0, 6.101.0 AND
+            // 6.102.0 (n=110). 29.16 is EXACTLY OLIVE 5; the ceiling is
+            // OLIVE 6 = 34.992, and parkAudit's seat-reaching group entered
+            // AT that ceiling while the never-parked group sat at 29.2. The
+            // whole difference between a run that seats and one that dies in
+            // the entry surge is a single armour level.
+            // The 6.99.2 checkpoint was not wrong, it was too LATE: it opens
+            // at entryPrepFromS (1050) and hell latches at 1200, so it gets
+            // ~150 s — often not even one level-up — to buy that level. This
+            // is a PICK WEIGHT, not a movement gate, so opening it earlier
+            // costs no farming tempo; that distinction is exactly what the
+            // 6.99.2 entryPrepFromS collapse (dayClear 0.15 -> 0.02) taught.
+            entryArmorFromS: 750,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -914,7 +928,17 @@
             // sustained-contact death at ~36 s, so if the smother is ever
             // going to work it works inside that window, and anything longer
             // is pure wasted farm time plus a fake death cause on the row.
-            capStandS: 45,         // stage 1 budget: stand in contact this long before escalating
+            // v6.105.0: EIGHT of eight cap-outs across two versions and two
+            // budgets have now died at exactly the rung-2 boundary — 150 s
+            // six times on 6.102.0, then 45 s twice on 6.104.0 (3141->3186,
+            // 3963->4007) with the body-aiming smother in place. Rung 1 has
+            // never killed anything in any configuration. Likely mechanism:
+            // a maxed build kills whatever body it stands on inside a second,
+            // so "nearest body" is a target it never actually rests against.
+            // Kept as a token window rather than removed — a natural death
+            // still books an honest cause when one happens — but it stops
+            // costing the farm a minute per cap on a bet that keeps losing.
+            capStandS: 15,         // stage 1 budget: stand in contact this long before escalating
             capForceS: 120,        // stage 2 budget: past this, book the run and force a restart
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor

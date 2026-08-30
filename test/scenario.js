@@ -1225,7 +1225,7 @@ if (which === 'tank-holdout') {
     // v6.99.2: the late sample wears the park-gate armor (30) so the
     // entry-armor checkpoint stands down — this test measures the tank
     // premium's DECAY, not the (separately tested) entry checkpoint.
-    global.player = Object.assign({}, global.player, { defense: 32 });
+    global.player = Object.assign({}, global.player, { defense: 6 * 5.832 });
     global.gameTime = 60; const early = oliveAt();
     global.gameTime = 1150; const late = oliveAt();
     test('a tank pays an early premium for the armour lines', () =>
@@ -4571,9 +4571,33 @@ if (which === 'entry-seat') {
     const oWhy = () => pineBot.test.scoreCard({ n: 'OLIVE', type: 'passive', lv: 2, maxlv: 6 }, 0, []).why || '';
     test('entry prep with armor behind: OLIVE carries entry-armor', () =>
         assert.ok(/entry-armor/.test(oWhy()), oWhy()));
+    // v6.105.0 THE BAR IS THE CEILING, NOT THE PARK GATE. `< 30` only ever
+    // worked by coincidence — OLIVE 5 is 29.16 (under) and OLIVE 6 is 34.992
+    // (over) — so it read as "not at cap" purely because those are the two
+    // rungs that exist. Four funnels running medianEntryDef 29.2 say the
+    // entrant is stuck one level short, so the bar is stated as the ceiling
+    // and only a build AT it stands the checkpoint down.
     global.player.defense = 32;
-    test('...and past the park gate (30) the checkpoint stands down', () =>
+    test('...at 32 — past the old park gate but still short of the cap — it KEEPS pushing', () =>
+        assert.ok(/entry-armor/.test(oWhy()), oWhy()));
+    global.player.defense = 6 * 5.832;   // 34.992, the game's hard ceiling
+    test('...and only at the OLIVE-6 ceiling does the checkpoint stand down', () =>
         assert.ok(!/entry-armor/.test(oWhy()), oWhy()));
+    // THE EARLY TIER (the actual 6.105.0 fix): the hard checkpoint gets only
+    // ~150 s before hell latches at 1200, which is often not one level-up.
+    // A weaker nudge opens at entryArmorFromS so the armour line can finish
+    // in time. It is a pick weight, not a movement gate — the distinction
+    // the 6.99.2 entryPrepFromS collapse (dayClear 0.15 -> 0.02) established.
+    global.player.defense = 20;
+    global.gameTime = 800;                       // past entryArmorFromS 750, before 1050
+    test('the early tier nudges OLIVE well before the hard checkpoint', () =>
+        assert.ok(/entry-armor-early/.test(oWhy()), oWhy()));
+    global.gameTime = 700;                       // before entryArmorFromS
+    test('...and below entryArmorFromS neither tier fires', () =>
+        assert.ok(!/entry-armor/.test(oWhy()), oWhy()));
+    test('entryArmorFromS ships at 750', () =>
+        assert.strictEqual(pineBot.config.movement.entryArmorFromS, 750));
+    global.gameTime = 1080;
 
     // A mark on the seat releases it — the corner doctrine, unchanged.
     global.dropMarks = [{ x: 20, y: 20, r: 58, dmg: 72, tele: 0.6, at: 1155 }];
@@ -4906,8 +4930,8 @@ if (which === 'run-cap') {
         //    reason a single window could sit on one run for four hours.
         const STAND = pineBot.config.deepHell.capStandS;
         const FORCE = pineBot.config.deepHell.capForceS;
-        test('the ladder ships capStandS 45 / capForceS 120', () =>
-            assert.ok(STAND === 45 && FORCE === 120, 'stand ' + STAND + ' force ' + FORCE));
+        test('the ladder ships capStandS 15 / capForceS 120', () =>
+            assert.ok(STAND === 15 && FORCE === 120, 'stand ' + STAND + ' force ' + FORCE));
         const ladder = (gt) => {
             global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
             global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];

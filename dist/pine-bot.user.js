@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.104.0
+// @version      6.105.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.104.0';
+    const SCRIPT_VERSION = '6.105.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -588,6 +588,20 @@
             // 1050 leaves the last 2.5 minutes for arriving armored; the
             // funding rush keeps the 17.5 minutes that produced the 0.15.
             entryPrepFromS: 1050,
+            // v6.105.0 THE ENTRANT IS ONE OLIVE LEVEL SHORT — measured four
+            // times over. medianEntryDef reads 29.2 on 6.100.0, 6.101.0 AND
+            // 6.102.0 (n=110). 29.16 is EXACTLY OLIVE 5; the ceiling is
+            // OLIVE 6 = 34.992, and parkAudit's seat-reaching group entered
+            // AT that ceiling while the never-parked group sat at 29.2. The
+            // whole difference between a run that seats and one that dies in
+            // the entry surge is a single armour level.
+            // The 6.99.2 checkpoint was not wrong, it was too LATE: it opens
+            // at entryPrepFromS (1050) and hell latches at 1200, so it gets
+            // ~150 s — often not even one level-up — to buy that level. This
+            // is a PICK WEIGHT, not a movement gate, so opening it earlier
+            // costs no farming tempo; that distinction is exactly what the
+            // 6.99.2 entryPrepFromS collapse (dayClear 0.15 -> 0.02) taught.
+            entryArmorFromS: 750,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -916,7 +930,17 @@
             // sustained-contact death at ~36 s, so if the smother is ever
             // going to work it works inside that window, and anything longer
             // is pure wasted farm time plus a fake death cause on the row.
-            capStandS: 45,         // stage 1 budget: stand in contact this long before escalating
+            // v6.105.0: EIGHT of eight cap-outs across two versions and two
+            // budgets have now died at exactly the rung-2 boundary — 150 s
+            // six times on 6.102.0, then 45 s twice on 6.104.0 (3141->3186,
+            // 3963->4007) with the body-aiming smother in place. Rung 1 has
+            // never killed anything in any configuration. Likely mechanism:
+            // a maxed build kills whatever body it stands on inside a second,
+            // so "nearest body" is a target it never actually rests against.
+            // Kept as a token window rather than removed — a natural death
+            // still books an honest cause when one happens — but it stops
+            // costing the farm a minute per cap on a bet that keeps losing.
+            capStandS: 15,         // stage 1 budget: stand in contact this long before escalating
             capForceS: 120,        // stage 2 budget: past this, book the run and force a restart
             // v6.99.3 EARLY CAP — the stability proof. From fromS on, if for
             // holdS consecutive game-seconds hp never dips under hpFloor
@@ -4640,9 +4664,18 @@
             // 35). The fund rush buys tempo; from entryPrepFromS this
             // converts late-day picks back into the armor the seat needs.
             // 30 is the park gate the never-parked group sat just under.
-            if (!atCap && name === 'OLIVE' && !hellDetected &&
-                gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 900) &&
-                (liveDefense() || 0) < 30) add(40, 'entry-armor');
+            // v6.105.0 TWO TIERS, and the bar is now the CEILING not the
+            // park gate. `< 30` worked only by coincidence (OLIVE 5 = 29.16
+            // is under it, OLIVE 6 = 34.992 is over), which breaks the moment
+            // any other armour source exists; 34.9 says what is meant. The
+            // early tier is the real fix — see movement.entryArmorFromS.
+            if (!atCap && name === 'OLIVE' && !hellDetected && (liveDefense() || 0) < 34.9) {
+                if (gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 1050)) {
+                    add(40, 'entry-armor');
+                } else if (gtR >= (CONFIG.movement.entryArmorFromS != null ? CONFIG.movement.entryArmorFromS : 750)) {
+                    add(18, 'entry-armor-early');
+                }
+            }
         }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat

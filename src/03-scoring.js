@@ -999,9 +999,18 @@
             // 35). The fund rush buys tempo; from entryPrepFromS this
             // converts late-day picks back into the armor the seat needs.
             // 30 is the park gate the never-parked group sat just under.
-            if (!atCap && name === 'OLIVE' && !hellDetected &&
-                gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 900) &&
-                (liveDefense() || 0) < 30) add(40, 'entry-armor');
+            // v6.105.0 TWO TIERS, and the bar is now the CEILING not the
+            // park gate. `< 30` worked only by coincidence (OLIVE 5 = 29.16
+            // is under it, OLIVE 6 = 34.992 is over), which breaks the moment
+            // any other armour source exists; 34.9 says what is meant. The
+            // early tier is the real fix — see movement.entryArmorFromS.
+            if (!atCap && name === 'OLIVE' && !hellDetected && (liveDefense() || 0) < 34.9) {
+                if (gtR >= (CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 1050)) {
+                    add(40, 'entry-armor');
+                } else if (gtR >= (CONFIG.movement.entryArmorFromS != null ? CONFIG.movement.entryArmorFromS : 750)) {
+                    add(18, 'entry-armor-early');
+                }
+            }
         }
         // v6.95.1 (joe doctrine): joe has NO innate regen — NEGRONI's
         // regenerating shield is his regen substitute, and in the 6.94.1 pat
