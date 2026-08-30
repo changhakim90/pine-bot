@@ -1471,7 +1471,11 @@ if (which === 'demo-digest') {
             poHp: poD == null ? null : (gt < 130 ? 6000 : 0), poN: poD == null ? 0 : 2,
             bossD: null, wallD: null, near: gt > 80 ? 4 : 1, marks: 0, fbD: null, frz: 0,
             slow: 1, mobHp: 300, fx: 0, ulv: gt < 120 ? 1 : 2, ur: 1,
-            sup: gt < 95 ? 0 : 1, ol: gt < 40 ? 0 : 4, ng: gt < 80 ? 0 : 2 });
+            sup: gt < 95 ? 0 : 1, ol: gt < 40 ? 0 : 4, ng: gt < 80 ? 0 : 2,
+            // v6.109.0: the immortal-build fields. The user records to the
+            // moment of corner anchoring and stops, so the tail is the answer.
+            def: gt < 40 ? 5.8 : 34.9, rgn: gt < 80 ? 0 : 2.22, cnr: gt < 150 ? 280 : 40, inv: gt < 150 ? 0 : 1,
+            w: { negroni: gt < 80 ? 0 : 6 }, pas: { olive: gt < 40 ? 0 : 6 } });
     }
     E.push({ t: 0, e: 'pick', gt: 35, a: [0, ['OLIVE', 'MINT', 'SUGAR']] });
     E.push({ t: 0, e: 'ult', gt: 118 });
@@ -1522,6 +1526,56 @@ if (which === 'demo-digest') {
         try { localStorage.removeItem('pineBotDemos'); } catch (e) { }
         assert.ok(pineBot.demo().error);
     });
+    // --- v6.109.0 THE FINAL STATE. A recording that STOPS at corner
+    // anchoring is answering one question — what is an immortal build made
+    // of, and when did it arrive — and every other field in the digest is a
+    // distribution over the whole run, which cannot answer it.
+    const D = d;   // the digest already built from this scenario's recording
+    test('the digest reports a final-state block', () =>
+        assert.ok(D.final && typeof D.final === 'object', Object.keys(D).join(',')));
+    test('...naming the build: def, regen, ult level, supers, weapons, passives', () => {
+        for (const k of ['gt', 'def', 'regen', 'ultLv', 'supers', 'weapons', 'passives'])
+            assert.ok(k in D.final, 'final is missing ' + k + ': ' + Object.keys(D.final).join(','));
+        assert.strictEqual(D.final.def, 34.9, 'def ' + D.final.def);
+        assert.strictEqual(D.final.regen, 2.22, 'regen ' + D.final.regen);
+    });
+    // The anchoring claim has to be CHECKED, not taken on trust: the tail is
+    // summarised separately so a recording stopped in the open reads
+    // differently from one stopped in a corner.
+    test('the tail measures the anchor rather than assuming it', () => {
+        assert.ok(D.final.tailCornerDist.median < 80,
+            'tail corner distance ' + D.final.tailCornerDist.median + ' — not anchored');
+        assert.strictEqual(D.final.tailInvulnShare, 1, 'tail invuln ' + D.final.tailInvulnShare);
+    });
+    // ...and full-run posture must NOT be confused with the tail: cornerDist
+    // over the whole run is 280 for most of it, which would read as "no
+    // corner camping" exactly as the joe demo doc reported.
+    // The recorder itself, driven directly. Everything above tests the
+    // DIGEST against samples handed to it; nothing tested that demoTick
+    // actually captures the immortal-build fields, and a teeth check proved
+    // it: deleting `def` from the sample left every assertion green.
+    test('demoTick captures the immortal-build fields it is meant to', () => {
+        global.player = { x: 40, y: 40, hp: 100, maxHp: 100, speed: 1.5, ultLevel: 5,
+                          defense: 34.992, regenBonus: 2.218,
+                          weapons: { negroni: 6 }, passives: { olive: 6 }, superLv: { a: 1, b: 1 } };
+        global.enemies = []; global.gameTime = 1500;
+        pineBot.test.startDemo();
+        pineBot.test.demoTick();
+        const smp = pineBot.test.demoSamples();
+        assert.ok(smp && smp.length, 'recorder captured nothing');
+        const L = smp[smp.length - 1];
+        assert.strictEqual(L.def, 35.0, 'def ' + L.def);
+        assert.strictEqual(L.rgn, 2.22, 'rgn ' + L.rgn);
+        assert.deepStrictEqual(L.w, { negroni: 6 }, JSON.stringify(L.w));
+        assert.deepStrictEqual(L.pas, { olive: 6 }, JSON.stringify(L.pas));
+        assert.strictEqual(L.ulv, 5);
+        pineBot.test.startDemo();   // stop
+    });
+
+    test('the whole-run posture stays separate from the tail', () =>
+        assert.ok(D.posture.cornerDist.median > D.final.tailCornerDist.median,
+            'run ' + D.posture.cornerDist.median + ' vs tail ' + D.final.tailCornerDist.median));
+
     done();
 }
 
@@ -2720,38 +2774,74 @@ if (which === 'latent-line') {
     // MANHATTAN scored 41 in a junk pool with its key still unbuilt, was taken,
     // levelled to 126 and evolved to "★ SUPER MANHATTAN UP(super)=338". The
     // plan MAXES SWEET VERMOUTH on its way to the BLACK VERMOUTH craft, so the
-    // line was latent from turn one. This must be refused with nothing owned.
-    const before = sc('MANHATTAN', 'weapon', 0);
-    test('MANHATTAN is refused from the FIRST pool, key unbuilt, nothing owned', () =>
-        assert.ok(before < -400, 'MANHATTAN ' + Math.round(before)));
-    test('...and it loses to the junk it beat in the live log (ANGOSTURA scored 8)', () =>
-        assert.ok(sc('ANGOSTURA', 'passive', 0) > before,
-            'ANGOSTURA ' + Math.round(sc('ANGOSTURA', 'passive', 0)) + ' vs MANHATTAN ' + Math.round(before)));
+    // line was latent from turn one.
+    //
+    // v6.110.0 — THE REFUSAL MOVED FROM LEVEL ZERO TO A LEVEL CEILING, and
+    // this block is rewritten around the stronger invariant. The user's own
+    // 79-minute joe recording took COSMOPOLITAN first, VODKA CRANBERRY four
+    // times to lv4, GIMLET and VODKA MARTINI — and ended with FOUR supers,
+    // never near the gun. Every one of those was refused at -600 by the lv0
+    // veto. 6.87.4 had already found the same thing from the other direction
+    // ("minguk's best recent runs are built on exactly those — DRY MARTINI,
+    // VODKA CRANBERRY, COSMOPOLITAN") and relaxed a sibling rule; 6.89.0 then
+    // re-refused them and the two rules disagreed unnoticed for 20 versions.
+    //
+    // What replaces it is STRICTLY STRONGER against the MANHATTAN course. A
+    // super needs the cocktail MAXED and its key maxed. The ceiling parks the
+    // cocktail below evolution range, so 114 -> 120 -> 126 -> evolve cannot
+    // happen at ANY super count and however the key moves — where the lv0
+    // veto only made the first step unattractive.
+    const early = sc('MANHATTAN', 'weapon', 0);
+    test('a latent cocktail is TAKEABLE at low level with supers far from the cap', () =>
+        assert.ok(early > 0, 'MANHATTAN lv0 ' + Math.round(early) + ' — the human took these'));
+    test('...but is refused at the evolution ceiling, which is what actually arms it', () => {
+        const ceil = pineBot.config.gunSafeOffPlanLv;
+        assert.ok(sc('MANHATTAN', 'weapon', ceil) < -400,
+            'MANHATTAN lv' + ceil + ' ' + Math.round(sc('MANHATTAN', 'weapon', ceil)));
+        assert.ok(/latent-line-ceiling/.test(why('MANHATTAN', 'weapon', ceil)),
+            why('MANHATTAN', 'weapon', ceil));
+    });
+    // THE INVARIANT THAT MATTERS: the line cannot COMPLETE. Every level from
+    // the ceiling up is refused, so the cocktail can never reach lv6.
+    test('every level from the ceiling to max is refused — the line cannot complete', () => {
+        for (let lv = pineBot.config.gunSafeOffPlanLv; lv <= 6; lv++)
+            assert.ok(sc('MANHATTAN', 'weapon', lv) < -400,
+                'MANHATTAN lv' + lv + ' ' + Math.round(sc('MANHATTAN', 'weapon', lv)));
+    });
     for (const c of ['VODKA MARTINI', 'WHISKEY HIGHBALL', 'DRY MARTINI', 'BLOODY MARY', 'ESPRESSO MARTINI'])
-        test('the other plan-keyed sixth line is refused too: ' + c, () =>
-            assert.ok(sc(c, 'weapon', 0) < -400, c + ' ' + Math.round(sc(c, 'weapon', 0))));
+        test('the ceiling holds for the other plan-keyed line: ' + c, () =>
+            assert.ok(sc(c, 'weapon', pineBot.config.gunSafeOffPlanLv) < -400,
+                c + ' ' + Math.round(sc(c, 'weapon', pineBot.config.gunSafeOffPlanLv))));
+
+    // ...and the OLD veto still governs at the dangerous end. Near the cap a
+    // latent cocktail is refused at EVERY level, exactly as before 6.110.0.
+    test('near the super cap the lv0 veto returns', () => {
+        // nSupers reads supersMade / player.superLv, NOT supersThisRun — a
+        // test hook that moved the wrong counter passed silently at first.
+        const saved = global.player.superLv;
+        global.player.superLv = { a: 1, b: 1, c: 1 };   // 3 of 4
+        assert.ok(sc('MANHATTAN', 'weapon', 0) < -400,
+            'MANHATTAN lv0 at 3 supers ' + Math.round(sc('MANHATTAN', 'weapon', 0)));
+        assert.ok(/latent-line/.test(why('MANHATTAN', 'weapon', 0)), why('MANHATTAN', 'weapon', 0));
+        global.player.superLv = saved;
+    });
 
     // PATH 1 — the key is simply maxed and still in the bar.
     T.setOwned({ 'SWEET VERMOUTH': 6 });
-    test('a MAXED SWEET VERMOUTH makes MANHATTAN a latent sixth line', () =>
-        assert.ok(sc('MANHATTAN', 'weapon', 0) < -400,
-            'MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', 0))));
-    test('and the refusal is tagged', () =>
-        assert.ok(/latent-line/.test(why('MANHATTAN', 'weapon', 0))));
+    test('a MAXED SWEET VERMOUTH still caps MANHATTAN at the ceiling', () =>
+        assert.ok(sc('MANHATTAN', 'weapon', pineBot.config.gunSafeOffPlanLv) < -400,
+            'MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', pineBot.config.gunSafeOffPlanLv))));
 
     // PATH 2 — THE REAL ONE. The craft has fused and eaten the half, so
     // ownedLevels no longer contains SWEET VERMOUTH at all. This is the case
     // every previous version got wrong.
     T.setOwned({ 'SWEET VERMOUTH': 0, 'BLACK VERMOUTH': 1 });
-    test('an ABSORBED SWEET VERMOUTH still arms the line', () =>
-        assert.ok(sc('MANHATTAN', 'weapon', 0) < -400,
-            'post-craft MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', 0))));
-    test('VODKA MARTINI — the other half of the same craft — is refused too', () =>
-        assert.ok(sc('VODKA MARTINI', 'weapon', 0) < -400,
-            'VODKA MARTINI ' + Math.round(sc('VODKA MARTINI', 'weapon', 0))));
-    test('and feeding one already owned is refused as well', () =>
-        assert.ok(sc('MANHATTAN', 'weapon', 3) < -200,
-            'MANHATTAN lv3 ' + Math.round(sc('MANHATTAN', 'weapon', 3))));
+    test('an ABSORBED SWEET VERMOUTH still arms the line, and the ceiling still holds', () =>
+        assert.ok(sc('MANHATTAN', 'weapon', pineBot.config.gunSafeOffPlanLv) < -400,
+            'post-craft MANHATTAN ' + Math.round(sc('MANHATTAN', 'weapon', pineBot.config.gunSafeOffPlanLv))));
+    test('VODKA MARTINI — the other half of the same craft — is capped too', () =>
+        assert.ok(sc('VODKA MARTINI', 'weapon', pineBot.config.gunSafeOffPlanLv) < -400,
+            'VODKA MARTINI ' + Math.round(sc('VODKA MARTINI', 'weapon', pineBot.config.gunSafeOffPlanLv))));
 
     // The veto must not spill onto the roster the plan is built from.
     test('plan cocktails are untouched by the latent-line veto', () =>
@@ -5607,11 +5697,107 @@ if (which === 'arming-cap') {
             'still bidding for a card it already owns');
         pineBot.test.setOwned({ 'MOSCOW MULE': 0 });
     });
-    // AND THE OTHER HALF OF THE EXCLUSION: VODKA CRANBERRY must stay refused,
-    // or the bot can spend the exclusive slot on the line it must never open.
-    test('VODKA CRANBERRY is refused outright — it would spend the exclusion badly', () => {
-        const v = pineBot.test.scoreCard({ n: 'VODKA CRANBERRY', type: 'weapon', lv: 0, maxlv: 6 }, 0, []);
-        assert.ok(v.score < -400, 'VODKA CRANBERRY ' + Math.round(v.score) + ' ' + v.why);
+    // AND THE OTHER HALF OF THE EXCLUSION.
+    // v6.110.0: VODKA CRANBERRY is no longer refused at lv0 — the user's own
+    // joe recording took it FOUR times, to lv4 (gt 393/408/582/637), and
+    // finished the run with four supers and no gun. What must hold is that it
+    // cannot be levelled into the line, so the assertion moves to the ceiling.
+    // v6.110.0 — TIME STOP TAKES OVER ONCE THE ULT IS MAXED.
+    // The joe recording: ULTIMATE UP at 1631/1680/1740 taking the ult to lv6,
+    // then TIME STOP +2S for the next TWENTY picks without exception, 1783 to
+    // 4482, beating supers and evolves the whole way. frzShare reaches 1.00
+    // in deep. The pat 89-minute demo said the same (22 of 31 picks after
+    // 26:00) and was filed as "confirmed, no scoring change made".
+    // The bonus is HELL-gated, so the scene has to actually be in hell — the
+    // first draft of this test ran in the scenario's day env and read 175 for
+    // both levels, which looked like the change had not landed.
+    const inHell = fn => {
+        const sgt = global.gameTime, sh = global.hell, sul = global.player.ultLevel;
+        try { global.gameTime = 1800; global.hell = true; pineBot.test.handleScreens(); return fn(); }
+        finally { global.gameTime = sgt; global.hell = sh; global.player.ultLevel = sul;
+                  pineBot.test.handleScreens(); }
+    };
+    test('TIME STOP jumps once the ult is maxed, not on a clock', () => inHell(() => {
+        const ts = () => pineBot.test.scoreCard({ n: 'TIME STOP +2S', type: 'sp_timestop', lv: 0, maxlv: 6 }, 0, []).score;
+        global.player.ultLevel = 3; const low = ts();
+        global.player.ultLevel = 6; const high = ts();
+        assert.ok(high > low + 50, 'ult3 ' + Math.round(low) + ' -> ult6 ' + Math.round(high));
+    }));
+    // NOT asserted: that TIME STOP beats a SUPER. The first draft of this
+    // test claimed it and the recording does not support it — the human took
+    // ★ SUPER SOUTH SIDE UP at 1404 and had all FOUR supers banked before the
+    // TIME STOP run began at 1783, so supers were never the competition (and
+    // a fifth would be refused by gun-guard anyway). TIME STOP measures 266
+    // against SUPER SOUTH SIDE's 443 and that ordering is left alone.
+    // What the data DOES support is that once the engine is finished, time
+    // stop beats everything ordinary — which is what the twenty unbroken
+    // picks actually demonstrate.
+    test('...and with the ult maxed it beats the ordinary picks it competed with', () => inHell(() => {
+        global.player.ultLevel = 6;
+        const t = pineBot.test.scoreCard({ n: 'TIME STOP +2S', type: 'sp_timestop', lv: 0, maxlv: 6 }, 0, []).score;
+        // Exactly the cards the human took at 1334/1474/1517/1584 — SODA
+        // WATER, GINGER BEER, COINTREAU, LIME — immediately before the ult
+        // finished and the TIME STOP run began at 1783. That filler is what
+        // time stop displaced, so it is the honest comparison.
+        // OLIVE is deliberately NOT in this list: it carries
+        // survival-core-crunch+150 in hell and scores 286, above time stop's
+        // 266 — but the human had maxed OLIVE at gt 1002, so an unfinished
+        // armour core was never on offer during that stretch. Asserting
+        // against it would have been testing a state the run never reached.
+        for (const [n, ty] of [['SODA WATER', 'passive'], ['GINGER BEER', 'passive'],
+                               ['COINTREAU', 'passive'], ['LIME', 'passive']]) {
+            const o = pineBot.test.scoreCard({ n, type: ty, lv: 2, maxlv: 6 }, 0, []).score;
+            assert.ok(t > o, 'timestop ' + Math.round(t) + ' vs ' + n + ' ' + Math.round(o));
+        }
+    }));
+
+    // v6.110.0 — THE GUN IS STILL UNREACHABLE AFTER THE CEILING SWAP.
+    // The lv0 latent veto is gone below the cap, so the guards that remain
+    // have to be checked rather than assumed. This is the invariant the whole
+    // change rests on: a latent cocktail cannot be levelled to where it
+    // evolves, so no sixth line can open however the key moves.
+    // THE CEILING ITSELF, asserted against a LITERAL. Every other test in
+    // this block reads pineBot.config.gunSafeOffPlanLv to place its
+    // assertion, so raising the config to 7 moved the assertions with it and
+    // left the whole suite green with the cap effectively removed — a teeth
+    // check caught that. A guard whose threshold is read from the thing it
+    // guards is not a guard. Evolution needs the cocktail at 6, so the
+    // ceiling must sit strictly below it, whatever anyone later sets.
+    test('the off-plan level ceiling is strictly below evolution range', () =>
+        assert.ok(pineBot.config.gunSafeOffPlanLv < 6,
+            'gunSafeOffPlanLv ' + pineBot.config.gunSafeOffPlanLv + ' — a latent cocktail could reach lv6 and evolve'));
+    test('the gun stays unreachable: no latent cocktail can reach evolution range', () => {
+        const ceil = pineBot.config.gunSafeOffPlanLv;
+        for (const c of ['MANHATTAN', 'VODKA MARTINI', 'WHISKEY HIGHBALL', 'DRY MARTINI',
+                         'BLOODY MARY', 'ESPRESSO MARTINI', 'VODKA CRANBERRY'])
+            for (let lv = ceil; lv <= 6; lv++) {
+                const r = pineBot.test.scoreCard({ n: c, type: 'weapon', lv, maxlv: 6 }, 0, []);
+                assert.ok(r.score < -400, c + ' lv' + lv + ' ' + Math.round(r.score) + ' ' + r.why);
+            }
+    });
+    test('...and the sixth-super card is still refused at the cap', () => {
+        const saved = global.player.superLv;
+        try {
+            global.player.superLv = { a: 1, b: 1, c: 1, d: 1 };   // at maxSuperLines
+            const r = pineBot.test.scoreCard({ n: 'SUPER MANHATTAN', type: 'super', lv: 0, maxlv: 6 }, 0, []);
+            // NOT asserted as < -400: the card carries super+260 and
+            // super-level+42, so gun-guard's -500 nets to about -257. A
+            // threshold picked without looking would have failed a working
+            // guard. What matters is that the guard FIRES and that the card
+            // loses to an ordinary pick, which is the behaviour that keeps
+            // the sixth line shut.
+            assert.ok(/gun-guard/.test(r.why), r.why);
+            const junk = pineBot.test.scoreCard({ n: 'ANGOSTURA', type: 'passive', lv: 0, maxlv: 6 }, 0, []);
+            assert.ok(r.score < junk.score, 'super ' + Math.round(r.score) + ' vs junk ' + Math.round(junk.score));
+        } finally { global.player.superLv = saved; }
+    });
+
+    test('VODKA CRANBERRY is capped below evolution range, not refused outright', () => {
+        const ceil = pineBot.config.gunSafeOffPlanLv;
+        const lo = pineBot.test.scoreCard({ n: 'VODKA CRANBERRY', type: 'weapon', lv: 0, maxlv: 6 }, 0, []);
+        const hi = pineBot.test.scoreCard({ n: 'VODKA CRANBERRY', type: 'weapon', lv: ceil, maxlv: 6 }, 0, []);
+        assert.ok(lo.score > 0, 'lv0 ' + Math.round(lo.score) + ' — the human took this four times');
+        assert.ok(hi.score < -400, 'lv' + ceil + ' ' + Math.round(hi.score) + ' ' + hi.why);
     });
     // GIMLET's key is shut the same way, which is what keeps an off-roster
     // cocktail from becoming the sixth line even when the pool forces it in.
@@ -5993,6 +6179,53 @@ if (which === 'learn-probe') {
     });
     // --- the anchor reports whether it FIRED, which is the question that
     // comes before whether it pays.
+    // v6.109.0 — THE FULL CEM TABLE. This block used to hardcode the four
+    // 6.107.0 dimensions, leaving 23 of 27 invisible — including
+    // threat.markWeight and threat.lineWeight, which govern the 54% of day
+    // deaths caused by marks and lines. A report that cannot show the knob
+    // behind the largest measured loss is not an instrument.
+    test('every TUNABLE dimension is reported, not just the newest four', () => {
+        const p = pineBot.learning().params, box = pineBot.test.tunable();
+        const missing = Object.keys(box).filter(k => !(k in p));
+        assert.strictEqual(missing.length, 0, 'missing from report(): ' + missing.join(', '));
+        assert.ok(Object.keys(p).length >= 20, 'only ' + Object.keys(p).length + ' dims reported');
+    });
+    test('...including the two that govern the day\'s biggest loss', () => {
+        const p = pineBot.learning().params;
+        for (const k of ['threat.markWeight', 'threat.lineWeight'])
+            assert.ok(p[k] && Array.isArray(p[k].box), k + ' not reported');
+    });
+    // A mean against a bound is the search saying the BOX is wrong, and that
+    // cannot be read off a bare number — it has to be flagged.
+    test('a mean pinned at a bound is flagged as atEdge', () => {
+        const k = 'movement.anchorValue', box = pineBot.test.tunable()[k];
+        pineBot.test.setCemMean(k, box.max);
+        assert.strictEqual(pineBot.learning().params[k].atEdge, 'max');
+        pineBot.test.setCemMean(k, box.min);
+        assert.strictEqual(pineBot.learning().params[k].atEdge, 'min');
+        pineBot.test.setCemMean(k, (box.min + box.max) / 2);
+        assert.ok(!pineBot.learning().params[k].atEdge, 'flagged a mid-box mean');
+    });
+
+    // --- v6.109.0 THE ULT-UPTIME ECONOMY, live at last. The manual joe demo
+    // measured invulnShare 0.326 and said the ult IS joe's armour; its own
+    // open item named this as the next lever and it sat for ten versions
+    // because invulnShare existed ONLY in the demo digest, so bot rows could
+    // never be compared against it.
+    test('the phase row carries live invuln share and ult progress', () => {
+        const r = pineBot.test.phaseRow(1500, true);
+        for (const k of ['inv', 'ultMax', 'ult6At'])
+            assert.ok(k in r, 'phase row is missing ' + k + ': ' + Object.keys(r).join(','));
+    });
+    test('...and inv is a real share, not a tick count', () => {
+        global.player = { x: 270, y: 270, hp: 100, maxHp: 100, speed: 1.5, ultLevel: 4 };
+        global.enemies = [];
+        for (let i = 0; i < 20; i++) pineBot.test.planMove();
+        const r = pineBot.test.phaseRow(1500, true);
+        assert.ok(r.inv != null && r.inv >= 0 && r.inv <= 1, 'inv ' + r.inv + ' is not a 0-1 share');
+        assert.strictEqual(r.ultMax, 4, 'ultMax ' + r.ultMax + ' did not track player.ultLevel');
+    });
+
     test('the anchor reports its arming count for the run', () => {
         const a = pineBot.learning().anchor;
         assert.ok(a && typeof a.armedTicksThisRun === 'number', JSON.stringify(a));

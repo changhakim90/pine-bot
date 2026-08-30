@@ -907,6 +907,14 @@
             ultInvulnLeft = Math.max(ultInvulnLeft, dropLeft);
         }
         const ultInvuln = ultInvulnLeft > 0 || !!claseNow;
+        // v6.109.0: accumulate the uptime the demos said decides the day.
+        planTicks++;
+        if (ultInvuln) invulnTicks++;
+        {
+            const ulNow = safe(() => player.ultLevel, 0) || 0;
+            if (ulNow > ultMaxLv) ultMaxLv = ulNow;
+            if (ulNow >= 6 && ultLv6At == null) ultLv6At = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        }
         const ultInvulnSafe = ultInvulnLeft >=
             (M.ultInvulnCommitS != null ? M.ultInvulnCommitS : 1.2);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';

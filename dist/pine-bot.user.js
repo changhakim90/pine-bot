@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.108.0
+// @version      6.110.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.108.0';
+    const SCRIPT_VERSION = '6.110.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -412,6 +412,11 @@
         // does not want and cannot use. At 4 the guards arm the moment the
         // intended plan is finished, and every further line is refused.
         maxSuperLines: 4,
+        // v6.110.0: how far an off-plan cocktail with a latent super key may
+        // be levelled while the super count is still well below the cap. The
+        // user's joe recording took VODKA CRANBERRY to exactly lv4 and ended
+        // at 4 supers — below evolution range, so the line never armed.
+        gunSafeOffPlanLv: 4,
         // v6.87.4: how far an OFF-PLAN super line must already be before the
         // bot starts paying to avoid it. Below this, an off-plan cocktail is
         // just damage and is judged on merit; above it, the line is close
@@ -2347,6 +2352,19 @@
     // Sampled on a wall-clock cadence (a game-clock cadence cannot measure a
     // starved game clock) and carried into the phase row.
     let spdLastGt = null, spdLastWall = 0, spdSamples = [], spdWorst = null;
+    // v6.109.0 THE ULT-UPTIME ECONOMY, finally measurable on live runs.
+    // The manual joe demo recorded invulnShare 0.326 — a THIRD of the run
+    // spent invulnerable — and concluded "the ult IS joe's armor". Its own
+    // open item said: "if invulnShare in bot rows stays far below 0.326, the
+    // ult-uptime economy (not the pick score) is the next lever." That
+    // comparison was never possible: invulnShare is computed ONLY in the demo
+    // digest (06:949) from recorded samples, so the bot had no idea what its
+    // own uptime was and the lever sat unactioned for ten versions.
+    // The day data says the same thing from the other side — 54% of day
+    // deaths are marks and lines, which are exactly the hazards invulnerability
+    // walks through — and at the entrance a MAXED ult appears in 23% of
+    // survivors against 4% of deaths.
+    let invulnTicks = 0, planTicks = 0, ultMaxLv = 0, ultLv6At = null;
     // v6.102.0: gt at which the BUILD first met its armour+supers bars —
     // the measurement that sets capStable.fromS from data instead of guesswork.
     let capReadyGt = null;
@@ -4316,6 +4334,19 @@
                 // past the deep-deep threshold nothing else on a card is worth
                 // more; below it the old weighting stands unchanged.
                 if (gtT > (CONFIG.deepHell.cornerAnchorFromS || 9000)) v += 90;
+                // v6.110.0 — THE SWITCH IS THE MAXED ULT, NOT A CLOCK.
+                // The joe recording is unambiguous: ULTIMATE UP at 1631, 1680
+                // and 1740 taking the ult to lv6, and then TIME STOP +2S for
+                // the next TWENTY picks without a single exception, from 1783
+                // to 4482 — beating supers and evolves the whole way. frzShare
+                // reaches 1.00 in deep and the field never moves again. The
+                // pat 89-minute demo said the same (22 of 31 picks after
+                // 26:00) and was filed as "confirmed, no scoring change made".
+                // Two independent human recordings is no longer a coincidence.
+                // Keyed on the ult being DONE rather than on gt, because that
+                // is the transition the human actually plays: finish the
+                // engine, then stack stops forever.
+                else if (hellDetected && (safe(() => G.player.ultLevel, 0) || 0) >= 6) v += 90;
                 else if (hellDetected && gtT > 2400) v += 40;
                 add(v, 'timestop');
                 break;
@@ -5272,8 +5303,53 @@
                 // a sixth super waiting for levels. Refuse it at level zero,
                 // from the first pool, before the slot is spent.
                 const planWillMax = lkey && PLAN_INGREDIENTS.includes(lkey);
+                // =====================================================
+                // v6.110.0 — THE VETO WAS FIRING AT ZERO SUPERS.
+                // =====================================================
+                // The user's own 79-minute joe recording took COSMOPOLITAN as
+                // the FIRST pick of the run, VODKA CRANBERRY four times to
+                // lv4 (gt 393/408/582/637), GIMLET at 1002 and VODKA MARTINI
+                // at 1092 — and finished with FOUR supers, never near the gun.
+                // Every one of those is refused here today: VODKA CRANBERRY's
+                // key is CRANBERRY, which IS in PLAN_INGREDIENTS, so
+                // `planWillMax` fires and the card scores -600 at lv0.
+                //
+                // The rule is right about the mechanism and wrong about WHEN.
+                // A sixth line needs six MAXED supers. At gt 393 the human had
+                // ZERO supers — the line was many picks away and the run
+                // needed damage, which is what those cocktails are. 6.87.4
+                // already recorded this once ("minguk's best recent runs are
+                // built on exactly those — DRY MARTINI, VODKA CRANBERRY,
+                // COSMOPOLITAN") and relaxed the gun-path tax below halfway;
+                // 6.89.0 then re-refused the same cards from a different
+                // direction, and nobody noticed the two rules disagreed.
+                //
+                // So the veto now waits until the super count is actually near
+                // the cap. Below that the card is judged on merit. NOTHING at
+                // the dangerous end changes: `gun-guard` (-500 on the sixth
+                // super card), `gun-guard-source` (-500 on anything opening a
+                // line at the cap), `arming-cap` (-700 on the key's final
+                // level, at ANY count) and `gun-path-complete` (-500) all
+                // still stand, and those are the guards that actually execute.
+                // A LEVEL CEILING rides along as belt-and-braces: the human's
+                // own ceiling was lv4, and a latent cocktail parked below
+                // evolution range cannot become a super however the key moves.
+                // THE LOAD-BEARING GUARD IS NOW THE LEVEL CEILING, and it is
+                // strictly stronger than what it replaces. A super needs the
+                // cocktail MAXED and its key maxed. The MANHATTAN incident
+                // 6.89.0 was built on ran exactly that course: taken at lv0 out
+                // of a junk pool, levelled 114 -> 120 -> 126, evolved. Capping
+                // the cocktail below evolution range makes that course
+                // impossible at ANY super count and however the key moves —
+                // whereas the old lv0 veto only made it unlikely, and 6.87.4
+                // had already relaxed a sibling rule for the same cards.
+                // The old veto is KEPT at the dangerous end: near the cap the
+                // card is refused at every level, exactly as before.
+                const nearCap = nSupers >= CAP - 1;
+                const lvlCeil = CONFIG.gunSafeOffPlanLv != null ? CONFIG.gunSafeOffPlanLv : 4;
                 if (lkey && !already && (keyEffectivelyMaxed(lkey) || planWillMax)) {
-                    add(lv === 0 ? -600 : -400, planWillMax ? 'latent-line-planned' : 'latent-line');
+                    if (nearCap) add(lv === 0 ? -600 : -400, planWillMax ? 'latent-line-planned' : 'latent-line');
+                    else if ((lv || 0) >= lvlCeil) add(-600, 'latent-line-ceiling');
                 }
             }
             // v6.89.0 SLOT WASTERS (user: old fashioned / corpse reviver out of
@@ -5887,6 +5963,7 @@
         capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
         capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
+        invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -5954,7 +6031,16 @@
                 return a[Math.floor(a.length / 2)]; })(),
             spdLo: spdWorst,
             enMax: satPeakEn || null,
-            why: capFiredThisRun ? (capLastResetReason || null) : null
+            why: capFiredThisRun ? (capLastResetReason || null) : null,
+            // v6.109.0 THE ULT-UPTIME ECONOMY. Compare `inv` directly against
+            // the manual joe demo's 0.326 — that comparison is the whole
+            // point of the field, and it was impossible until now.
+            //   inv    = share of planner ticks spent invulnerable
+            //   ultMax = highest ult level reached (lv6 wipes fields; lv1-3 chip)
+            //   ult6At = gt the ult was maxed, null if never
+            inv: planTicks ? +(invulnTicks / planTicks).toFixed(3) : null,
+            ultMax: ultMaxLv || null,
+            ult6At: ultLv6At == null ? null : Math.round(ultLv6At)
         };
     }
 
@@ -7751,6 +7837,14 @@
             ultInvulnLeft = Math.max(ultInvulnLeft, dropLeft);
         }
         const ultInvuln = ultInvulnLeft > 0 || !!claseNow;
+        // v6.109.0: accumulate the uptime the demos said decides the day.
+        planTicks++;
+        if (ultInvuln) invulnTicks++;
+        {
+            const ulNow = safe(() => player.ultLevel, 0) || 0;
+            if (ulNow > ultMaxLv) ultMaxLv = ulNow;
+            if (ulNow >= 6 && ultLv6At == null) ultLv6At = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        }
         const ultInvulnSafe = ultInvulnLeft >=
             (M.ultInvulnCommitS != null ? M.ultInvulnCommitS : 1.2);
         const auraUlt = ultInvuln && charOf().ultKind === 'aura';
@@ -11264,7 +11358,26 @@
                 hpMedianWhenCrowded: pct(hurt, 0.5), crowdedSamples: hurt.length,
                 crowdP75: pct(S.map(s => s.near), 0.75), crowdMax: Math.max(...S.map(s => s.near || 0)),
                 dashes: E.filter(e => e.e === 'dash').length
-            }
+            },
+            // v6.109.0 THE FINAL STATE — the point of a recording that STOPS
+            // at corner anchoring. Everything above is a distribution over the
+            // whole run; this is the single snapshot that says what the
+            // immortal build actually was, and when it arrived.
+            final: (() => {
+                const L = S[S.length - 1], tail = S.slice(-Math.min(60, S.length));
+                const pctT = q => pct(tail.map(x => x.cnr).filter(v => v != null), q);
+                return {
+                    gt: L.gt,                                   // time to immortality
+                    def: L.def, regen: L.rgn, ultLv: L.ulv, supers: L.sup,
+                    weapons: L.w || null, passives: L.pas || null,
+                    // the anchoring claim, checked rather than asserted:
+                    // corner distance and HP over the final stretch
+                    tailCornerDist: { p25: pctT(0.25), median: pctT(0.5), p75: pctT(0.75) },
+                    tailHpMedian: pct(tail.map(x => x.hp), 0.5),
+                    tailInvulnShare: +(tail.reduce((n, x) => n + (x.inv || 0), 0) / tail.length).toFixed(3),
+                    tailCrowdMedian: pct(tail.map(x => x.near), 0.5)
+                };
+            })()
         };
     }
 
@@ -11334,7 +11447,19 @@
             ulv: p.ultLevel || 0,
             ur: (safe(() => gameTime, 0) || 0) >= (p.ultReadyAt || 0) ? 1 : 0,
             sup: Object.keys(p.superLv || {}).length,
-            ol: (p.weapons || {}).olive || 0, ng: (p.weapons || {}).negroni || 0
+            ol: (p.weapons || {}).olive || 0, ng: (p.weapons || {}).negroni || 0,
+            // v6.109.0 — THE IMMORTAL-BUILD RECORDING. The user records to the
+            // moment of corner anchoring and stops, per character, so the LAST
+            // sample is the answer: this is what an immortal build is made of.
+            // def and rgn are recorded because the bot's own stability proof
+            // gates on them (capStable.defMin 34.9, and the whole armour
+            // doctrine) using numbers derived from source reading, never from
+            // a human's actual immortal build.
+            def: typeof p.defense === 'number' ? +p.defense.toFixed(1) : null,
+            rgn: typeof p.regenBonus === 'number' ? +p.regenBonus.toFixed(2) : null,
+            // full owned levels, so the final sample names the recipe rather
+            // than leaving it to be reconstructed from a 60-pick cap
+            w: Object.assign({}, p.weapons || {}), pas: Object.assign({}, p.passives || {})
         });
         if (demoRec.samples.length > 9000) demoSave();   // ~24 min cap: autosave
     }
@@ -11394,6 +11519,14 @@
                     // v6.96.2: store-guard + phase-audit hooks
                     getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, refitCem, recenterSearch, demoSave: () => demoSave(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
+                    // v6.109.0: drive the RECORDER, not just the digest. The
+                    // demo-digest scenario feeds pre-built samples through
+                    // localStorage, so it exercises demoDigest and never
+                    // demoTick — the capture path shipped untested until a
+                    // teeth check on `def` came back green with the field
+                    // deleted.
+                    demoTick: () => demoTick(),
+                    demoSamples: () => (demoRec && demoRec.samples) ? demoRec.samples.slice() : null,
                     craftPending: () => craftPending, crafts: () => craftsThisRun,
                     resetCraftLatch: () => { craftPending = null; },
                     notNameForm, clickTextIf,
@@ -11418,6 +11551,7 @@
                     // v6.107.0 drop-anchor / ring hooks
                     setKillRate: v => { killRate = v; },
                     tunable: () => TUNABLE,
+                    setCemMean: (k, v) => { learn.cem.mean[k] = v; },
                     bossRing: () => bossRingRef.v,
                     // v6.107.0 tag-bandit hooks
                     tagsOf, enemyContextBonus,
@@ -11834,17 +11968,31 @@
                                      applied: (nn[k] || 0) >= minN ? round(typeMul(k), 3) : 1 };
                     }
                 } catch (e) { }
+                // v6.109.0: ALL of them, not the four newest. This block used
+                // to hardcode the 6.107.0 dimensions, which meant 23 of 27
+                // were invisible — including threat.markWeight and
+                // threat.lineWeight, the two that govern the 54% of day
+                // deaths caused by marks and lines. `atEdge` flags a mean
+                // sitting within 2% of a bound: that is the search telling
+                // you the BOX is wrong, and it cannot be read any other way.
                 const params = {};
                 try {
-                    for (const k of ['movement.bossRingMul', 'movement.poRingMul',
-                                     'movement.anchorValue', 'movement.anchorTtkS']) {
-                        params[k] = { live: round(getParam(k), 3), mean: round(learn.cem.mean[k], 3),
-                                      sigma: round(learn.cem.sigma[k], 3),
-                                      box: [TUNABLE[k].min, TUNABLE[k].max] };
+                    for (const k of Object.keys(TUNABLE)) {
+                        const box = TUNABLE[k], rng = box.max - box.min;
+                        const mean = learn.cem.mean[k], sig = learn.cem.sigma[k];
+                        const row = { live: round(getParam(k), 3), mean: round(mean, 3),
+                                      sigma: round(sig, 3), box: [box.min, box.max] };
+                        if (isFinite(mean) && rng > 0) {
+                            if (mean <= box.min + rng * 0.02) row.atEdge = 'min';
+                            else if (mean >= box.max - rng * 0.02) row.atEdge = 'max';
+                        }
+                        // sigma at the floor = converged, no exploration left
+                        if (isFinite(sig) && rng > 0 && sig <= rng * CONFIG.learning.sigmaFloor * 1.02) row.converged = true;
+                        params[k] = row;
                     }
                 } catch (e) { }
                 return {
-                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: a mean pinned at a box edge means the box is wrong.',
+                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: ALL 27 CEM dims. `atEdge` = the mean is against a bound, so the BOX is wrong, not the value. `converged` = sigma at the floor, no exploration left. ult: compare `inv` in the phase rows against the manual joe demo\'s 0.326.',
                     gen: safe(() => learn.cem.gen, null),
                     runs: safe(() => learn.runs, null),
                     tags, enemy, params,

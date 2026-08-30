@@ -410,6 +410,11 @@
         // does not want and cannot use. At 4 the guards arm the moment the
         // intended plan is finished, and every further line is refused.
         maxSuperLines: 4,
+        // v6.110.0: how far an off-plan cocktail with a latent super key may
+        // be levelled while the super count is still well below the cap. The
+        // user's joe recording took VODKA CRANBERRY to exactly lv4 and ended
+        // at 4 supers — below evolution range, so the line never armed.
+        gunSafeOffPlanLv: 4,
         // v6.87.4: how far an OFF-PLAN super line must already be before the
         // bot starts paying to avoid it. Below this, an off-plan cocktail is
         // just damage and is judged on merit; above it, the line is close
@@ -2345,6 +2350,19 @@
     // Sampled on a wall-clock cadence (a game-clock cadence cannot measure a
     // starved game clock) and carried into the phase row.
     let spdLastGt = null, spdLastWall = 0, spdSamples = [], spdWorst = null;
+    // v6.109.0 THE ULT-UPTIME ECONOMY, finally measurable on live runs.
+    // The manual joe demo recorded invulnShare 0.326 — a THIRD of the run
+    // spent invulnerable — and concluded "the ult IS joe's armor". Its own
+    // open item said: "if invulnShare in bot rows stays far below 0.326, the
+    // ult-uptime economy (not the pick score) is the next lever." That
+    // comparison was never possible: invulnShare is computed ONLY in the demo
+    // digest (06:949) from recorded samples, so the bot had no idea what its
+    // own uptime was and the lever sat unactioned for ten versions.
+    // The day data says the same thing from the other side — 54% of day
+    // deaths are marks and lines, which are exactly the hazards invulnerability
+    // walks through — and at the entrance a MAXED ult appears in 23% of
+    // survivors against 4% of deaths.
+    let invulnTicks = 0, planTicks = 0, ultMaxLv = 0, ultLv6At = null;
     // v6.102.0: gt at which the BUILD first met its armour+supers bars —
     // the measurement that sets capStable.fromS from data instead of guesswork.
     let capReadyGt = null;

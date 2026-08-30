@@ -110,6 +110,7 @@
         capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
         capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
+        invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -177,7 +178,16 @@
                 return a[Math.floor(a.length / 2)]; })(),
             spdLo: spdWorst,
             enMax: satPeakEn || null,
-            why: capFiredThisRun ? (capLastResetReason || null) : null
+            why: capFiredThisRun ? (capLastResetReason || null) : null,
+            // v6.109.0 THE ULT-UPTIME ECONOMY. Compare `inv` directly against
+            // the manual joe demo's 0.326 — that comparison is the whole
+            // point of the field, and it was impossible until now.
+            //   inv    = share of planner ticks spent invulnerable
+            //   ultMax = highest ult level reached (lv6 wipes fields; lv1-3 chip)
+            //   ult6At = gt the ult was maxed, null if never
+            inv: planTicks ? +(invulnTicks / planTicks).toFixed(3) : null,
+            ultMax: ultMaxLv || null,
+            ult6At: ultLv6At == null ? null : Math.round(ultLv6At)
         };
     }
 
