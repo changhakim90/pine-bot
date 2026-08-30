@@ -921,7 +921,25 @@
             // dipGraceS tolerates a blip shorter than this many game-seconds
             // (the clock keeps running, just doesn't reset); a dip that
             // outlasts the grace still resets fully. 0 = old strict behavior.
-            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300, dipGraceS: 4 },
+            // v6.102.0 THE GATE WAS ONE HAIR ABOVE THE GAME'S CEILING.
+            // defMin shipped at 35. `liveDefense()` returns player.defense,
+            // and the game computes
+            //     player.defense = min(60, 3*upDefense + pas.armor)
+            // where pas.armor is 5.832 per OLIVE level, OLIVE caps at 6, and
+            // upDefense is NOT OBTAINABLE (the up* counters are not cards the
+            // pool offers). So defense caps at 6 x 5.832 = **34.992**, and
+            //     34.992 >= 35  ->  false, on every frame of every run.
+            // The early cap has therefore been DEAD CODE since 6.99.3, which
+            // is the real reason earlyCaps has read 0 in every row — not the
+            // dip-grace (6.100.1), not the fromS floor.
+            //
+            // How the bug was born, because the pattern will recur: parkAudit
+            // reports the entrance build with `+dEnt.toFixed(1)`, so 34.992
+            // PRINTS AS 35.0. The gate was written from the audit table
+            // instead of from the stat. Same family as the ownedLevels trap
+            // (findings-and-fixes.md): a rounded proxy read as the quantity.
+            // 34.9 sits under the ceiling with room for float noise.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2097,6 +2115,9 @@
     // v6.101.0 cap ladder actuator state: gt of the last hurtPlayer poke
     // (stage 2) and whether the hard book (stage 3) has already run.
     let capHurtAt = 0, capForcedThisRun = false;
+    // v6.102.0: gt at which the BUILD first met its armour+supers bars —
+    // the measurement that sets capStable.fromS from data instead of guesswork.
+    let capReadyGt = null;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.101.0
+// @version      6.102.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.101.0';
+    const SCRIPT_VERSION = '6.102.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -923,7 +923,25 @@
             // dipGraceS tolerates a blip shorter than this many game-seconds
             // (the clock keeps running, just doesn't reset); a dip that
             // outlasts the grace still resets fully. 0 = old strict behavior.
-            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 35, supersMin: 3, holdS: 300, dipGraceS: 4 },
+            // v6.102.0 THE GATE WAS ONE HAIR ABOVE THE GAME'S CEILING.
+            // defMin shipped at 35. `liveDefense()` returns player.defense,
+            // and the game computes
+            //     player.defense = min(60, 3*upDefense + pas.armor)
+            // where pas.armor is 5.832 per OLIVE level, OLIVE caps at 6, and
+            // upDefense is NOT OBTAINABLE (the up* counters are not cards the
+            // pool offers). So defense caps at 6 x 5.832 = **34.992**, and
+            //     34.992 >= 35  ->  false, on every frame of every run.
+            // The early cap has therefore been DEAD CODE since 6.99.3, which
+            // is the real reason earlyCaps has read 0 in every row — not the
+            // dip-grace (6.100.1), not the fromS floor.
+            //
+            // How the bug was born, because the pattern will recur: parkAudit
+            // reports the entrance build with `+dEnt.toFixed(1)`, so 34.992
+            // PRINTS AS 35.0. The gate was written from the audit table
+            // instead of from the stat. Same family as the ownedLevels trap
+            // (findings-and-fixes.md): a rounded proxy read as the quantity.
+            // 34.9 sits under the ceiling with room for float noise.
+            capStable: { fromS: 3600, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             parkRadius: 26,         // "arrived": stop moving inside this radius
@@ -2099,6 +2117,9 @@
     // v6.101.0 cap ladder actuator state: gt of the last hurtPlayer poke
     // (stage 2) and whether the hard book (stage 3) has already run.
     let capHurtAt = 0, capForcedThisRun = false;
+    // v6.102.0: gt at which the BUILD first met its armour+supers bars —
+    // the measurement that sets capStable.fromS from data instead of guesswork.
+    let capReadyGt = null;
     let capWpIdx = 0;               // v6.96.2 cap patrol: current waypoint on the circuit
     let capWpUntil = 0;             // ...and the gt deadline before the leg is abandoned
     let phaseAudit = (() => {
@@ -5484,6 +5505,7 @@
         capFirstGt = null;                          // v6.99.4: capAt telemetry is per-run
         capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
         capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
+        capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -5533,7 +5555,10 @@
             cap: !!capFiredThisRun,
             // v6.99.4: gt at first patrol engage. capAt < runCapS = the
             // EARLY stability proof fired; capAt >= runCapS = the clock.
-            capAt: capFirstGt == null ? null : Math.round(capFirstGt)
+            capAt: capFirstGt == null ? null : Math.round(capFirstGt),
+            // v6.102.0: gt the build met armour+supers. Answers "when is a
+            // build actually complete?" across runs, cap-out or not.
+            readyAt: capReadyGt == null ? null : Math.round(capReadyGt)
         };
     }
 
@@ -9366,7 +9391,17 @@
         // is unreachable outside a hell run.
         {
             const CS = DHp.capStable || {};
-            if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
+            // v6.102.0: the proof now RUNS from gt 0 and `fromS` gates only
+            // the LATCH. Two reasons. (1) It makes the bot answer the user's
+            // question — "when should the kill protocol mark the build
+            // complete?" — instead of us guessing: capReadyGt records the gt
+            // the build first met its armour and supers bars, and the phase
+            // row carries it, so medianReadyAt in the funnel sets fromS from
+            // data. (2) A build that was ready at 1400 s used to start its
+            // 300 s hold at 3600 and latch at 3900; now the hold has already
+            // run for 2200 continuous seconds when 3600 arrives, so it
+            // latches AT the floor on a far stronger proof than the old one.
+            if (!capEarly && (CS.holdS || 0) > 0) {
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
                 const supersMin = CS.supersMin != null ? CS.supersMin : 3;
@@ -9374,13 +9409,19 @@
                 const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
                 const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
                 const stableNow = hpOk && defOk && supOk;
+                // v6.102.0 BUILD COMPLETE, measured. The armour and supers
+                // bars are the BUILD; hp is the proof that the build holds.
+                // Recorded once per run, whatever happens afterwards, and
+                // independent of fromS — this is the datum fromS should be
+                // set from.
+                if (defOk && supOk && capReadyGt == null) capReadyGt = gtCap;
                 if (stableNow) {
                     capDipSince = null;   // v6.100.1: back in the green — the grace clock stands down
                     if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
                     else {
                         const streak = gtCap - capStableSince;
                         if (streak > capBestStreakS) capBestStreakS = streak;
-                        if (streak >= CS.holdS) capEarly = true;
+                        if (streak >= CS.holdS && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) capEarly = true;
                     }
                 } else if (capStableSince != null) {
                     // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
@@ -10581,8 +10622,8 @@
                     resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
                     // v6.101.0: the ladder's own clock, so a scenario can put
                     // the run at a chosen rung without replaying 4 minutes.
-                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; },
-                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun }),
+                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null; },
+                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun, capReadyGt }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.
@@ -10804,6 +10845,9 @@
                         g.capAts.push(r.capAt);
                         if (r.capAt < ((CONFIG.deepHell && CONFIG.deepHell.runCapS) || 9000)) g.earlyCaps = (g.earlyCaps || 0) + 1;
                     }
+                    // v6.102.0: when the BUILD was complete, cap-out or not —
+                    // the datum capStable.fromS should be set from.
+                    if (r.readyAt != null) { g.readyAts = g.readyAts || []; g.readyAts.push(r.readyAt); }
                     if (r.def != null) g.defs.push(r.def);
                     if (r.regen != null) g.regens.push(r.regen);
                     if (r.ultLv != null) g.ults.push(r.ultLv);
@@ -10821,6 +10865,8 @@
                         capOuts: g.caps,
                         earlyCaps: g.earlyCaps || 0,
                         medianCapAt: med(g.capAts || []),
+                        buildsReady: (g.readyAts || []).length,
+                        medianReadyAt: med(g.readyAts || []),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times)
@@ -10868,6 +10914,11 @@
                     inDip: capDipSince != null,
                     dipForS: capDipSince == null ? 0 : Math.round(gt - capDipSince),
                     lastResetReason: capLastResetReason,
+                    // v6.102.0: when this run's build met armour+supers, and a
+                    // standing check that defMin is actually reachable at all
+                    // (it shipped at 35 against a 34.992 ceiling until 6.102.0).
+                    readyAt: capReadyGt == null ? null : Math.round(capReadyGt),
+                    defMinReachable: defMin <= 34.992,
                     live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
                     need: { hpFloor, defMin, supersMin },
                     short: {

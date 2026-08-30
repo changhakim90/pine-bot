@@ -975,8 +975,8 @@
                     resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
                     // v6.101.0: the ladder's own clock, so a scenario can put
                     // the run at a chosen rung without replaying 4 minutes.
-                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; },
-                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun }),
+                    resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null; },
+                    capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun, capReadyGt }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
                     // was lifted, and a rotation that silently stops rotating
                     // is exactly the 6.85.0 bug that cost a hundred runs.
@@ -1198,6 +1198,9 @@
                         g.capAts.push(r.capAt);
                         if (r.capAt < ((CONFIG.deepHell && CONFIG.deepHell.runCapS) || 9000)) g.earlyCaps = (g.earlyCaps || 0) + 1;
                     }
+                    // v6.102.0: when the BUILD was complete, cap-out or not —
+                    // the datum capStable.fromS should be set from.
+                    if (r.readyAt != null) { g.readyAts = g.readyAts || []; g.readyAts.push(r.readyAt); }
                     if (r.def != null) g.defs.push(r.def);
                     if (r.regen != null) g.regens.push(r.regen);
                     if (r.ultLv != null) g.ults.push(r.ultLv);
@@ -1215,6 +1218,8 @@
                         capOuts: g.caps,
                         earlyCaps: g.earlyCaps || 0,
                         medianCapAt: med(g.capAts || []),
+                        buildsReady: (g.readyAts || []).length,
+                        medianReadyAt: med(g.readyAts || []),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times)
@@ -1262,6 +1267,11 @@
                     inDip: capDipSince != null,
                     dipForS: capDipSince == null ? 0 : Math.round(gt - capDipSince),
                     lastResetReason: capLastResetReason,
+                    // v6.102.0: when this run's build met armour+supers, and a
+                    // standing check that defMin is actually reachable at all
+                    // (it shipped at 35 against a 34.992 ceiling until 6.102.0).
+                    readyAt: capReadyGt == null ? null : Math.round(capReadyGt),
+                    defMinReachable: defMin <= 34.992,
                     live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
                     need: { hpFloor, defMin, supersMin },
                     short: {

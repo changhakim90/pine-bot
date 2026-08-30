@@ -102,6 +102,7 @@
         capFirstGt = null;                          // v6.99.4: capAt telemetry is per-run
         capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
         capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
+        capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -151,7 +152,10 @@
             cap: !!capFiredThisRun,
             // v6.99.4: gt at first patrol engage. capAt < runCapS = the
             // EARLY stability proof fired; capAt >= runCapS = the clock.
-            capAt: capFirstGt == null ? null : Math.round(capFirstGt)
+            capAt: capFirstGt == null ? null : Math.round(capFirstGt),
+            // v6.102.0: gt the build met armour+supers. Answers "when is a
+            // build actually complete?" across runs, cap-out or not.
+            readyAt: capReadyGt == null ? null : Math.round(capReadyGt)
         };
     }
 

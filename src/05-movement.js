@@ -2953,7 +2953,17 @@
         // is unreachable outside a hell run.
         {
             const CS = DHp.capStable || {};
-            if (!capEarly && (CS.holdS || 0) > 0 && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) {
+            // v6.102.0: the proof now RUNS from gt 0 and `fromS` gates only
+            // the LATCH. Two reasons. (1) It makes the bot answer the user's
+            // question — "when should the kill protocol mark the build
+            // complete?" — instead of us guessing: capReadyGt records the gt
+            // the build first met its armour and supers bars, and the phase
+            // row carries it, so medianReadyAt in the funnel sets fromS from
+            // data. (2) A build that was ready at 1400 s used to start its
+            // 300 s hold at 3600 and latch at 3900; now the hold has already
+            // run for 2200 continuous seconds when 3600 arrives, so it
+            // latches AT the floor on a far stronger proof than the old one.
+            if (!capEarly && (CS.holdS || 0) > 0) {
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
                 const supersMin = CS.supersMin != null ? CS.supersMin : 3;
@@ -2961,13 +2971,19 @@
                 const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
                 const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
                 const stableNow = hpOk && defOk && supOk;
+                // v6.102.0 BUILD COMPLETE, measured. The armour and supers
+                // bars are the BUILD; hp is the proof that the build holds.
+                // Recorded once per run, whatever happens afterwards, and
+                // independent of fromS — this is the datum fromS should be
+                // set from.
+                if (defOk && supOk && capReadyGt == null) capReadyGt = gtCap;
                 if (stableNow) {
                     capDipSince = null;   // v6.100.1: back in the green — the grace clock stands down
                     if (capStableSince == null || capStableSince > gtCap) capStableSince = gtCap;
                     else {
                         const streak = gtCap - capStableSince;
                         if (streak > capBestStreakS) capBestStreakS = streak;
-                        if (streak >= CS.holdS) capEarly = true;
+                        if (streak >= CS.holdS && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) capEarly = true;
                     }
                 } else if (capStableSince != null) {
                     // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —

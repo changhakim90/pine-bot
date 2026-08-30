@@ -4760,12 +4760,26 @@ if (which === 'run-cap') {
 
         // 5. v6.99.3 EARLY CAP — the stability proof. Config teeth first:
         const CS = pineBot.config.deepHell.capStable;
-        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 35 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
+        test('capStable ships fromS 3600 / hpFloor 0.97 / defMin 34.9 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
             assert.ok(CS && CS.fromS === 3600 && CS.hpFloor === 0.97 &&
-                      CS.defMin === 35 && CS.supersMin === 3 && CS.holdS === 300 && CS.dipGraceS === 4));
+                      CS.defMin === 34.9 && CS.supersMin === 3 && CS.holdS === 300 && CS.dipGraceS === 4));
+        // v6.102.0 THE CEILING TOOTH — the assertion that would have caught
+        // the bug that made the whole early cap dead code for four versions.
+        // The game computes player.defense = min(60, 3*upDefense + pas.armor);
+        // pas.armor is 5.832/OLIVE level, OLIVE caps at 6, and upDefense is
+        // unobtainable, so defense can never exceed 6 x 5.832 = 34.992.
+        // defMin shipped at 35, so the armour leg was false on every frame of
+        // every run and earlyCaps read 0 everywhere. Any future edit that
+        // raises defMin above the ceiling fails here.
+        const DEF_CEILING = 6 * 5.832;   // 34.992, from the game's own source
+        test('defMin is REACHABLE — at or under the 34.992 defense ceiling', () =>
+            assert.ok(CS.defMin <= DEF_CEILING,
+                'defMin ' + CS.defMin + ' > ceiling ' + DEF_CEILING + ' — the early cap can never fire'));
+        // ...and every early-cap test below now runs at the REAL ceiling
+        // rather than a rounded 35, so they are all regression tests for it.
         const stableScene = (gt, extraP) => {
             global.player = Object.assign({ x: 200, y: 200, hp: 469, maxHp: 469, speed: 3.0,
-                                            r: 7.2, ultReadyAt: 1e9, defense: 35 }, extraP || {});
+                                            r: 7.2, ultReadyAt: 1e9, defense: DEF_CEILING }, extraP || {});
             global.enemies = [];
             global.gameTime = gt;
             let pl; for (let i = 0; i < 2; i++) pl = T.planMove();
@@ -4841,6 +4855,27 @@ if (which === 'run-cap') {
         test('capStable.holdS = 0 disables the early cap', () =>
             assert.strictEqual(pl.capDive, false));
         pineBot.config.deepHell.capStable = CS;
+
+        // 5b. v6.102.0 THE BUILD-COMPLETE MEASUREMENT. The user's question is
+        //     "when should the kill protocol mark the build complete?" — so
+        //     the bot now measures it instead of us guessing at fromS. The
+        //     proof runs from gt 0; fromS gates only the LATCH.
+        T.resetCapLatch(); T.resetCapLadder(); T.setSupers(4);
+        stableScene(1400);   // armour + supers met here, LONG before fromS 3600
+        test('capReadyGt records the build-complete gt, ignoring fromS', () =>
+            assert.strictEqual(T.capDebug().capReadyGt, 1400));
+        test('...and a complete build does NOT cap on its own before fromS', () =>
+            assert.strictEqual(stableScene(2000).capDive, false));
+        // ...but having held continuously since 1400, it latches AT the floor
+        // rather than fromS+holdS: 2200 s of unbroken proof is already banked.
+        test('a build ready long before fromS latches AT the floor', () =>
+            assert.strictEqual(stableScene(3600).capDive, true));
+        // supers short => the build is NOT complete, and readyAt stays unset.
+        T.resetCapLatch(); T.resetCapLadder(); T.setSupers(1);
+        stableScene(1500);
+        test('an incomplete build books no readyAt', () =>
+            assert.strictEqual(T.capDebug().capReadyGt, null));
+        T.setSupers(4);
 
         // 6. v6.101.0 THE CAP LADDER. The smother is rung 1; if a build
         //    somehow survives standing in the crowd, the run must STILL end.
