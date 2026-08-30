@@ -98,7 +98,9 @@ if (which === 'scoring') {
     test('crown profile REFUSES SUPER NEGRONI (the keyless occupant stays keyless)', () =>
         assert.ok(sup.score < 0 && /negroni-super-noop/.test(sup.why), sup.score + ' ' + sup.why));
     // v6.94.2 (user): "early upgrades to ultimate are key" — until lv3 the
-    // ULTIMATE card outranks even OLIVE (the day-order king at ~402); from
+    // ULTIMATE card outranks even OLIVE (the armour anchor of the day order —
+    // rank 1 at ~402 until v6.106.0 moved the three super keys ahead of it,
+    // rank 4 and ~33 points lower now; the assertion only gets easier); from
     // lv3 the armor doctrine resumes. Both directions asserted.
     global.player = Object.assign({}, global.player, { ultLevel: 1 });
     const ultC = () => pineBot.test.scoreCard({ n: 'ULTIMATE UP', type: 'ult', lv: 0, maxlv: 9 }, 0, []);
@@ -2448,6 +2450,54 @@ if (which === 'slot-lockout') {
         for (const k of Object.keys(others))
             assert.ok(others[k] > ws, JSON.stringify(Object.assign({ ws: Math.round(ws) },
                 Object.fromEntries(Object.entries(others).map(([a, b]) => [a, Math.round(b)])))));
+    });
+
+    // v6.106.0 — THE SUPER KEYS RANK AHEAD OF THE CRAFTS AND FILLERS.
+    // Entry deaths on 6.102.0 were 65% zero-supers against 0% for survivors,
+    // replicated on 6.104.0 (50% vs 0%); defense at cap did not separate the
+    // two groups at all (46% vs 47%). TONIC opens TWO super lines and was
+    // rank 11, behind every vermouth. Asserted on the TAG, which names the
+    // rank and can only be emitted from that index in DAY_ORDER — the same
+    // form as the WHISKY SOUR guard above, and for the same reason: a plain
+    // score comparison between two ingredients can pass for unrelated reasons
+    // (the super-line and craft-half terms both move these cards).
+    // \b matters: /day-order1\b/ must NOT match `day-order11`.
+    const tagOf = n => T.scoreCard({ n, type: 'passive', lv: 0, maxlv: 6 }, 0, []).why || '';
+    test('TONIC is rank 1 in the day order (two super lines)', () =>
+        assert.ok(/day-order1\b/.test(tagOf('TONIC')), tagOf('TONIC')));
+    test('MINT is rank 2 (SOUTH SIDE key)', () =>
+        assert.ok(/day-order2\b/.test(tagOf('MINT')), tagOf('MINT')));
+    test('SUGAR is rank 3 (MOJITO key)', () =>
+        assert.ok(/day-order3\b/.test(tagOf('SUGAR')), tagOf('SUGAR')));
+    test('OLIVE follows the three keys at rank 4, ahead of every craft half', () =>
+        assert.ok(/day-order4\b/.test(tagOf('OLIVE')), tagOf('OLIVE')));
+    // ...and behaviourally, in a real day, each key outscores the craft half
+    // it used to sit behind. This is the consequence the ranks exist for.
+    test('each super key outscores the vermouth/filler it used to trail', () => {
+        const got = { tonic: sc('TONIC', 'passive', 0), mint: sc('MINT', 'passive', 0),
+                      sugar: sc('SUGAR', 'passive', 0), dry: sc('DRY VERMOUTH', 'passive', 0),
+                      sweet: sc('SWEET VERMOUTH', 'passive', 0), water: sc('WATER', 'passive', 0) };
+        const show = JSON.stringify(Object.fromEntries(
+            Object.entries(got).map(([k, v]) => [k, Math.round(v)])));
+        assert.ok(got.tonic > got.dry, show);
+        assert.ok(got.mint > got.sweet, show);
+        assert.ok(got.sugar > got.water, show);
+    });
+    // SIMPLE SYRUP is a craft of WATER + SUGAR and must not be reachable
+    // before both halves are — an invariant that survives any future reorder.
+    test('SIMPLE SYRUP still ranks after BOTH of its halves', () => {
+        const O = pineBot.config && pineBot.config.dayOrder;
+        const list = O || null;
+        const idx = n => (list ? list.indexOf(n) : -1);
+        if (!list) { // not exposed on config; assert via score instead
+            assert.ok(sc('WATER', 'passive', 0) > sc('SIMPLE SYRUP', 'passive', 0),
+                'water ' + Math.round(sc('WATER', 'passive', 0)) + ' syrup ' + Math.round(sc('SIMPLE SYRUP', 'passive', 0)));
+            assert.ok(sc('SUGAR', 'passive', 0) > sc('SIMPLE SYRUP', 'passive', 0),
+                'sugar ' + Math.round(sc('SUGAR', 'passive', 0)) + ' syrup ' + Math.round(sc('SIMPLE SYRUP', 'passive', 0)));
+            return;
+        }
+        assert.ok(idx('SIMPLE SYRUP') > idx('WATER') && idx('SIMPLE SYRUP') > idx('SUGAR'),
+            JSON.stringify({ syrup: idx('SIMPLE SYRUP'), water: idx('WATER'), sugar: idx('SUGAR') }));
     });
 
     test('OLIVE still outranks an unclaimed plan cocktail', () =>

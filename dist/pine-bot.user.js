@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.105.0
+// @version      6.106.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.105.0';
+    const SCRIPT_VERSION = '6.106.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -1589,11 +1589,35 @@
     // then cocktails. Index 0 is taken first; the bonus is large enough to
     // dominate every other term in the day, because an ORDER that competes
     // with the old weights is not an order.
+    // v6.106.0 — THE SUPER KEYS MOVE TO THE FRONT OF THE INGREDIENTS.
+    // Measured, not assumed. On 6.102.0, runs that reached hell and died there
+    // (n=26) against runs that survived into deep (n=19):
+    //     supers at entry:  65% had ZERO   vs   0% had zero
+    //     mean supers:      0.42           vs   3.26
+    //     defense at cap:   46%            vs   47%   <- NO separation
+    //     mean defense:     28.0           vs   28.2  <- NO separation
+    // Replicated on the fresh 6.104.0 rows: deaths [0,0,2,1] (50% zero),
+    // survivors [3,3,3,2] (0% zero). Time-matched against early-ending
+    // survivors so this is not just "survivors lived longer and picked more".
+    // SUPERS are what carry a run through the entrance; armour is not.
+    // TONIC is the key for TWO super lines (VODKA TONIC and GIN TONIC) and sat
+    // at rank 11 — behind every vermouth and every juice. MINT (SOUTH SIDE)
+    // sat at 10, SUGAR (MOJITO) at 6. The stated order was funding the wrong
+    // things first. Keys first, then the crafts, then the fillers.
+    // ONLY THE RANKS MOVED. The per-rank step is untouched at 11 — see the
+    // v6.88.6 note in 03-scoring: raising it to 200 made the order
+    // lexicographic and dropped supersPerRun 1.9 -> 1.1. The cocktail block
+    // below is byte-identical and keeps indices 11..17.
     const DAY_ORDER = [
-        'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH', 'WATER', 'SUGAR',
-        'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY', 'MINT', 'TONIC',
+        'TONIC', 'MINT', 'SUGAR', 'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH',
+        'BLACK VERMOUTH', 'WATER', 'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY',
         'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
-    ];   // v6.91.5 (user): "whisky sour should be in the planned cocktails".
+    ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 8, SUGAR 3).
+         // OLIVE is still the first thing after the three keys, and 6.105.0's
+         // entry-armour checkpoint (+18 from 750s, +40 from 1050s) is unchanged,
+         // so armour is still bought before the entrance — it is just no longer
+         // bought INSTEAD of the super keys.
+         // v6.91.5 (user): "whisky sour should be in the planned cocktails".
          // LAST among the cocktails on purpose — the three super lines and the
          // keyless NEGRONI keep their order, and WHISKY SOUR is the fifth slot
          // rather than a competitor for the first four. It still lands well
