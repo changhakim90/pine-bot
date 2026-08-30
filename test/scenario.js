@@ -4959,6 +4959,32 @@ if (which === 'run-cap') {
                                capDive: true, capStage: 1 });
             test('rung 1 does NOT navigate away', () => assert.strictEqual(titled, 0));
         }
+        // 7. v6.104.0 THE PANEL'S "End Run". The overlay had no way to end a
+        //    run at all, and pineBot.endRun() books the row but STOPS the bot,
+        //    which is useless to an unattended farm. killNow() latches the
+        //    early cap instead, so the whole tested ladder runs and the next
+        //    run starts by itself. Two teeth: it must REFUSE when there is no
+        //    run to end, and when there is one it must engage the dive far
+        //    below both gates.
+        T.resetCapLatch(); T.resetCapLadder();
+        test('killNow refuses when no run is in progress', () =>
+            assert.strictEqual(pineBot.killNow(), 'no run in progress'));
+        test('...and latches nothing on the way out', () =>
+            assert.strictEqual(T.capDebug().capEarly, false));
+        global.state = 'playing';
+        global.gameTime = 600;
+        T.handleScreens();                       // a run is now live
+        test('killNow engages once a run is live', () =>
+            assert.strictEqual(pineBot.killNow(), 'kill protocol engaged'));
+        {
+            global.player = { x: 200, y: 200, hp: 460, maxHp: 469, speed: 3.0, r: 7.2, ultReadyAt: 1e9 };
+            global.enemies = [{ type: 'drunk', id: 1, x: 320, y: 200, hp: 500, maxHp: 500, r: 12, speed: 8 }];
+            global.gameTime = 600;
+            let plK; for (let i = 0; i < 2; i++) plK = T.planMove();
+            test('...and the dive engages far below BOTH the proof floor and the clock cap', () =>
+                assert.strictEqual(plK.capDive, true,
+                    'gt 600 vs fromS ' + CS.fromS + ' / runCapS ' + CAP));
+        }
         done();
     }, 700);
 }

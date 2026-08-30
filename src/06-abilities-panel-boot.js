@@ -417,86 +417,204 @@
 
     // =================================================================
     // CONTROL PANEL
+    // v6.104.0 REBUILT FOR PEOPLE WHO ARE NOT ME (user: "more ux friendly
+    // for other users to start the bot, stop the bot, hide the overlay").
+    // Five controls, no jargon on the face of it, and the two destructive
+    // ones removed outright: RESET wiped the learning store on a single
+    // misclick, and DIAG/SNAP duplicated things the report already carries.
+    // Both survive as console calls (pineBot.reset(), pineBot.diagnose()).
     // =================================================================
-    let statusEl = null, infoEl = null;
+    let statusEl = null, infoEl = null, panelEl = null, restoreEl = null;
     function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+
+    const PANEL_HIDE_KEY = 'pineBotPanelHidden';
+    const mmss = s2 => {
+        const v = Math.max(0, Math.round(s2 || 0));
+        return Math.floor(v / 60) + ':' + String(v % 60).padStart(2, '0');
+    };
+
+    // v6.104.0 (user): "have the auto-kill protocol be able to be initiated
+    // from it". Latching capEarly is the whole implementation — the tested
+    // ladder (smother -> hurtPlayer at capStandS -> hard book + restart at
+    // capForceS) then runs exactly as it does for a proven-immortal build,
+    // so the run BOOKS and the farm carries on. Deliberately NOT endRun(),
+    // which books the row but also stops the bot and needs a human to
+    // restart it.
+    function killNow() {
+        if (!runActive) { setStatus('no run in progress'); return 'no run in progress'; }
+        capEarly = true;
+        setStatus('KILL PROTOCOL engaged — ending this run');
+        log('kill protocol engaged from the panel');
+        return 'kill protocol engaged';
+    }
+
+    function pbBtn(label, o) {
+        o = o || {};
+        const b = document.createElement('button');
+        b.textContent = label;
+        if (o.title) b.title = o.title;
+        b.style.cssText = [
+            'cursor:pointer', 'border:0', 'border-radius:6px', 'margin:0',
+            'padding:' + (o.pad || '6px 10px'),
+            'font:inherit', 'font-weight:700', 'letter-spacing:.2px',
+            'background:' + (o.bg || 'rgba(255,255,255,.09)'),
+            'color:' + (o.fg || '#e8e8ef'),
+            'transition:filter .12s', 'white-space:nowrap',
+            o.grow ? 'flex:1 1 0' : 'flex:0 0 auto'
+        ].join(';');
+        b.onmouseenter = () => { b.style.filter = 'brightness(1.4)'; };
+        b.onmouseleave = () => { b.style.filter = 'none'; };
+        return b;
+    }
+    function pbRow(gap) {
+        const d = document.createElement('div');
+        d.style.cssText = 'display:flex;gap:' + (gap || 5) + 'px;margin-bottom:6px';
+        return d;
+    }
+
+    function setPanelHidden(hide) {
+        if (panelEl) panelEl.style.display = hide ? 'none' : 'block';
+        if (restoreEl) restoreEl.style.display = hide ? 'block' : 'none';
+        try { localStorage.setItem(PANEL_HIDE_KEY, hide ? '1' : '0'); } catch (e) { }
+    }
 
     function buildPanel() {
         if (!document.body || document.getElementById('pineBotPanel')) return;
+
+        // The restore chip. Hiding the overlay must never be a one-way door,
+        // so this is created FIRST and lives independently of the panel.
+        restoreEl = pbBtn('🍸', { title: 'Show the Pine Bot panel', pad: '7px 9px', bg: 'rgba(16,16,22,.85)', fg: '#ffd98a' });
+        restoreEl.style.cssText += ';position:fixed;right:10px;bottom:10px;z-index:2147483647;' +
+            'box-shadow:0 3px 12px rgba(0,0,0,.4);display:none;font-size:15px';
+        restoreEl.onclick = () => setPanelHidden(false);
+        document.body.appendChild(restoreEl);
+
         const el = document.createElement('div');
+        panelEl = el;
         el.id = 'pineBotPanel';
-        // right-MIDDLE + translucent (user: the top-right spot covered the
-        // cocktail/ingredient display). Solidifies on hover for readability.
         el.style.cssText = [
             'position:fixed', 'right:10px', 'top:50%', 'transform:translateY(-50%)', 'z-index:2147483647',
-            'background:rgba(16,16,22,.55)', 'color:#eee', 'font:11px/1.45 ui-monospace,Menlo,monospace',
-            'padding:9px 10px', 'border-radius:9px', 'min-width:215px', 'opacity:.75',
+            'background:rgba(16,16,22,.62)', 'color:#eee', 'font:11px/1.45 ui-monospace,Menlo,monospace',
+            'padding:10px', 'border-radius:10px', 'width:232px', 'opacity:.8',
             'transition:opacity .15s,background .15s',
             'border:1px solid rgba(58,58,70,.6)', 'box-shadow:0 4px 18px rgba(0,0,0,.35)', 'user-select:none'
         ].join(';');
-        el.onmouseenter = () => { el.style.opacity = '1'; el.style.background = 'rgba(16,16,22,.95)'; };
-        el.onmouseleave = () => { el.style.opacity = '.75'; el.style.background = 'rgba(16,16,22,.55)'; };
-        el.innerHTML =
-            '<div style="font-weight:700;margin-bottom:5px;color:#ffd98a">🍸 Pine Bot v' + scriptTag() + '</div>' +
-            '<div style="margin-bottom:6px">' +
-            '<button id="pbStart" style="cursor:pointer">▶ Start</button> ' +
-            '<button id="pbStop" style="cursor:pointer">■ Stop</button> ' +
-            '<button id="pbDiag" style="cursor:pointer" title="Diagnostics">🔍</button> ' +
-            '<button id="pbStats" style="cursor:pointer" title="Stats report — copy &amp; paste to Claude">📊</button> ' +
-            '<button id="pbSnap" style="cursor:pointer" title="Version comparison — freeze a snapshot of this version and show every version side by side">📸</button> ' +
-            '<button id="pbReset" style="cursor:pointer" title="Reset learning (version snapshots are kept)">↺</button> ' +
-            '<button id="pbRec" style="cursor:pointer" title="Record YOUR manual play as a teaching demo — press once to start, again to stop; the digest opens ready to copy for Claude">🎥</button>' +
-            '</div>' +
-            '<div>status: <span id="pbStatus" style="color:#8fd">idle</span></div>' +
-            '<div id="pbInfo" style="margin-top:5px;color:#aab"></div>';
+        el.onmouseenter = () => { el.style.opacity = '1'; el.style.background = 'rgba(16,16,22,.96)'; };
+        el.onmouseleave = () => { el.style.opacity = '.8'; el.style.background = 'rgba(16,16,22,.62)'; };
+
+        // ── header: name + hide ──────────────────────────────────────────
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;margin-bottom:8px';
+        const title = document.createElement('div');
+        title.textContent = '🍸 Pine Bot v' + scriptTag();
+        title.style.cssText = 'font-weight:700;color:#ffd98a;flex:1 1 auto';
+        const hideBtn = pbBtn('–', { title: 'Hide this panel (a 🍸 button appears bottom-right to bring it back)', pad: '2px 8px' });
+        hideBtn.onclick = () => setPanelHidden(true);
+        head.appendChild(title); head.appendChild(hideBtn);
+        el.appendChild(head);
+
+        // ── row 1: the two controls almost everyone wants ────────────────
+        const r1 = pbRow();
+        const startBtn = pbBtn('▶ Start', { title: 'Let the bot play', grow: true, bg: 'rgba(64,170,110,.85)', fg: '#eafff2' });
+        const stopBtn = pbBtn('■ Stop', { title: 'Hand control back to you', grow: true, bg: 'rgba(190,70,70,.85)', fg: '#ffecec' });
+        startBtn.onclick = () => startBot();
+        stopBtn.onclick = () => stopBot();
+        r1.appendChild(startBtn); r1.appendChild(stopBtn);
+        el.appendChild(r1);
+
+        // ── row 2: end run / report / record ─────────────────────────────
+        const r2 = pbRow();
+        const killBtn = pbBtn('⏻ End Run', {
+            title: 'Run the auto-kill protocol now: the bot walks into the crowd, the run is scored and saved, and the next run starts automatically',
+            grow: true
+        });
+        let killArmed = 0;
+        killBtn.onclick = () => {
+            const t = Date.now();
+            if (t - killArmed > 3000) {          // two-step: one click never ends a run
+                killArmed = t;
+                killBtn.textContent = '⏻ Sure?';
+                killBtn.style.background = 'rgba(220,140,50,.9)';
+                setTimeout(() => {
+                    if (Date.now() - killArmed >= 3000) {
+                        killBtn.textContent = '⏻ End Run';
+                        killBtn.style.background = 'rgba(255,255,255,.09)';
+                    }
+                }, 3100);
+                return;
+            }
+            killArmed = 0;
+            killBtn.textContent = '⏻ End Run';
+            killBtn.style.background = 'rgba(255,255,255,.09)';
+            killNow();
+        };
+        const repBtn = pbBtn('📋', { title: 'Full report — opens ready to copy, paste it to Claude' });
+        repBtn.onclick = () => {
+            const r = safe(() => window.pineBot.report(), null);
+            showReport(r || buildStatsReport());
+        };
+        const recBtn = pbBtn('🎥', { title: 'Record YOUR manual play as a teaching demo — click once to start, again to save' });
+        recBtn.onclick = () => {
+            demoToggle();
+            const on = !!demoRec;
+            recBtn.style.background = on ? 'rgba(210,60,60,.9)' : 'rgba(255,255,255,.09)';
+            recBtn.textContent = on ? '⏺' : '🎥';
+        };
+        r2.appendChild(killBtn); r2.appendChild(repBtn); r2.appendChild(recBtn);
+        el.appendChild(r2);
+
+        // ── status + live info ───────────────────────────────────────────
+        const stWrap = document.createElement('div');
+        stWrap.style.cssText = 'border-top:1px solid rgba(255,255,255,.09);padding-top:6px';
+        statusEl = document.createElement('div');
+        statusEl.textContent = 'idle';
+        statusEl.style.cssText = 'color:#8fd;margin-bottom:4px';
+        infoEl = document.createElement('div');
+        infoEl.style.cssText = 'color:#aab';
+        stWrap.appendChild(statusEl); stWrap.appendChild(infoEl);
+        el.appendChild(stWrap);
+
         document.body.appendChild(el);
-        statusEl = el.querySelector('#pbStatus');
-        infoEl = el.querySelector('#pbInfo');
-        el.querySelector('#pbStart').onclick = startBot;
-        el.querySelector('#pbStop').onclick = () => stopBot();
-        el.querySelector('#pbDiag').onclick = () => diagnose();
-        el.querySelector('#pbStats').onclick = () => showReport(buildStatsReport());
-        el.querySelector('#pbSnap').onclick = () => { snapshotNow('manual'); showReport(versionComparison()); };
-        el.querySelector('#pbReset').onclick = resetLearn;
-        el.querySelector('#pbRec').onclick = demoToggle;
+        try { if (localStorage.getItem(PANEL_HIDE_KEY) === '1') setPanelHidden(true); } catch (e) { }
         setInterval(demoTick, 160);
 
         setInterval(() => {
             if (!infoEl) return;
             const st = G.state;
             const p = lastPlan;
-            const hidden = document.hidden === true;
+            const gt = safe(() => gameTime, null);
             const vs = (learn.versions || {})[scriptTag()];
-            // v6.88.0 AUDIT S1. This was innerHTML. `lastAction` is built in
-            // clickEl from the clicked element's textContent — and the bot's
-            // stuck-breaker clicks by TEXT across div/span/li, so a leaderboard
-            // row carrying another player's display name can reach this line.
-            // Concatenated into innerHTML on a 400 ms timer, a crafted name
-            // executes in the game's origin. The static chrome is still markup;
-            // every value that comes from the page goes in as a text node.
-            const rows = [
-                'tab: ' + TAB_ID + '   runs(all tabs): ' + learn.runs +
-                    (vs && vs.n ? '   this ver: ' + vs.n + ' runs, best ' + Math.round(vs.bestT / 60) + 'm' : ''),
-                hidden ? '\u26a0 background tab — game frozen by the browser; keep this window visible' : null,
-                'state: ' + (st == null ? '(unreadable)' : st),
-                'move: ' + moveSource,
-                'build: ' + (primaryCocktail || '\u2014'),
-                'picks: ' + runPicks.length,
-                'model: CEM g' + learn.cem.gen + ' (' + learn.cem.batch.length + '/' + CONFIG.learning.batchSize + ')' +
-                    (championRun ? ' \ud83d\udc51' : '') +
-                    (lastDeathCause ? '   died\u2192' + lastDeathCause : '') +
-                    (learn.hof.length && isFinite(learn.hof[0].r) ? '   best ' + learn.hof[0].r.toFixed(2) : '') +
-                    (learn.genHistory.length >= 2
-                        ? (learn.genHistory[learn.genHistory.length - 1] > learn.genHistory[learn.genHistory.length - 2] ? ' \u2191' : ' \u2193')
-                        : ''),
-                p ? p.diag : null,
-                'last: ' + String(lastAction).slice(0, 34)
-            ];
+            // v6.88.0 AUDIT S1 STILL APPLIES: `lastAction` is built from a
+            // clicked element's textContent, and the stuck-breaker clicks by
+            // TEXT, so a leaderboard row carrying another player's display
+            // name can reach this line. Every page-derived value goes in as a
+            // TEXT NODE — never innerHTML, never string-concatenated markup.
+            const rows = [];
+            if (document.hidden === true) {
+                rows.push(['⚠ background tab — the game is frozen here; keep this window visible', '#f9a']);
+            }
+            if (st === 'playing' && typeof gt === 'number') {
+                rows.push([(hellDetected ? '🔥 hell  ' : '☀ day  ') + mmss(gt), '#cfe']);
+            } else {
+                rows.push([String(st == null ? 'waiting…' : st), '#cfe']);
+            }
+            rows.push([(primaryCocktail || 'no build yet') + '  ·  ' + runPicks.length + ' picks' +
+                (supersThisRun ? '  ·  ' + supersThisRun + ' supers' : ''), '#aab']);
+            // the ladder, but only while it is actually doing something
+            if (p && p.capStage) {
+                rows.push(['⚡ KILL PROTOCOL — stage ' + p.capStage +
+                    (capFirstGt != null && typeof gt === 'number' ? '  ·  ' + Math.round(gt - capFirstGt) + 's' : ''), '#fc8']);
+            }
+            rows.push([learn.runs + ' runs total' +
+                (vs && vs.n ? '  ·  this build ' + vs.n + ', best ' + Math.round(vs.bestT / 60) + 'm' : ''), '#889']);
+            rows.push(['gen ' + learn.cem.gen + ' (' + learn.cem.batch.length + '/' + CONFIG.learning.batchSize + ')' +
+                (championRun ? ' 👑' : '') + (lastDeathCause ? '  died→' + lastDeathCause : ''), '#778']);
+            if (p && p.diag) rows.push([String(p.diag), '#667']);
             infoEl.textContent = '';
             for (const r of rows) {
-                if (r == null) continue;
                 const line = document.createElement('div');
-                line.textContent = r;
+                line.textContent = r[0];
+                line.style.color = r[1];
                 infoEl.appendChild(line);
             }
         }, 400);
@@ -904,6 +1022,12 @@
         try {
             window.pineBot = {
                 start: startBot, stop: stopBot, diagnose, reset: resetLearn,
+                // v6.104.0: the panel's ⏻ End Run, callable from the console.
+                // Latches the early cap so the tested ladder ends the run and
+                // the farm restarts; endRun() below books but STOPS the bot.
+                killNow,
+                // v6.104.0: show/hide the overlay without touching the mouse
+                panel: on => { setPanelHidden(on === false); return on === false ? 'hidden' : 'shown'; },
                 config: CONFIG, learn: () => learn, plan: () => lastPlan, state: () => G.state,
                 version: SCRIPT_VERSION, tag: scriptTag(),
                 // VERSION SNAPSHOTS
