@@ -256,7 +256,17 @@
         // ult is retried at double cadence — every passout cleared early is
         // loot, XP, and upgrade potential compounding for the whole run.
         const gtU = typeof G.gameTime === 'number' ? G.gameTime : 0;
-        let ultGate = (gtU < 1200 && !hellDetected) ? A.ultCooldownMs * 0.6 : A.ultCooldownMs;
+        // v6.111.0: the day retry drops to a flat ultDayRetryMs (1500) rather
+        // than 0.6x the 2500 ms base (1500 — the same number, now named and
+        // configurable). Stated plainly because this session nearly shipped a
+        // much bigger change here: the retry gate is NOT the ult lever. The
+        // game's own cooldown is ULT_CD 80 s x ultCdMul, so tightening the
+        // retry only shaves the lag between that cooldown expiring and the bot
+        // noticing — worth about 1% of casts. The levers are ult LEVEL (window
+        // length) and ultCdMul, and both are bought at the level-up screen.
+        let ultGate = (gtU < 1200 && !hellDetected)
+            ? (A.ultDayRetryMs != null ? A.ultDayRetryMs : A.ultCooldownMs * 0.6)
+            : A.ultCooldownMs;
         if (poClose) ultGate = Math.min(ultGate, 900);
         // v6.88.2 ULT CHAIN — the deep-hell engine, measured off manual demo #5
         // (178:19 -> 244:04, 9001 samples): hpMedian 100 with 234 enemies inside
@@ -1111,11 +1121,21 @@
                     // v6.93.0: the CEM search box, so `runaway-guard` can test
                     // the SPACE rather than only the optimiser's position in it.
                     tunable: () => JSON.parse(JSON.stringify(TUNABLE)),
+                    // v6.111.0: the one-shot migration table, so store-guard can
+                    // assert it is emptied once its migration has run.
+                    tunablePrior: () => JSON.parse(JSON.stringify(TUNABLE_PRIOR)),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
                     getLearn: () => learn, loadLearn, buildPhaseRow, appendAuditRow, refitCem, recenterSearch, demoSave: () => demoSave(),
+                    // v6.111.0: the ult-economy accumulators (invulnAllTicks,
+                    // ultCasts, ultCdMulSeen, laneInTicks) are per-run and are
+                    // cleared in startRun. Testing them without this hook means
+                    // asserting against whatever the previous scenario left
+                    // behind, which is how a per-run counter quietly becomes a
+                    // per-session one.
+                    startRun,
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     // v6.109.0: drive the RECORDER, not just the digest. The
                     // demo-digest scenario feeds pre-built samples through
@@ -1590,9 +1610,13 @@
                     }
                 } catch (e) { }
                 return {
-                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: ALL 27 CEM dims. `atEdge` = the mean is against a bound, so the BOX is wrong, not the value. `converged` = sigma at the floor, no exploration left. ult: compare `inv` in the phase rows against the manual joe demo\'s 0.326.',
+                    note: 'tags: read `weight` WITH `n` — a big weight at n<20 is noise. `boss`/`hell` are the same estimate on the boss-share and hell features. enemy: `mul` is stored, `applied` is what the danger field actually used (band ' + CONFIG.learning.enemyMulFloor + '-' + CONFIG.learning.enemyMulCeil + ', needs ' + CONFIG.learning.enemyMulMinN + ' sole hits). params: ALL CEM dims. `atEdge` = the mean is against a bound, so the BOX is wrong, not the value. `converged` = sigma at the floor, no exploration left — and note that until v6.111.0 widening a box did NOT clear that state, so a dim could sit atEdge+converged across version bumps forever. `reopen` names the dims this build re-opened. ult: compare `invAll` (NOT `inv`) against a demo\'s invulnShare — `inv` is ult windows only, the demo ORs in player.invuln hit frames, and reading one against the other produced a 3.9x gap that does not exist.',
                     gen: safe(() => learn.cem.gen, null),
                     runs: safe(() => learn.runs, null),
+                    // v6.111.0: which dimensions the box-change migration
+                    // re-opened, and when. Silent until a box actually moves.
+                    reopen: safe(() => learn.cem.lastReopen, null),
+                    reopens: safe(() => learn.cem.reopens, 0),
                     tags, enemy, params,
                     anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
                 };

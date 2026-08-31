@@ -111,6 +111,8 @@
         capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
+        invulnAllTicks = 0; ultCasts = 0; ultLastReadyAt = null; ultCdMulSeen = null;   // v6.111.0
+        laneInTicks = 0; laneEscTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -179,15 +181,32 @@
             spdLo: spdWorst,
             enMax: satPeakEn || null,
             why: capFiredThisRun ? (capLastResetReason || null) : null,
-            // v6.109.0 THE ULT-UPTIME ECONOMY. Compare `inv` directly against
-            // the manual joe demo's 0.326 — that comparison is the whole
-            // point of the field, and it was impossible until now.
-            //   inv    = share of planner ticks spent invulnerable
+            // v6.109.0 THE ULT-UPTIME ECONOMY, with v6.111.0's correction.
+            //
+            // 6.109.0 shipped `inv` so it could be compared against the manual
+            // joe demo's 0.326. It should not have been: the demo's number ORs
+            // in `player.invuln` (the 38-frame post-hit window) and `inv` does
+            // not, so the "3.9x ult-uptime gap" read off that comparison at
+            // n=1250 was a units error. Joe's ult ceiling is 8/80 = 10% at lv1
+            // and 12/80 = 15% at lv6; a measured median of 0.103 is a bot
+            // already firing near cooldown, not one hoarding its ult.
+            //
+            //   inv    = ULT invulnerability only        <- compare to nothing
+            //   invAll = ult windows OR hit frames       <- compare to demo `invulnShare`
+            //   casts  = ACCEPTED casts (ultReadyAt moved), not button presses
+            //   cdMul  = observed player.ultCdMul — the real lever on uptime
             //   ultMax = highest ult level reached (lv6 wipes fields; lv1-3 chip)
             //   ult6At = gt the ult was maxed, null if never
+            //   laneIn/laneEsc = ticks inside a live lane band, and ticks the
+            //     v6.111.0 perpendicular override actually steered
             inv: planTicks ? +(invulnTicks / planTicks).toFixed(3) : null,
+            invAll: planTicks ? +(invulnAllTicks / planTicks).toFixed(3) : null,
+            casts: ultCasts || 0,
+            cdMul: ultCdMulSeen == null ? null : +ultCdMulSeen.toFixed(3),
             ultMax: ultMaxLv || null,
-            ult6At: ultLv6At == null ? null : Math.round(ultLv6At)
+            ult6At: ultLv6At == null ? null : Math.round(ultLv6At),
+            laneIn: laneInTicks || 0,
+            laneEsc: laneEscTicks || 0
         };
     }
 

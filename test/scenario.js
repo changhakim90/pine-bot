@@ -111,16 +111,40 @@ if (which === 'scoring') {
     // picker cannot fix. ult-early stays as explicit margin for the user's
     // doctrine, asserted as the tag and the delta it adds under lv3.)
     let uLow;
-    test('under lv3, ULTIMATE UP carries ult-early AND outranks OLIVE', () => {
+    test('under lv3, ULTIMATE UP carries the ult spine AND outranks OLIVE', () => {
         uLow = ultC();
-        assert.ok(/ult-early/.test(uLow.why) && uLow.score > oliveC(),
+        assert.ok(/ult-spine-lv/.test(uLow.why) && uLow.score > oliveC(),
             Math.round(uLow.score) + ' vs OLIVE ' + Math.round(oliveC()) + ' | ' + uLow.why);
     });
+    // v6.111.0 REVERSED, deliberately. The old assertion here was "at lv3 the
+    // ult-early margin is WITHDRAWN" — and withdrawing it at lv3 is the thing
+    // the pat demos say is wrong. Demo 2 vs demo 1, same character and same
+    // run length: lv6 by 14:52 wiped million-HP passout fields outright while
+    // lv5-at-18:17's lv1-3 casts chipped fields of 3 down to 1. The premium
+    // now decays across lv3-5 instead of falling off a cliff.
     global.player = Object.assign({}, global.player, { ultLevel: 3 });
-    test('at lv3 the ult-early margin is withdrawn', () => {
+    test('at lv3 the ult premium DECAYS but survives', () => {
         const u = ultC();
-        assert.ok(!/ult-early/.test(u.why) && uLow.score - u.score >= 190,
-            'delta ' + Math.round(uLow.score - u.score) + ' | ' + u.why);
+        const bonus = pineBot.config.abilities.ultSpineByLv[3];
+        assert.ok(/ult-spine-lv3/.test(u.why) && u.score < uLow.score && bonus > 0,
+            'delta ' + Math.round(uLow.score - u.score) + ' bonus ' + bonus + ' | ' + u.why);
+    });
+    test('the premium is still paying at lv5, and is gone at lv6', () => {
+        global.player = Object.assign({}, global.player, { ultLevel: 5 });
+        const u5 = ultC();
+        global.player = Object.assign({}, global.player, { ultLevel: 6 });
+        const u6 = ultC();
+        assert.ok(/ult-spine-lv5/.test(u5.why) && !/ult-spine/.test(u6.why) && u5.score > u6.score,
+            'lv5 ' + Math.round(u5.score) + ' | lv6 ' + Math.round(u6.score) + ' | ' + u6.why);
+    });
+    // The literal invariant, so a future edit to ultSpineByLv cannot make the
+    // assertions above move with it (the toothless-test failure mode this
+    // project has now hit four times: every threshold read from the config it
+    // is supposed to be constraining).
+    test('the ult premium schedule reaches lv5 and stops at lv6', () => {
+        const s = pineBot.config.abilities.ultSpineByLv;
+        assert.ok(s.length === 6 && s[3] > 0 && s[4] > 0 && s[5] > 0 && s[5] < s[0],
+            JSON.stringify(s));
     });
     global.player = Object.assign({}, global.player, { ultLevel: 1 });
     const pool = [{ n: 'GINGER BEER', type: 'passive', lv: 0, maxlv: 6 }, { n: 'OLIVE', type: 'passive', lv: 3, maxlv: 6 }];
@@ -4154,7 +4178,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -5271,6 +5295,24 @@ if (which === 'store-guard') {
     const T = pineBot.test;
     // 1. THE 2026-08-29 FAILURE, REPLAYED — first WITHOUT the backup (the
     //    silent-reset baseline), then WITH it (the heal). Same corrupt blob.
+    // v6.111.0 TUNABLE_PRIOR MAINTENANCE. The table exists to give a store
+    // written before the box-change re-open the boxes it was actually trained
+    // under, and it is needed exactly once. An entry left in it after its
+    // migration has run re-opens that dimension on EVERY load — a permanent
+    // 25% sigma and a search that can never converge, which would look in the
+    // data exactly like the flat median this version is trying to break.
+    // So: every key must name a dim whose box HAS moved, i.e. must differ from
+    // the live box. When the next version bump empties the table this passes
+    // vacuously; if it is emptied and a box is widened without seeding, the
+    // box-reopen scenario goes red instead. One of the two always catches it.
+    test('every TUNABLE_PRIOR entry names a box that actually moved', () => {
+        const prior = T.tunablePrior(), live = T.tunable();
+        for (const k of Object.keys(prior)) {
+            assert.ok(live[k], 'TUNABLE_PRIOR names ' + k + ', which is not a TUNABLE dimension');
+            assert.ok(prior[k].min !== live[k].min || prior[k].max !== live[k].max,
+                k + ' is in TUNABLE_PRIOR but its box is unchanged — this re-opens the dim on every single load');
+        }
+    });
     store.pineBotUCB_v5_joe = '{CORRUPT';
     delete store.pineBotUCB_v5_joe__bak;
     test('a corrupt primary with no backup still resets (the old world)', () =>
@@ -6395,6 +6437,376 @@ if (which === 'stall-escape') {
         T.planMove();
         assert.strictEqual(T.capState().capEarly, false, 'armed before minGtS');
         global.gameTime = 4600;
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.111.0 LANE ESCAPE — the 21% killer, and why the parameter was innocent.
+//
+// At n=1250 `threat.lineWeight` sat at its box MINIMUM (2.107, converged)
+// while `line` took 268 of 1247 deaths. Two defects behind that, both
+// asserted here:
+//   (1) ONE weight priced two hazards. Unarmed telegraph lanes are numerous
+//       and paint 126 px stripes across the arena; armed lanes are rare and
+//       lethal. Minimising the sum minimises the telegraph and drags the
+//       armed term down with it. Now two weights, two boxes.
+//   (2) `laneUrgent` fired the DASH, and the dash takes its direction from
+//       plan.dx/dy — the argmax of the field the pinned weight had flattened.
+//       The exit from a lane is perpendicular geometry, not a preference, so
+//       it is now an override above hunt/park/seat/harvest.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'lane-escape') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900, hell: false } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+
+    // A horizontal charge lane through the middle of the field, with the
+    // player sitting just ABOVE the ray so the exit is unambiguously -y.
+    const lane = (armed, ang) => ({ x: 300, y: 300, ang: ang == null ? 0 : ang, armed: armed, dmg: 60, life: 200 });
+    const put = (px, py, lines) => {
+        global.player = Object.assign({}, global.player, { x: px, y: py, hp: 100, maxHp: 100 });
+        global.roadLines = lines;
+        global.enemies = []; global.eprojectiles = []; global.dropMarks = []; global.pickups = [];
+    };
+
+    // --- (1) THE SPLIT.
+    test('armed and telegraph lanes are priced by DIFFERENT weights', () => {
+        assert.ok(C.threat.lineArmedWeight != null, 'lineArmedWeight missing from config');
+        assert.notStrictEqual(C.threat.lineArmedWeight, C.threat.lineWeight,
+            'both halves still share one number');
+    });
+    test('...and both are separately searchable, with the armed floor above the telegraph floor', () => {
+        const t = T.tunable();
+        assert.ok(t['threat.lineArmedWeight'], 'lineArmedWeight is not a CEM dimension');
+        assert.ok(t['threat.lineArmedWeight'].min > t['threat.lineWeight'].min,
+            'the armed weight can be driven as low as the telegraph weight — the split buys nothing');
+    });
+    // The literal invariant: the telegraph box must be allowed to reach zero
+    // (that IS the policy the search has been asking for) while the armed box
+    // must not. Written as literals so editing the boxes cannot move the
+    // assertions along with them.
+    test('the telegraph box reaches 0; the armed box has a hard floor', () => {
+        const t = T.tunable();
+        assert.strictEqual(t['threat.lineWeight'].min, 0,
+            'telegraph floor is ' + t['threat.lineWeight'].min + ', not 0');
+        assert.ok(t['threat.lineArmedWeight'].min >= 3,
+            'armed floor ' + t['threat.lineArmedWeight'].min + ' < 3');
+    });
+
+    // --- (2) THE OVERRIDE.
+    //
+    // On an EMPTY field the danger term alone already walks the bot out of a
+    // lane, so an isolated lane proves nothing about the override — the first
+    // draft of these tests asserted exactly that and stayed green with the
+    // override deleted. The override is load-bearing only where something
+    // else is outbidding the lane, and that is the ordinary case: the seat,
+    // the hunt, the harvest walk and the trek all bypass the danger field
+    // entirely, and a crowd on the exit side makes the field itself refuse
+    // the door. Every test below puts a competing bid on the board.
+    test('standing in an ARMED lane steers perpendicular, out of the band', () => {
+        put(300, 280, [lane(true)]);          // 20 px above a horizontal ray
+        // a wall of bodies sitting ON the exit, so the field would rather
+        // stay in the lane than walk through them
+        global.enemies = [220, 260, 300, 340, 380].map(x => ({ type: 'drunk', x: x, y: 215, r: 14, hp: 400, speed: 1.2, moving: true }));
+        const p = T.planMove();
+        assert.ok(p.laneIn >= 1, 'the lane was not seen at all (laneIn ' + p.laneIn + ')');
+        assert.ok(p.laneEsc, 'no escape vector produced');
+        assert.ok(p.dy < -0.5, 'heading dy ' + p.dy + ' — a crowd on the exit outbid a live charge lane');
+        assert.ok(Math.abs(p.dx) < 0.5, 'heading dx ' + p.dx + ' — running ALONG the lane');
+    });
+    test('...and from the other side it steers the other way', () => {
+        put(300, 320, [lane(true)]);          // 20 px BELOW the same ray
+        global.enemies = [220, 260, 300, 340, 380].map(x => ({ type: 'drunk', x: x, y: 385, r: 14, hp: 400, speed: 1.2, moving: true }));
+        const p = T.planMove();
+        assert.ok(p.dy > 0.5, 'heading dy ' + p.dy + ' — the sign of the exit is not tracking which side we are on');
+    });
+    // The override must outrank the seat. A parked bot sets vx=vy=0 and takes
+    // the charge standing still; `lineOnCorner` vetoes the corner only when
+    // the lane covers the corner itself, and the harvest, hunt and trek legs
+    // check for lanes not at all.
+    test('an armed lane outranks the harvest walk', () => {
+        put(300, 280, [lane(true)]);
+        // a passout pile straight along the lane: the harvest leg would walk
+        // the bot down the middle of the charge. Passouts are ENEMIES with
+        // type 'passout' and fallT 0 — a separate `passouts` array is not a
+        // thing the gatherer reads, and populating one is how this test spent
+        // its first draft asserting against an empty field.
+        global.enemies = [
+            { type: 'passout', x: 500, y: 282, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 91 },
+            { type: 'passout', x: 540, y: 284, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 92 },
+            { type: 'passout', x: 520, y: 300, r: 20, fallT: 0, hp: 40, maxHp: 40, id: 93 }
+        ];
+        const p = T.planMove();
+        assert.ok(p.poField >= 3, 'the pile was not gathered (poField ' + p.poField + ')');
+        assert.ok(p.laneEsc, 'no escape vector produced');
+        assert.ok(p.dy < -0.5 && Math.abs(p.dx) < 0.5,
+            'heading (' + p.dx.toFixed(2) + ',' + p.dy.toFixed(2) + ') — a passout pull is steering through a live charge');
+    });
+    // The whole point of the override: it must not depend on the weight the
+    // search flattened. Drive lineWeight AND lineArmedWeight to their floors
+    // and the exit must be identical, because it is geometry.
+    // NOTE: an earlier draft of this test called `setCemMean({...})` with an
+    // object. The hook's signature is (k, v), so it wrote one garbage key and
+    // changed nothing — the test passed while asserting nothing at all. Use
+    // applyParams, which is what the live sampler uses, and prove the weights
+    // actually landed before asserting on the heading.
+    test('the exit survives BOTH lane weights at their box floor', () => {
+        const t = T.tunable();
+        T.applyParams({ 'threat.lineWeight': t['threat.lineWeight'].min,
+                        'threat.lineArmedWeight': t['threat.lineArmedWeight'].min });
+        assert.strictEqual(C.threat.lineWeight, t['threat.lineWeight'].min, 'the params did not apply');
+        put(300, 280, [lane(true)]);
+        const p = T.planMove();
+        assert.ok(p.dy < -0.5,
+            'dy ' + p.dy + ' — the escape is riding on the danger field, which is what pinned it in the first place');
+        pineBot.test.applyDefaults();
+    });
+    // --- (3) THE DANGER FIELD, which the override does not replace.
+    // Standing OUTSIDE the band there is no override; only the field steers.
+    // Zero the telegraph weight and raise the armed weight: an armed lane must
+    // still push the bot away. Under the old single scalar, lineWeight = 0 zeroed
+    // BOTH halves and the lane became invisible — which is the state the search
+    // spent hundreds of generations driving toward.
+    test('with the telegraph weight at ZERO an armed lane still repels', () => {
+        const t = T.tunable();
+        T.applyParams({ 'threat.lineWeight': 0, 'threat.lineArmedWeight': t['threat.lineArmedWeight'].max });
+        put(300, 300 - 85, [lane(true)]);      // perp 85 > 63+pad: outside the band, no override
+        const p = T.planMove();
+        assert.strictEqual(p.laneIn, 0, 'the override fired — this test is meant to isolate the FIELD');
+        assert.ok(p.dy < -0.2,
+            'dy ' + p.dy + ' — a live charge lane is invisible whenever the telegraph weight is low, which is exactly the 21%');
+        pineBot.test.applyDefaults();
+    });
+    test('...and the telegraph weight still steers telegraphs on its own', () => {
+        const t = T.tunable();
+        const headingAt = w => {
+            T.applyParams({ 'threat.lineWeight': w, 'threat.lineArmedWeight': t['threat.lineArmedWeight'].min });
+            put(300, 300 - 85, [Object.assign(lane(false), { life: 200 })]);
+            return T.planMove().dy;
+        };
+        const cold = headingAt(0), hot = headingAt(t['threat.lineWeight'].max);
+        assert.ok(hot < cold - 0.05,
+            'telegraph avoidance ' + hot.toFixed(2) + ' at max vs ' + cold.toFixed(2) + ' at 0 — the weight does nothing');
+        pineBot.test.applyDefaults();
+    });
+    test('a lane the player is CLEAR of triggers nothing', () => {
+        pineBot.test.applyDefaults();
+        put(300, 30, [lane(true)]);           // 270 px away: far outside 63+pad
+        const p = T.planMove();
+        assert.strictEqual(p.laneIn, 0, 'laneIn ' + p.laneIn + ' — a distant lane is being treated as an escape');
+        assert.strictEqual(p.laneEsc, null, 'escape vector produced for a lane nowhere near us');
+    });
+    // A thrower's windup pushes a synthetic segment that ENDS at the player,
+    // so lineCost reports a zero-distance hit on it every tick (the 6.89.13
+    // regression that disabled the corner for versions). It has no `ang` and
+    // must never steer.
+    // Exposure has to ACCUMULATE, or the phase row's laneIn/laneEsc are a
+    // pair of permanent zeros that no report can distinguish from "the bot
+    // never stood in a lane" — the single most important thing this version
+    // needs to be able to read back.
+    test('lane exposure and escapes accumulate into the phase row', () => {
+        T.startRun();
+        put(300, 280, [lane(true)]);
+        assert.strictEqual(T.phaseRow().laneIn, 0, 'the counter did not start clean');
+        for (let i = 0; i < 6; i++) T.planMove();
+        const r = T.phaseRow();
+        assert.ok(r.laneIn >= 6, 'laneIn ' + r.laneIn + ' after 6 ticks inside a live lane');
+        assert.ok(r.laneEsc >= 6, 'laneEsc ' + r.laneEsc + ' — exposure is counted but the override is not');
+        put(300, 30, [lane(true)]);           // step well clear
+        const before = T.phaseRow().laneIn;
+        for (let i = 0; i < 4; i++) T.planMove();
+        assert.strictEqual(T.phaseRow().laneIn, before, 'laneIn climbing while clear of every lane');
+    });
+    test('a synthetic thrower line never steers the override', () => {
+        put(300, 300, []);
+        global.enemies = [{ type: 'thrower', x: 500, y: 300, r: 14, hp: 900, windup: true, telegraph: true }];
+        const p = T.planMove();
+        assert.strictEqual(p.laneEsc, null, 'a thrower windup produced a lane escape vector');
+    });
+    // Both perpendiculars leave the lane; only one leaves the arena. Pinned
+    // against the top edge, the exit must flip rather than walk into the wall.
+    test('against a wall, the exit takes the other side of the lane', () => {
+        put(300, C.field.margin + 2, [Object.assign(lane(true), { y: C.field.margin + 20 })]);
+        const p = T.planMove();
+        assert.ok(p.dy > 0, 'dy ' + p.dy + ' — escaping into the wall it is already pinned against');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.111.0 CEM BOX RE-OPEN — why widening a box was a no-op for 18 versions.
+//
+// loadLearn has claimed since v6.93.0 that a widened bound lets the learner
+// "walk into" the new territory. It re-floors sigma to `range * sigmaFloor`,
+// and sigmaFloor IS the converged state. So a widened box moved the wall and
+// left the mean welded to the old corner with 5% sigma — which is precisely
+// the state the n=1250 report showed for the two dims this build widens.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'box-reopen') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+    pineBot.stop();
+    const T = pineBot.test, C = pineBot.config, L = C.learning;
+
+    const KEY = 'threat.lineWeight';
+    const box = T.tunable()[KEY];
+    const range = box.max - box.min;
+
+    // --- (1) The migration itself, on the real store shape.
+    test('a pre-6.111 store re-opens exactly the dims whose box moved', () => {
+        const lr = T.getLearn();
+        assert.ok(lr.cem.lastReopen, 'no re-open was recorded on a store with no box record');
+        const dims = lr.cem.lastReopen.dims.join(' ');
+        assert.ok(/threat\.lineWeight/.test(dims), 'lineWeight did not re-open: ' + dims);
+        assert.ok(/hellCautionMul/.test(dims), 'hellCautionMul did not re-open: ' + dims);
+    });
+    test('...and the re-opened sigma is exploration, not the floor', () => {
+        const s = T.getLearn().cem.sigma[KEY];
+        assert.ok(s > range * L.sigmaFloor * 4,
+            'sigma ' + s.toFixed(3) + ' is still ~the floor (' + (range * L.sigmaFloor).toFixed(3) +
+            ') — the box widened and the search cannot reach the new room');
+        assert.ok(Math.abs(s - range * L.sigmaInit) < 1e-6,
+            'sigma ' + s.toFixed(3) + ' != sigmaInit * range ' + (range * L.sigmaInit).toFixed(3));
+    });
+    // The mean is KEPT on purpose. A mean at a bound is evidence about
+    // DIRECTION — the search spent generations pushing that way and ran out
+    // of room. Re-centring would throw exactly that away, which is what
+    // separates this from recenterSearch.
+    test('the re-open keeps the mean — direction is the evidence', () => {
+        const lr = T.getLearn();
+        const m = lr.cem.mean[KEY];
+        assert.ok(isFinite(m) && m >= box.min && m <= box.max, 'mean ' + m + ' outside ' + JSON.stringify(box));
+    });
+    // Surgical, not a restart: dims whose box did NOT move keep their tuning.
+    test('untouched dimensions are NOT re-opened', () => {
+        const lr = T.getLearn();
+        const dims = lr.cem.lastReopen.dims.join(' ');
+        assert.ok(!/movement\.smoothing/.test(dims),
+            'smoothing re-opened without its box changing — this is a full restart wearing a disguise');
+        assert.ok(lr.cem.lastReopen.dims.length < Object.keys(T.tunable()).length / 2,
+            're-opened ' + lr.cem.lastReopen.dims.length + ' dims — that is a restart, not a migration');
+    });
+    // --- (2) Idempotence. An entry left in TUNABLE_PRIOR after its migration
+    // has run would re-open that dim on EVERY load: a permanent 25% sigma and
+    // a search that can never converge. Once the box is recorded, a second
+    // load must be silent.
+    test('a store that has already recorded the current boxes does not re-open again', () => {
+        const first = T.getLearn();
+        const saved = JSON.parse(JSON.stringify(first.cem.box));
+        const reloaded = T.loadLearn();
+        const before = first.cem.reopens || 0;
+        assert.ok(reloaded.cem.box, 'box record was not persisted');
+        assert.deepStrictEqual(reloaded.cem.box[KEY], saved[KEY], 'the recorded box drifted between loads');
+        assert.ok((reloaded.cem.reopens || 0) <= before + 1,
+            're-open count climbing on every load (' + before + ' -> ' + reloaded.cem.reopens + ')');
+    });
+    // --- (3) The boxes this build actually widened, as literals. If a future
+    // version narrows one back without emptying TUNABLE_PRIOR, this goes red.
+    test('the three pinned dimensions have room past where they were pinned', () => {
+        const t = T.tunable();
+        assert.ok(t['movement.hellCautionMul'].max > 2.2,
+            'hellCautionMul ceiling ' + t['movement.hellCautionMul'].max + ' — still at the value the mean was welded to');
+        assert.ok(t['movement.bossEngageValue'].min < 10,
+            'bossEngageValue floor ' + t['movement.bossEngageValue'].min + ' — still above the pinned mean of 10.75');
+        assert.strictEqual(t['threat.lineWeight'].min, 0,
+            'lineWeight floor ' + t['threat.lineWeight'].min + ' — the search asked to go below 2 and still cannot');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.111.0 ULT ECONOMY — and the retraction that shaped it.
+//
+// The n=1250 read of "bot inv 0.103 vs human 0.326 = a 3.9x ult-uptime gap"
+// was a units error: the demo recorder ORs `player.invuln` (38-frame hit
+// window) into its share and the phase row did not. Joe's ult ceiling is
+// 8/80 = 10% at lv1 and 12/80 = 15% at lv6, so 0.103 is a bot already firing
+// near cooldown. These tests pin the corrected instrument and the two levers
+// that survive it: ult LEVEL (window length) and ultCdMul (cooldown).
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'ult-economy') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 700, hell: false } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+
+    global.enemies = []; global.eprojectiles = []; global.dropMarks = []; global.pickups = []; global.roadLines = [];
+
+    test('inv and invAll are DIFFERENT instruments, and only invAll matches the demo', () => {
+        T.startRun();
+        // no invulnerability of any kind
+        global.player = Object.assign({}, global.player, { x: 300, y: 300, hp: 100, maxHp: 100, invuln: 0, ultUntil: 0, ultSpiralUntil: 0 });
+        for (let i = 0; i < 10; i++) T.planMove();
+        // now hit frames ONLY — what a human soaking damage in a corner logs,
+        // and what the demo's 0.326 is mostly made of
+        global.player = Object.assign({}, global.player, { invuln: 30 });
+        for (let i = 0; i < 10; i++) T.planMove();
+        const r = T.phaseRow();
+        assert.ok(r.invAll > r.inv,
+            'invAll ' + r.invAll + ' vs inv ' + r.inv + ' — hit frames are not being counted, so the demo comparison is still illegal');
+        assert.ok(r.inv < 0.05,
+            'inv ' + r.inv + ' — hit frames leaked into the ULT-only share');
+    });
+    test('accepted casts are counted, not button presses', () => {
+        T.startRun();
+        global.player = Object.assign({}, global.player, { x: 300, y: 300, hp: 100, maxHp: 100, invuln: 0, ultReadyAt: 100, ultCdMul: 0.6667 });
+        T.planMove();
+        for (let i = 0; i < 5; i++) T.planMove();      // no cooldown movement = no cast
+        assert.strictEqual(T.phaseRow().casts, 0, 'rejected calls counted as casts');
+        global.player = Object.assign({}, global.player, { ultReadyAt: 180 });   // the game accepted one
+        T.planMove();
+        assert.strictEqual(T.phaseRow().casts, 1, 'an accepted cast was not counted');
+    });
+    test('ultCdMul is reported — the lever the deep-hell model named and nothing ever showed', () => {
+        const cd = T.phaseRow().cdMul;
+        assert.ok(cd != null && Math.abs(cd - 0.6667) < 0.001, 'cdMul ' + cd);
+        // and it must be the LIVE value, not a config constant standing in
+        global.player = Object.assign({}, global.player, { ultCdMul: 0.5 });
+        T.planMove();
+        assert.ok(Math.abs(T.phaseRow().cdMul - 0.5) < 0.001,
+            'cdMul ' + T.phaseRow().cdMul + ' did not follow the live stat');
+    });
+    // SPEND THE WINDOW. `ultInvuln` has relaxed `caution` by 0.35 since
+    // 6.86.1, which only ever made the bot less afraid — it never made it go
+    // anywhere, and a window nothing is collected in is a window wasted.
+    // Gated on ultInvulnSafe (>= ultInvulnCommitS left), because committing to
+    // a pull in the last half-second of pat's 2.8 s window is how a window
+    // becomes a death.
+    test('a committed ult window raises the farm pull; a lapsing one does not', () => {
+        global.player = Object.assign({}, global.player, { x: 300, y: 300, hp: 100, maxHp: 100, invuln: 0, ultUntil: 0 });
+        const cold = T.planMove().dayFarmMul;
+        global.player = Object.assign({}, global.player, { ultUntil: global.gameTime + 6 });
+        const hot = T.planMove().dayFarmMul;
+        global.player = Object.assign({}, global.player, { ultUntil: global.gameTime + 0.3 });   // about to lapse
+        const lapsing = T.planMove().dayFarmMul;
+        assert.ok(hot > cold * 1.2, 'farm pull ' + hot + ' vs ' + cold + ' — the window buys no aggression');
+        assert.ok(Math.abs(lapsing - cold) < 1e-6,
+            'lapsing window ' + lapsing + ' vs idle ' + cold + ' — committing inside the last half second');
+        global.player = Object.assign({}, global.player, { ultUntil: 0 });
+    });
+    // Every one of these is a PER-RUN accumulator. A counter that survives
+    // startRun turns a phase row into a session total, which is how `inv`
+    // would silently start reporting the average of every run since the tab
+    // opened — invisible in the data and fatal to the comparison.
+    test('the ult-economy counters are cleared by startRun', () => {
+        assert.ok(T.phaseRow().casts > 0, 'nothing to clear — the previous test did not leave state');
+        T.startRun();
+        const r = T.phaseRow();
+        assert.strictEqual(r.casts, 0, 'casts survived the run boundary: ' + r.casts);
+        assert.ok(r.invAll == null || r.invAll === 0, 'invAll survived the run boundary: ' + r.invAll);
+        assert.strictEqual(r.laneIn, 0, 'lane exposure survived the run boundary: ' + r.laneIn);
+    });
+    // The window/cooldown arithmetic that retired the cadence theory, as an
+    // executable statement rather than a comment: even PERFECT cadence cannot
+    // reach the human's recorded 0.326 on ult windows alone.
+    test('perfect ult cadence cannot reach the demo share — so cadence was never the lever', () => {
+        const ULT_CD = 80, lv6Window = 8 + 0.8 * (6 - 1);
+        assert.ok(lv6Window / ULT_CD < 0.2,
+            'ceiling ' + (lv6Window / ULT_CD).toFixed(3) + ' — if this ever exceeds 0.2 the cadence theory is back on the table');
+        // and the level is worth a real fraction of it, which is why the
+        // pick premium now runs to lv6
+        assert.ok((8 + 0.8 * 5) / 8 >= 1.4, 'lv1 -> lv6 no longer buys 40%+ more window');
     });
     done();
 }

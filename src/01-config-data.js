@@ -493,6 +493,10 @@
             // must keep the mechanisms that get it out of a crowd, so the window
             // does not end with the bot stranded in the middle of one.
             ultInvulnCommitS: 1.2,
+            // v6.111.0: farm pull multiplier while a committed ult window is
+            // open. The window is the one interval in which approaching is
+            // free; see the dayFarm comment in 05-movement.
+            ultWindowFarmMul: 1.5,
             escapePull: 4.0,      // drive through the widest gap when surrounded
             hellCautionMul: 1.3,  // everything hits harder in hell — extra movement caution there
             // v6.86.1 PASSOUT HUG. Source: fireBase() targets nearestEnemy()
@@ -743,8 +747,27 @@
             // Read from the LIVE stat, never an ingredient name. Characters
             // without a markShield floor (pat, minguk) are untouched.
             fragileMarkFearMul: 1.6,
-            lineWeight: 6.5,      // charge lanes (roadLines) — data: the #1 killer once visible
-            linePad: 14
+            // v6.111.0 SPLIT (see the TUNABLE comment for the full argument).
+            // lineWeight now prices the TELEGRAPH only; the live charge has
+            // its own weight and its own box. Defaults keep the combined
+            // behaviour roughly where it was for an unarmed lane while giving
+            // the armed lane a floor the telegraph cannot drag down with it.
+            lineWeight: 3.0,          // unarmed telegraph lanes
+            lineArmedWeight: 8.0,     // live charges
+            linePad: 14,
+            // v6.111.0 LANE ESCAPE. `laneUrgent` has fired the dash on an
+            // armed lane since 6.8x, but the dash takes its DIRECTION from
+            // plan.dx/dy — the argmax of the danger field, in which the lane
+            // is worth exactly `lineWeight`. With that scalar at its box
+            // minimum the field barely registers the lane, so the escape
+            // hatch was pointing wherever everything else pointed, and a
+            // dash along a 126 px-wide lane is a dash further into it.
+            // The exit from a lane is geometric, not preferential: step
+            // PERPENDICULAR to the ray. `laneEscape` makes that a movement
+            // override, like park and hunt, rather than one more term
+            // competing inside the sum it is supposed to overrule.
+            laneEscapePad: 8,         // clear the band by this much before releasing
+            laneEscapeArmS: 1.6       // seconds of telegraph left that still counts as "go now"
         },
 
         // DEEP-HELL POSTURE (v6.82.0). `depth` ramps 0 -> 1 between startS
@@ -1113,7 +1136,50 @@
             //     (7.3M unchanged at 222px, 44.7M unchanged at 223px — both lv6)
             // The two effective casts furthest out were 136px and 153px, so
             // the useful edge sits just under 160.
-            ultAdjacent: 155
+            ultAdjacent: 155,
+            // ── v6.111.0 THE ULT ECONOMY, RE-DERIVED ─────────────────────
+            //
+            // A retracted finding first, because it drove the plan for this
+            // version until the arithmetic refused it. The n=1250 phase rows
+            // put bot day `inv` at a median of 0.103 against the manual joe
+            // demo's 0.326, and that looked like a 3.9x cadence gap. It is
+            // not a gap at all: the two numbers measure different things.
+            //   demo `inv` (06-abilities-panel-boot demoTick) counts
+            //     ultUntil || ultSpiralUntil || player.invuln > 0
+            //   bot `inv` (05-movement, the planTicks accumulator) counts
+            //     ultInvuln alone — ult windows, no hit frames.
+            // `player.invuln` is the 38-frame post-hit window, so the human's
+            // 0.326 is mostly EVIDENCE OF BEING HIT, and the bot's 0.103 is
+            // ult uptime with the hit frames stripped out.
+            //
+            // Against the real ceiling the bot is not far off. ULT_CD is 80 s
+            // scaled by player.ultCdMul; joe's aura window is 8+0.8*(lv-1) s,
+            // so at lv1 and cdMul 1 perfect cadence is 8/80 = 10%, and at lv6
+            // 12/80 = 15% (deep-hell-model.md, retraction 1). A measured
+            // median of 0.103 with a max of 0.161 is a bot already firing at
+            // or near cooldown. There is no 4x here — maybe 30-40%.
+            //
+            // So cadence is not the lever. The two terms that actually set
+            // ult uptime are the WINDOW (ult level) and the COOLDOWN
+            // (ultCdMul), and both are bought with picks:
+            //   * pat demo 2 vs demo 1 — the cleaner run differed in one
+            //     variable, ult lv6 by 14:52 vs lv5 by 18:17. lv6 casts wiped
+            //     million-HP fields outright where lv1-3 casts chipped.
+            //   * TOMATO JUICE is throughput: four picks bought 14 casts in
+            //     20 min against 12 with none (75 s cadence vs 98 s).
+            // The scorer paid +200 for the ult only below lv3 and nothing
+            // after, which stops exactly where demo 2's advantage begins.
+            //
+            // Indexed by CURRENT ult level, so entry `lv` is what a card
+            // raising lv -> lv+1 is worth. 0-2 hold the old +200 so nothing
+            // below lv3 changes; the tail is new.
+            ultSpineByLv: [200, 200, 200, 150, 120, 90],
+            // v6.111.0: the day retry gate. The game's own cooldown is the
+            // real limiter (53-80 s), so a tighter retry only shaves the
+            // latency between the cooldown ending and the bot noticing. At
+            // 1500 ms that is worth ~1% of casts — small, free, and the
+            // honest size of the cadence prize.
+            ultDayRetryMs: 1500
         },
 
         learning: {
@@ -1954,6 +2020,24 @@
     // explore; it no longer has room to run away. loadLearn() clamps a stored
     // mean into the current box (v6.93.0), so this bites on the live store
     // rather than only on a fresh one.
+    // v6.111.0 — the boxes as they stood in 6.110.0, for EVERY dimension this
+    // build widens. The box-change re-open in loadLearn compares each dim's
+    // current box against the one it was last trained under, but a store
+    // written before 6.111.0 has no such record: seeding those from the
+    // CURRENT boxes would make the very upgrade that widened them look like
+    // no change at all, and the three pinned dimensions would stay pinned
+    // with sigma at the floor — the config diff would ship and nothing would
+    // move. This table is the missing memory, and it is needed exactly once.
+    //
+    // MAINTENANCE: on the next version bump, empty this. An entry left here
+    // after its migration has run re-opens that dimension on every single
+    // load, which is a permanent 25% sigma and a search that never converges.
+    // `store-guard` asserts the keys match the dims actually widened.
+    const TUNABLE_PRIOR = {
+        'threat.lineWeight': { min: 2.0, max: 9.0 },
+        'movement.hellCautionMul': { min: 0.8, max: 2.2 },
+        'movement.bossEngageValue': { min: 10, max: 36 }
+    };
     const TUNABLE = {
         'movement.smoothing': { min: 0.2, max: 0.85 },
         'movement.standoff': { min: 55, max: 190 },
@@ -1966,7 +2050,33 @@
         'threat.projWeight': { min: 1.0, max: 6.5 },
         'threat.projLookaheadMs': { min: 300, max: 850 },
         'threat.markWeight': { min: 5.0, max: 20.0 },   // measured mark damage ~93: two landings can end a run
-        'threat.lineWeight': { min: 2.0, max: 9.0 },
+        // v6.111.0 THE LANE SCALAR WAS DOING TWO JOBS AND CEM PRICED THE SUM.
+        //
+        // At n=1250 `threat.lineWeight` sat at 2.107 — its box MINIMUM, flagged
+        // `converged` — while `line` accounted for 268 of 1247 deaths (21%).
+        // The search had decided the joint #1 killer was not worth avoiding.
+        //
+        // It was not wrong. ONE weight multiplied both halves of
+        //     lineCost(...) * lineWeight * hellMul * (armed ? 14 : 7)
+        // and the two halves have opposite economics:
+        //   ARMED  — a live charge, lethal within 63 px of the ray. Rare,
+        //     short-lived, and dodging one costs a step.
+        //   UNARMED — the telegraph. Numerous, long-lived (210-frame life,
+        //     arms only for the last 90), and each one paints a 126 px-wide
+        //     stripe across the arena. Pricing these high makes most of the
+        //     floor look impassable: the bot gets pinned, `lineOnCorner`
+        //     vetoes the seat, and it eats contact damage instead.
+        // The telegraph term is common and expensive; the armed term is rare
+        // and cheap. Minimising the SUM means minimising the telegraph, and
+        // the armed half rides down with it. CEM found the right value for
+        // the wrong object.
+        //
+        // Split, so each half can be priced on its own evidence. The floor
+        // goes to 0 on purpose: "ignore telegraphs entirely" is a legitimate
+        // policy that the old box could not express, and it is very close to
+        // what the search has been asking for.
+        'threat.lineWeight': { min: 0.0, max: 9.0 },        // TELEGRAPH (unarmed) lanes only
+        'threat.lineArmedWeight': { min: 3.0, max: 18.0 },  // live charges — its own box, its own gradient
         // strategy weights — the win strategy itself evolves across runs
         // v6.86.0: ceiling 6 -> 4. The mean sat at 5.63 (0.89 of the old box):
         // "no new cocktail while an owned one is below level 6" poured every
@@ -1985,10 +2095,17 @@
         // — a dead dimension the CEM was still spending samples on.
         'movement.kitePull': { min: 0.5, max: 4.0 },
         'movement.escapePull': { min: 1.5, max: 6.0 },
-        'movement.hellCautionMul': { min: 0.8, max: 2.2 },
+        // v6.111.0: was max 2.2, where the mean sat (2.200, `atEdge:"max"`,
+        // `converged`). A mean welded to a bound means the BOX is wrong, not
+        // the value — the search wants more hell caution than it is allowed
+        // to ask for, and has wanted it long enough for sigma to anneal.
+        'movement.hellCautionMul': { min: 0.8, max: 3.2 },
         'movement.passoutValue': { min: 18, max: 54 },   // floored+widened: every passout must die before the finale (user)
         'movement.wallSiegeValue': { min: 12, max: 42 },
-        'movement.bossEngageValue': { min: 10, max: 36 },
+        // v6.111.0: mean 10.75 against a floor of 10 — effectively pinned.
+        // "Never engage a boss" is the policy the search keeps reaching for
+        // and the box keeps refusing to let it state.
+        'movement.bossEngageValue': { min: 0, max: 36 },
         // v6.107.0 — FOUR NEW DIMENSIONS. The comment below warns that adding
         // one to a live learner requires seeding mean=default and
         // sigma=(max-min)/4 first. That seeding is now UNCONDITIONAL: the
@@ -2363,6 +2480,21 @@
     // walks through — and at the entrance a MAXED ult appears in 23% of
     // survivors against 4% of deaths.
     let invulnTicks = 0, planTicks = 0, ultMaxLv = 0, ultLv6At = null;
+    // v6.111.0 — the accumulator that makes the demo comparison legal.
+    // `invulnTicks` counts ULT invulnerability; `invulnAllTicks` counts what
+    // the demo recorder counts (isInvuln(): ult windows OR player.invuln hit
+    // frames). Reporting only the first against a demo number built from the
+    // second is what produced this session's retracted 3.9x. Both now ship in
+    // every phase row, so the comparison can never be made wrongly again.
+    let invulnAllTicks = 0;
+    // casts that the game ACCEPTED (ultReadyAt moved forward), not button
+    // presses — demo #5's 2174 "casts" were 2174 rejected calls, and that
+    // misreading cost a whole doctrine. Paired with the observed ultCdMul,
+    // this is what makes ult cadence measurable instead of inferred.
+    let ultCasts = 0, ultLastReadyAt = null, ultCdMulSeen = null;
+    // v6.111.0 lane-escape telemetry: ticks spent inside an armed lane band,
+    // and ticks the perpendicular override actually steered.
+    let laneInTicks = 0, laneEscTicks = 0;
     // v6.102.0: gt at which the BUILD first met its armour+supers bars —
     // the measurement that sets capStable.fromS from data instead of guesswork.
     let capReadyGt = null;

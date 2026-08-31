@@ -226,6 +226,84 @@
             if (d.cem.sigma[k] < range * CONFIG.learning.sigmaFloor)
                 d.cem.sigma[k] = range * CONFIG.learning.sigmaFloor;
         }
+        // ── v6.111.0 BOX-CHANGE RE-OPEN ─────────────────────────────────────
+        //
+        // The re-floor immediately above has claimed since v6.93.0 to let the
+        // learner "walk into" newly opened territory. It cannot. It raises a
+        // converged sigma to `range * sigmaFloor` — and sigmaFloor IS the
+        // converged state, by definition. Widening a box moved the wall and
+        // left the search still welded to the old corner.
+        //
+        // That mattered this version more than any other. `threat.lineWeight`
+        // sat at its box minimum and `movement.hellCautionMul` at its box
+        // maximum, both `converged`, and BOTH BOXES ARE WIDENED IN THIS
+        // BUILD. Without this block, widening them would have been a no-op:
+        // the mean would stay exactly where it is, sigma would stay at 5% of
+        // range, and 1250 runs of evidence would have bought a config diff
+        // and no behaviour change at all.
+        //
+        // So: remember the box each dimension was last TRAINED under, and
+        // when the current box differs, re-open that dimension — sigma back
+        // to sigmaInit against the new range, evolution path cleared. This is
+        // deliberately SURGICAL. A restart reopens all 28 dims and throws
+        // away tuning that took hundreds of generations to earn; a recenter
+        // also discards the mean. Only the dims whose box actually moved pay
+        // anything, and even they keep their mean — the search resumes from
+        // what it learned, with room to leave.
+        //
+        // The mean is left alone on purpose. A mean at a bound is evidence
+        // about DIRECTION: the search spent generations pushing that way and
+        // ran out of room. Re-centring it would discard exactly that signal.
+        if (!d.cem.box || typeof d.cem.box !== 'object') d.cem.box = {};
+        const reopened = [];
+        for (const k of Object.keys(TUNABLE)) {
+            const spec = TUNABLE[k];
+            const range = spec.max - spec.min;
+            // A store written before this block has no box record at all. For
+            // the dims this build widened, TUNABLE_PRIOR supplies the box they
+            // were actually trained under, so the migration fires once; every
+            // other dim seeds from its current box and is a no-op. Without
+            // this, the upgrade that widens a box is the one load on which the
+            // widening cannot be detected.
+            if (d.cem.box[k] == null && TUNABLE_PRIOR[k]) d.cem.box[k] = TUNABLE_PRIOR[k];
+            const was = d.cem.box[k];
+            // A key with no recorded box is either brand new (already seeded
+            // at sigmaInit above) or predates this block. Record and move on
+            // — re-opening every dim on the upgrade to 6.111.0 would be a
+            // silent full restart, which is precisely what this avoids.
+            if (was && isFinite(was.min) && isFinite(was.max) &&
+                (was.min !== spec.min || was.max !== spec.max) && range > 0) {
+                d.cem.sigma[k] = range * CONFIG.learning.sigmaInit;
+                d.cem.pc[k] = 0;
+                reopened.push(k + ' [' + was.min + ',' + was.max + ']->[' + spec.min + ',' + spec.max + ']');
+            }
+            d.cem.box[k] = { min: spec.min, max: spec.max };
+        }
+        if (reopened.length) {
+            // Clearing the step size and the stale batch matters as much as
+            // the sigmas: `ss` and a half-filled batch both carry the old
+            // geometry, and maybeRestart's stall counter would otherwise read
+            // the re-opened generation as a failure to improve.
+            d.cem.ss = 1;
+            d.cem.batch = [];
+            delete d.cem.prevBatchMean;
+            d.cem.stall = 0;
+            d.cem.bestBatchMean = null;
+            d.cem.reopens = (d.cem.reopens || 0) + 1;
+            // Recorded rather than only logged. `loadLearn` is called from
+            // part 01 BEFORE `const log` is initialised, so calling the logger
+            // here throws a TDZ ReferenceError and takes the whole boot with
+            // it — which is exactly what the first build of this block did to
+            // all 82 scenarios. (The pre-existing `log` in the catch above has
+            // the same latent fault; it has simply never fired.) The console
+            // line is best-effort; `lastReopen` is the durable record, and
+            // `pineBot.learning()` reports it.
+            d.cem.lastReopen = { runs: d.runs || 0, dims: reopened.slice() };
+            try {
+                log('CEM BOX RE-OPEN — ' + reopened.length + ' dim(s) widened, sigma back to ' +
+                    Math.round(CONFIG.learning.sigmaInit * 100) + '% of the NEW range: ' + reopened.join('; '));
+            } catch (e) { /* logger not initialised yet — lastReopen carries it */ }
+        }
         return d;
     }
     function saveLearn() {

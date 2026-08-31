@@ -978,7 +978,37 @@
             // cast (poHpAfter > poHpBefore from gt 656). At +240 the ult card
             // LOST to OLIVE (402) whenever both were offered. Until lv3 it
             // outranks everything; from lv3 the armor doctrine resumes.
-            if (type === 'ult' && ((safe(() => player.ultLevel, 0) || 0) < 3)) add(200, 'ult-early');
+            // v6.111.0 THE PREMIUM NOW REACHES LV6, where the evidence is.
+            //
+            // The old rule stopped dead at lv3 — "until lv3 it outranks
+            // everything; from lv3 the armor doctrine resumes" — and the pat
+            // demos measure the run's single biggest difference on the far
+            // side of that line. Demos 1 and 2 are the same character, same
+            // length, same day: demo 2 reached ult lv6 by 14:52 and wiped
+            // million-HP passout fields outright (3->0, 4->0); demo 1 reached
+            // lv5 at 18:17 and its lv1-3 casts only chipped fields of 3 down
+            // to 1. Passouts piling to 24 on the floor was a SYMPTOM of the
+            // low ult level, not a movement failure.
+            //
+            // And for the two invulnerability ults the level buys uptime
+            // directly: joe's aura window is 8+0.8*(lv-1) s against a fixed
+            // ULT_CD of 80 s, so lv1 -> lv6 is 10% -> 15% invulnerable, a 50%
+            // increase in the only resource that makes standing in a crowd
+            // survivable. Cadence cannot buy that — the bot is already firing
+            // near cooldown (measured median inv 0.103 against a 0.10-0.15
+            // ceiling). The window can.
+            //
+            // Entries 0-2 hold the old +200 exactly, so nothing below lv3
+            // changes; the decaying tail is the new part, and it decays
+            // because the armour doctrine it competes with is not wrong,
+            // just not the whole story.
+            if (type === 'ult') {
+                const uLv = safe(() => player.ultLevel, 0) || 0;
+                const sched = (CONFIG.abilities && Array.isArray(CONFIG.abilities.ultSpineByLv))
+                    ? CONFIG.abilities.ultSpineByLv : [200, 200, 200];
+                const bonus = uLv < sched.length ? sched[uLv] : 0;
+                if (bonus > 0) add(bonus, 'ult-spine-lv' + uLv);
+            }
         }
         // HELL: the plan is BUILT. The job is no longer to assemble it but to
         // avoid opening the six-maxed-super Rainbow Gun gate, so the safe junk

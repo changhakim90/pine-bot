@@ -910,6 +910,37 @@
         // v6.109.0: accumulate the uptime the demos said decides the day.
         planTicks++;
         if (ultInvuln) invulnTicks++;
+        // v6.111.0 THE COMPARABLE NUMBER. `invulnTicks` counts ULT windows.
+        // The demo recorder's `inv` counts the game's own isInvuln(), which
+        // ORs in `player.invuln` — the 38-frame post-hit window. Comparing
+        // the two produced a 3.9x "ult uptime gap" this session that does not
+        // exist: joe's ceiling is 8/80 = 10% at lv1 and 12/80 = 15% at lv6
+        // (ULT_CD 80 s x ultCdMul), and the bot's measured 0.103 median sits
+        // near it. Accumulate BOTH so the phase rows can be read against a
+        // demo without the units quietly changing underneath.
+        //
+        // Note what the human's 0.326 therefore mostly IS: evidence of being
+        // hit and surviving it. That is the armour economy the mitigation
+        // model describes (defense 23.3 turns every common contact hit into 1
+        // damage), not an ult-chaining trick — and it is the opposite of the
+        // flee-everything posture the CEM has converged on.
+        if (ultInvuln || (safe(() => player.invuln, 0) || 0) > 0) invulnAllTicks++;
+        {
+            // Accepted casts, not button presses. `useUltimate` returns early
+            // while gameTime < ultReadyAt, so counting calls counts rejections
+            // — demo #5's "2174 casts in 3945 s" were ~49 real ones, and that
+            // misreading drove a whole retracted doctrine. A cast is the only
+            // thing that moves ultReadyAt forward.
+            const rA = safe(() => player.ultReadyAt, null);
+            if (typeof rA === 'number') {
+                if (ultLastReadyAt != null && rA > ultLastReadyAt + 1e-6) ultCasts++;
+                ultLastReadyAt = rA;
+            }
+            // ultCdMul is the term the deep-hell model named as the actual
+            // lever on uptime and which nothing has ever reported.
+            const cm = safe(() => player.ultCdMul, null);
+            if (typeof cm === 'number' && cm > 0) ultCdMulSeen = cm;
+        }
         {
             const ulNow = safe(() => player.ultLevel, 0) || 0;
             if (ulNow > ultMaxLv) ultMaxLv = ulNow;
@@ -1353,18 +1384,54 @@
         const sprinterUrgent = hellDetected &&
             th.enemies.some(e => !e.wall && !e.boss && e.chaserFast && Math.hypot(e.x - p.x, e.y - p.y) < e.r + 80);
 
-        let laneUrgent = false;
+        // ── v6.111.0 LANE ESCAPE ────────────────────────────────────────────
+        //
+        // This loop used to `break` on the first urgent lane, because all it
+        // produced was a boolean. The boolean fed `laneUrgent`, which fired
+        // the dash — and `tryDash` takes its direction from plan.dx/dy, the
+        // argmax of a danger field in which the lane is worth `lineWeight`.
+        // With that scalar pinned at its box minimum for hundreds of
+        // generations, the field barely saw the lane, so the escape hatch
+        // pointed wherever everything else pointed. A dash along a 126 px-wide
+        // lane is a dash further into it, at speed.
+        //
+        // Getting out of a lane is geometry, not preference. `lineCost`'s perp
+        // distance is |(y-ly)cos(ang) - (x-lx)sin(ang)|, whose gradient is
+        // (-sin(ang), cos(ang)); stepping along that, signed by which side we
+        // are on, is the shortest way out and is the same answer whatever the
+        // weight happens to be. So the loop now accumulates a VECTOR as well,
+        // and it no longer breaks early — with two lanes crossing, leaving one
+        // by walking into the other is how the crossing kills you.
+        //
+        // Only real charge lanes qualify (numeric `ang`). A thrower's windup
+        // pushes a synthetic segment that ENDS at the player, so it reports a
+        // zero-distance hit every tick (the 6.89.13 regression) and has no
+        // perpendicular worth taking.
+        let laneUrgent = false, laneEx = 0, laneEy = 0, laneCov = 0;
+        const laneArmS = T.laneEscapeArmS != null ? T.laneEscapeArmS : 1.6;
         for (const l of th.lines) {
             const inBand = lineCost(l, p.x, p.y);
             if (inBand <= 0.15) continue;                 // clear of this lane
-            if (l.armed === true) { laneUrgent = true; break; }   // charge is LIVE: go now
+            let urgent = false;
+            if (l.armed === true) urgent = true;          // charge is LIVE: go now
             // TELEGRAPH WINDOW (source: 210-frame life, arms for the last 90).
             // Standing in the band as it approaches arming is the moment to
             // dash — once it arms, walking out is already too late.
-            if (typeof l.life === 'number' && l.life <= 130) { laneUrgent = true; break; }
+            else if (typeof l.life === 'number' && l.life <= laneArmS * 60) urgent = true;
             // no life field to read: treat deep-in-band telegraphs as urgent
-            if (inBand > 0.55) { laneUrgent = true; break; }
+            else if (inBand > 0.55) urgent = true;
+            if (!urgent) continue;
+            laneUrgent = true;
+            if (typeof l.ang !== 'number' || typeof l.x !== 'number' || typeof l.y !== 'number') continue;
+            const s = (p.y - l.y) * Math.cos(l.ang) - (p.x - l.x) * Math.sin(l.ang);
+            const sgn = s >= 0 ? 1 : -1;
+            // weight by how deep in the band we are: the lane we are centred
+            // on gets the loudest vote, which is the one most likely to hit.
+            laneEx += sgn * -Math.sin(l.ang) * inBand;
+            laneEy += sgn * Math.cos(l.ang) * inBand;
+            laneCov++;
         }
+        laneInTicks += laneCov > 0 ? 1 : 0;
 
         let projImminent = false;
         for (const q of th.projectiles) {
@@ -1678,6 +1745,28 @@
             l && typeof l.ang === 'number' && lineCost(l, x, y) > 0.15);
         const lineHere = laneCovers(p.x, p.y);
         const lineOnCorner = laneCovers(cnrX, cnrY) || lineHere;
+        // v6.111.0: normalise the escape vector accumulated by the laneUrgent
+        // loop. Deferred to here only because `fieldW`/`fieldH` are declared
+        // above this point and the wall check needs them.
+        let laneEscape = null;
+        if (laneCov > 0) {
+            const lm = Math.hypot(laneEx, laneEy);
+            if (lm > 1e-6) {
+                let ex = laneEx / lm, ey = laneEy / lm;
+                // Both perpendiculars leave the lane; only one of them leaves
+                // the ARENA. If the shortest exit runs into a wall inside the
+                // margin, take the other side — a longer walk out beats being
+                // pinned against the edge while the charge fires.
+                const mgL = CONFIG.field.margin;
+                const ahead = 46;
+                const ax = p.x + ex * ahead, ay = p.y + ey * ahead;
+                if (ax < mgL || ay < mgL || ax > fieldW - mgL || ay > fieldH - mgL) {
+                    const bx = p.x - ex * ahead, by = p.y - ey * ahead;
+                    if (bx >= mgL && by >= mgL && bx <= fieldW - mgL && by <= fieldH - mgL) { ex = -ex; ey = -ey; }
+                }
+                laneEscape = { x: ex, y: ey };
+            }
+        }
         // v6.91.0 THE DORMANT-BOSS HUNT.
         //
         // A boss whose whole body sits beyond the play rectangle cannot be hit
@@ -1836,6 +1925,19 @@
         const dayFarm = dayFarmBase *
             (1 + 0.45 * buildHunger) *  // starving build: kills ARE the upgrades — hunt harder
             (flameOn ? 1.6 : 1) *       // burn window: harvest everything it touches
+            // v6.111.0 SPEND THE WINDOW. `ultInvuln` has relaxed `caution` by
+            // 0.35 since 6.86.1, which only ever made the bot less afraid —
+            // it never made it go anywhere. Inside a window with room left to
+            // disengage, nothing on the field can hurt us and every second
+            // spent maintaining standoff is a second of the run's scarcest
+            // resource thrown away. This is the same doctrine the ult firing
+            // gate already runs on, applied to the leg the ult was cast for:
+            // fire it, then go and collect something with it.
+            //
+            // Deliberately gated on ultInvulnSafe, not ultInvuln. Pat's and
+            // minguk's windows are ~2.3-2.8 s; committing to a pull in the
+            // last half second of one is how a window becomes a death.
+            (ultInvulnSafe ? (M.ultWindowFarmMul != null ? M.ultWindowFarmMul : 1.5) : 1) *
             (flight ? 0.15 : 1);        // FLIGHT: nothing is worth stopping for
 
         // ULT AIMING. The ultimate spirals OUTWARD from the bot, so the aim
@@ -2330,8 +2432,17 @@
             }
 
             // armed lanes are lethal NOW; unarmed ones are telegraphs — still
-            // strongly worth pre-dodging before the charge fires
-            for (const l of th.lines) danger += lineCost(l, nx, ny) * T.lineWeight * hellMul * (l.armed === true ? 14 : 7);
+            // worth pre-dodging before the charge fires, but at their OWN
+            // price. v6.111.0: one scalar used to set both, and because the
+            // telegraph term is the numerous, expensive, arena-wide one, CEM
+            // minimised the pair and dragged the live-charge term to the box
+            // floor with it while lanes killed 21% of runs. Two weights, two
+            // boxes, two gradients.
+            for (const l of th.lines) {
+                const armed = l.armed === true;
+                const lw = armed ? (T.lineArmedWeight != null ? T.lineArmedWeight : T.lineWeight) : T.lineWeight;
+                danger += lineCost(l, nx, ny) * lw * hellMul * (armed ? 14 : 7);
+            }
 
             // Walls pin you when a crowd is pushing: the effective margin
             // widens with nearby pressure so the bot never kites into a corner.
@@ -3319,6 +3430,25 @@
             const dSm = Math.hypot(ctx2 - p.x, cty2 - p.y);
             if (dSm <= Math.max(ctR, 6)) { vx = 0; vy = 0; }   // STAND IN IT
             else { vx = (ctx2 - p.x) / dSm; vy = (cty2 - p.y) / dSm; }
+        } else if (laneEscape) {
+            // v6.111.0 THE LANE OVERRIDE. Placed above hunt / park / seat /
+            // harvest and below capDive alone, because an armed charge lane
+            // outranks every seat on the board: 21% of 1247 deaths, and the
+            // only posture that survives one is not being in it.
+            //
+            // The project has measured twice now (6.89.11's dormant-boss pull,
+            // 6.107.0's drop anchor) that a preference competing inside the
+            // gain sum does not move the bot — "a pull competing with a dozen
+            // other gain terms moved the bot 127 px in 120 minutes". The lane
+            // exit has to be the same kind of object as park and hunt: an
+            // override that zeroes the argument, not a vote inside it.
+            //
+            // This does NOT replace the danger field's lane terms. Those still
+            // price lanes for every ordinary step, which is what keeps the bot
+            // from wandering into one; this fires only once it is already
+            // standing in a band that is live or about to be.
+            vx = laneEscape.x; vy = laneEscape.y;
+            laneEscTicks++;
         } else if (huntOn && huntPost) {
             const dPost = Math.hypot(p.x - huntPost.x, p.y - huntPost.y);
             if (dPost <= (DHp.dormantHuntRadius || 20)) { vx = 0; vy = 0; onPost = true; }
@@ -3416,6 +3546,12 @@
             capDive,   // v6.96.0: the run is being ended on purpose
             capStage,  // v6.101.0: 0 none, 1 smother, 2 hurtPlayer, 3 hard book
             dayFarmBase, markFearMul,   // v6.97.0: sprint gate + shieldless mark fear, observable
+            // v6.111.0: the COMPOSED farm multiplier, not just its base. The
+            // ult-window term added here is otherwise unobservable, and an
+            // unobservable term is one no test can hold and no report can
+            // audit — which is how ultWindowFarmMul shipped untested in the
+            // first draft of this version.
+            dayFarmMul: +dayFarm.toFixed(3),
             // v6.91.0 dormant-boss hunt telemetry
             // v6.91.3: the seat and the armour reading are now observable — both
             // were wrong for versions precisely because nothing reported them.
@@ -3434,6 +3570,11 @@
             pauseActive, contactImminent, flight, grind, depth: +depth.toFixed(2),
             blastImminent: th.marks.some(m => typeof m.tLeft === 'number' && m.tLeft <= 0.45 &&
                 Math.hypot(m.x - p.x, m.y - p.y) < m.r),
+            // v6.111.0: the lane override, observable. `laneIn` is how many
+            // lanes cover the player right now, `laneEsc` the unit exit the
+            // override is steering — a posture that cannot be observed cannot
+            // be tuned, and this one replaces a dash heading nobody could see.
+            laneIn: laneCov, laneEsc: laneEscape ? { x: +laneEscape.x.toFixed(2), y: +laneEscape.y.toFixed(2) } : null,
             surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, lineHere, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
