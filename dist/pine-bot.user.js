@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.112.0
+// @version      6.113.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.112.0';
+    const SCRIPT_VERSION = '6.113.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -11720,7 +11720,11 @@
             killBtn.style.background = 'rgba(255,255,255,.09)';
             killNow();
         };
-        const repBtn = pbBtn('📋', { title: 'Full report — opens ready to copy, paste it to Claude' });
+        // v6.113.0: the report overlay is now the ONLY thing needed — it opens
+        // with the headline numbers rendered above the JSON, the text
+        // pre-selected, and a copy button that tells the truth about whether
+        // it worked. Nothing here should ever require a console.
+        const repBtn = pbBtn('📋', { title: 'Full report — every audit, summary on top, opens pre-selected. Copy and paste it to Claude.' });
         repBtn.onclick = () => {
             const r = safe(() => window.pineBot.report(), null);
             showReport(r || buildStatsReport());
@@ -11941,27 +11945,168 @@
         return report;
     }
 
+    // ── v6.113.0 THE REPORT IS THE PRODUCT, AND IT LIED ABOUT COPYING ───────
+    //
+    // USER: "I want this all done by the report on the UI overlay. Everything
+    // you need should not require things from the console."
+    //
+    // The 📋 button has existed since 6.8x and the user still pastes from the
+    // console, which the release-state doc calls "the slow part of every
+    // session". Reading the old handler says why:
+    //
+    //     copy.onclick = () => { try { navigator.clipboard.writeText(...);
+    //                                  copy.textContent = 'copied'; } catch(e){} }
+    //
+    // `writeText` is ASYNC. It returns a promise, and a rejection — denied
+    // permission, an unfocused document, a non-secure context — never reaches
+    // that catch. The label was set on the next synchronous line regardless.
+    // So the button said "copied" every single time, including the times
+    // nothing was on the clipboard. A silent failure that reports success is
+    // worse than a loud one: it sends you to the console without ever saying
+    // it failed.
+    //
+    // Three fixes, in order of how much they matter:
+    //   1. TELL THE TRUTH. Await the promise; fall back to execCommand on a
+    //      real <textarea>; if even that fails, select the text and say
+    //      "press ⌘C" — never claim a copy that did not happen.
+    //   2. <textarea>, not <pre>. A pre cannot be .select()ed, so there was no
+    //      manual path at all when the clipboard was unavailable. A readonly
+    //      textarea gives one, and renders 200 KB far faster.
+    //   3. A HUMAN SUMMARY ON TOP. The point of an overlay report is to be
+    //      read, not only shipped. The headline numbers now render above the
+    //      JSON so the run state is legible without copying anything.
+    function reportSummary(r) {
+        // Pure function of the report object — no DOM, no globals — so it is
+        // testable and so the panel and the console print the same thing.
+        const L = [];
+        const n = v => (v == null ? '—' : v);
+        const pct = v => (v == null ? '—' : Math.round(v * 100) + '%');
+        try {
+            const cmp = (r && r.compare) || {};
+            const cur = cmp.current || {};
+            L.push('v' + n(cur.version || (r && r.version)) + '  ' + n(cur.bartender || cmp.bartender) +
+                '  n=' + n(cur.n) + '  gen=' + n(r && r.learning && r.learning.gen));
+            const g = (r && r.funnel && r.funnel.groups && r.funnel.groups[0]) || {};
+            L.push('FUNNEL  day ' + n(g.dayClearRate) + '   entry ' + n(g.entrySurvival) +
+                '   deepHeld ' + n(g.deepHeldRate) + '   seated ' + n(g.seatedRate));
+            L.push('BUILD   ready ' + n(g.buildsReady) + '@' + n(g.medianReadyAt) +
+                '   supers/run ' + n(cur.supersPerRun) +
+                '   entryDef ' + n(g.medianEntryDef) + '   entryRegen ' + n(g.medianEntryRegen));
+            L.push('DEEP    at ' + n(g.medianDeepAt) + '   hold ' + n(g.medianDeepHold) + 's' +
+                '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%');
+            L.push('SURVIVE median ' + n(cur.median) + 's   mean ' + n(cur.mean) +
+                's   hell ' + n(cur.hellRate) + '   caps ' + n(g.capOuts) + '/' + n(g.earlyCaps));
+            // deaths, biggest first — the line that says what to fix next
+            const d = (r && r.funnel && r.funnel.groups && r.funnel.groups[0] && r.funnel.groups[0].deaths) || null;
+            const dmg = (r && r.damage && r.damage.sole) || null;
+            if (dmg) {
+                const rows = Object.keys(dmg).map(k => [k, dmg[k].n || 0]).sort((a, b) => b[1] - a[1]);
+                const tot = rows.reduce((s, x) => s + x[1], 0) || 1;
+                L.push('DAMAGE  ' + rows.slice(0, 5).map(x => x[0] + ' ' + Math.round(x[1] / tot * 100) + '%').join('  '));
+            } else if (d) {
+                L.push('DEATHS  ' + Object.keys(d).map(k => k + ' ' + d[k]).join('  '));
+            }
+            // the two v6.111/112 instruments, so a row that is not moving says so
+            L.push('LANES   in ' + n(g.laneIn) + '  esc ' + n(g.laneEsc) +
+                '        ULT  invAll ' + n(g.medianInvAll) + '  casts ' + n(g.medianCasts) + '  cdMul ' + n(g.medianCdMul));
+            const bk = (r && r.boss && r.boss.kinds) || [];
+            if (bk.length) {
+                L.push('BOSS    ' + bk.slice(0, 4).map(k =>
+                    k.kind + ' n' + k.n + ' @' + n(k.firstGt) + ' r' + n(k.r0) + ' ring@' + n(k.ringAt)).join('  |  '));
+            } else {
+                L.push('BOSS    census empty — run a batch on 6.112.0+');
+            }
+            // CEM dimensions pinned against a bound, which is the thing that
+            // most often explains a flat row and is invisible in the numbers.
+            const par = (r && r.learning && r.learning.params) || {};
+            const edge = Object.keys(par).filter(k => par[k] && par[k].atEdge);
+            if (edge.length) L.push('AT EDGE ' + edge.map(k => k.split('.').pop() + ':' + par[k].atEdge).join('  '));
+            const reop = r && r.learning && r.learning.reopen;
+            if (reop && reop.dims && reop.dims.length) L.push('REOPEN  ' + reop.dims.length + ' dim(s) re-opened this load');
+        } catch (e) {
+            L.push('(summary failed: ' + (e && e.message) + ')');
+        }
+        void pct;
+        return L.join('\n');
+    }
+
     function showReport(report) {
         const old = document.getElementById('pineBotReport');
         if (old) old.remove();
+        const text = (() => { try { return JSON.stringify(report, null, 2); } catch (e) { return '{}'; } })();
+        const kb = Math.round(text.length / 1024);
         const el = document.createElement('div');
         el.id = 'pineBotReport';
-        el.style.cssText = 'position:fixed;left:10px;top:10px;right:250px;max-height:70vh;overflow:auto;z-index:2147483647;' +
-            'background:rgba(10,10,14,.96);color:#cfe;font:10px/1.4 ui-monospace,monospace;padding:10px;border-radius:8px;border:1px solid #3a3a46';
-        const close = document.createElement('button');
-        close.textContent = 'close';
-        close.style.cssText = 'float:right;cursor:pointer';
+        el.style.cssText = 'position:fixed;left:10px;top:10px;right:250px;max-height:80vh;overflow:auto;z-index:2147483647;' +
+            'background:rgba(10,10,14,.97);color:#cfe;font:10px/1.4 ui-monospace,monospace;padding:10px;border-radius:8px;border:1px solid #3a3a46';
+
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:8px';
+        const mk = (label, title) => {
+            const b = document.createElement('button');
+            b.textContent = label; b.title = title || '';
+            b.style.cssText = 'cursor:pointer;font:11px ui-monospace,monospace;padding:3px 9px;border-radius:5px;' +
+                'border:1px solid #4a4a58;background:rgba(255,255,255,.09);color:#ffd98a';
+            return b;
+        };
+        const ta = document.createElement('textarea');
+        ta.readOnly = true;
+        ta.value = text;
+        ta.style.cssText = 'width:100%;height:46vh;background:rgba(0,0,0,.5);color:#cfe;border:1px solid #333;' +
+            'border-radius:6px;font:10px/1.35 ui-monospace,monospace;padding:6px;resize:vertical';
+
+        const copy = mk('📋 copy report (' + kb + ' KB)', 'Copies the whole report. Paste it straight to Claude.');
+        const say = (msg, good) => { copy.textContent = msg; copy.style.color = good ? '#9f9' : '#f99'; };
+        // The honest chain: clipboard API -> execCommand on the textarea ->
+        // select and tell the user to press the key. Each step only claims
+        // success after it has actually happened.
+        copy.onclick = () => {
+            // Each step guarded SEPARATELY. One try block around the lot meant
+            // a throwing select() — an older engine, a detached node — skipped
+            // execCommand entirely and lost the last working copy path. The
+            // selection is a nicety; the execCommand call is the fallback, and
+            // it must be attempted even when the selection could not be made.
+            const viaExec = () => {
+                try { ta.readOnly = false; } catch (e) { }
+                try { if (ta.select) ta.select(); } catch (e) { }
+                try { if (ta.setSelectionRange) ta.setSelectionRange(0, text.length); } catch (e) { }
+                let ok = false;
+                try { ok = !!(document.execCommand && document.execCommand('copy')); } catch (e) { }
+                try { ta.readOnly = true; } catch (e) { }
+                if (ok) { say('✓ copied — paste to Claude', true); return true; }
+                return false;
+            };
+            let p = null;
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) p = navigator.clipboard.writeText(text);
+            } catch (e) { p = null; }
+            if (p && typeof p.then === 'function') {
+                p.then(() => say('✓ copied — paste to Claude', true))
+                 .catch(() => { if (!viaExec()) { try { ta.select(); } catch (e) { } say('press ⌘C / Ctrl+C now', false); } });
+            } else if (!viaExec()) {
+                try { ta.select(); } catch (e) { }
+                say('press ⌘C / Ctrl+C now', false);
+            }
+        };
+        const sel = mk('select all', 'Select the text so you can copy it by hand');
+        sel.onclick = () => { try { ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); } catch (e) { } };
+        const close = mk('close', 'Close this overlay');
         close.onclick = () => el.remove();
-        const copy = document.createElement('button');
-        copy.textContent = 'copy';
-        copy.style.cssText = 'float:right;cursor:pointer;margin-right:6px';
-        copy.onclick = () => { try { navigator.clipboard.writeText(JSON.stringify(report, null, 2)); copy.textContent = 'copied'; } catch (e) { } };
-        const pre = document.createElement('pre');
-        pre.textContent = JSON.stringify(report, null, 2);
-        el.appendChild(close);
-        el.appendChild(copy);
-        el.appendChild(pre);
+        bar.appendChild(copy); bar.appendChild(sel); bar.appendChild(close);
+
+        const sum = document.createElement('pre');
+        sum.textContent = reportSummary(report);
+        sum.style.cssText = 'margin:0 0 8px;padding:8px;background:rgba(255,217,138,.07);border-left:2px solid #ffd98a;' +
+            'color:#ffe7b8;font:11px/1.5 ui-monospace,monospace;white-space:pre;overflow-x:auto';
+
+        el.appendChild(bar);
+        el.appendChild(sum);
+        el.appendChild(ta);
         document.body.appendChild(el);
+        // Pre-select on open: even if every clipboard path is blocked, one
+        // keystroke ships the report. This is the fallback that makes the
+        // console unnecessary rather than merely inconvenient.
+        try { ta.focus(); ta.select(); ta.setSelectionRange(0, text.length); } catch (e) { }
     }
 
     // =================================================================
@@ -12288,6 +12433,7 @@
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),
+                    reportSummary, showReport,   // v6.113.0: the overlay report is the product now
                     endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     // v6.109.0: drive the RECORDER, not just the digest. The
@@ -12670,6 +12816,17 @@
                     }
                     if (r.deepStill != null) { g.deepStills = g.deepStills || []; g.deepStills.push(r.deepStill); }
                     if (r.deepInv != null) { g.deepInvs = g.deepInvs || []; g.deepInvs.push(r.deepInv); }
+                    // v6.113.0: the v6.111.0 instruments were written to every
+                    // phase ROW and never aggregated, so the funnel — the thing
+                    // actually read — could not show whether the lane override
+                    // or the ult economy had moved at all.
+                    if (r.laneIn != null) g.laneIn = (g.laneIn || 0) + r.laneIn;
+                    if (r.laneEsc != null) g.laneEsc = (g.laneEsc || 0) + r.laneEsc;
+                    if (r.invAll != null) { g.invAlls = g.invAlls || []; g.invAlls.push(r.invAll); }
+                    if (r.inv != null) { g.invs = g.invs || []; g.invs.push(r.inv); }
+                    if (r.casts != null) { g.castsArr = g.castsArr || []; g.castsArr.push(r.casts); }
+                    if (r.cdMul != null) { g.cdMuls = g.cdMuls || []; g.cdMuls.push(r.cdMul); }
+                    if (r.ultMax != null) { g.ultMaxes = g.ultMaxes || []; g.ultMaxes.push(r.ultMax); }
                     // v6.108.0 the stall signature, aggregated per version.
                     if (r.spd != null) { g.spds = g.spds || []; g.spds.push(r.spd); }
                     if (r.spdLo != null) { g.spdLos = g.spdLos || []; g.spdLos.push(r.spdLo); }
@@ -12713,6 +12870,14 @@
                         medianDeepHold: med(g.deepHolds || []),
                         medianDeepStill: med((g.deepStills || []).map(v => Math.round(v * 100))),
                         medianDeepInv: med((g.deepInvs || []).map(v => Math.round(v * 100))),
+                        // v6.113.0 lane override + ult economy, aggregated
+                        laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0,
+                        medianInv: med((g.invs || []).map(v => Math.round(v * 100))),
+                        medianInvAll: med((g.invAlls || []).map(v => Math.round(v * 100))),
+                        medianCasts: med(g.castsArr || []),
+                        medianCdMul: med(g.cdMuls || []),
+                        ultMaxedRate: (g.ultMaxes || []).length
+                            ? +(g.ultMaxes.filter(v => v >= 6).length / g.ultMaxes.length).toFixed(2) : null,
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times),
@@ -12869,15 +13034,57 @@
                     anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
                 };
             };
+            // ── v6.113.0 ONE BUTTON, EVERY AUDIT ───────────────────────────
+            //
+            // USER: "I want this all done by the report on the UI overlay ...
+            // when asking for audit, pine bot report, damage report, deep held
+            // rate, etc."
+            //
+            // report() carried six of the fourteen instruments. Every session
+            // has therefore ended with me asking for one of the other eight by
+            // name and the user opening a console to fetch it — park, income,
+            // hunt, mark, pause, picks, capStatus, bossHitRange. There is no
+            // reason for that: they are all cheap pure reads of state that is
+            // already in memory. Anything I can ask for is now in the object
+            // the 📋 button copies.
+            //
+            // `safe(...)` around each: one audit throwing (an empty store, a
+            // stat the page has stopped exposing) must degrade that key to
+            // null, never take the whole report down with it — the failure
+            // mode that would send the user straight back to the console.
             window.pineBot.report = () => ({
-                note: 'paste this whole object to Claude. compare = version table, funnel = phase aggregation, phases = raw per-run rows, damage = HP-loss attribution, learning = the v6.107.0 learned layers (tags, enemy types, new CEM dims, drop anchor).',
-                compare: versionComparison(),
-                funnel: window.pineBot.phaseAudit(),
-                phases: (phaseAudit.rows || []).slice(),
-                damage: window.pineBot.damageAudit(),
-                boss: window.pineBot.bossCensus(),
-                learning: window.pineBot.learning()
+                note: 'paste this whole object to Claude — it contains every audit. compare = version table; funnel = phase aggregation (READ deepHeldRate, not deepRate); phases = raw per-run rows; damage = HP-loss attribution; boss = spawn timetable + size growth + predicted ringAt; learning = CEM dims/tags/enemy types (atEdge = the BOX is wrong, converged = no exploration left); park/income/hunt/mark/pause/picks = the per-subsystem audits; cap = live kill-protocol state.',
+                summary: reportSummary({
+                    compare: safe(() => versionComparison(), null),
+                    funnel: safe(() => window.pineBot.phaseAudit(), null),
+                    damage: safe(() => window.pineBot.damageAudit(), null),
+                    boss: safe(() => window.pineBot.bossCensus(), null),
+                    learning: safe(() => window.pineBot.learning(), null)
+                }),
+                compare: safe(() => versionComparison(), null),
+                funnel: safe(() => window.pineBot.phaseAudit(), null),
+                phases: safe(() => (phaseAudit.rows || []).slice(), null),
+                damage: safe(() => window.pineBot.damageAudit(), null),
+                boss: safe(() => window.pineBot.bossCensus(), null),
+                learning: safe(() => window.pineBot.learning(), null),
+                // v6.113.0 — the eight that used to require a console
+                park: safe(() => window.pineBot.parkAudit(), null),
+                income: safe(() => window.pineBot.incomeAudit(), null),
+                hunt: safe(() => window.pineBot.huntAudit(), null),
+                mark: safe(() => window.pineBot.markAudit(), null),
+                pause: safe(() => window.pineBot.pauseAudit(), null),
+                // the module array, not window.pineBot.pickAudit — that lives
+                // under pineBot.test and the optional-call guard would have
+                // silently produced `undefined`, which JSON.stringify DROPS.
+                // A key that vanishes reads as "no data" rather than "wrong
+                // accessor", which is exactly how a missing audit hides.
+                picks: safe(() => pickAudit.slice(-40), null),
+                cap: safe(() => window.pineBot.capStatus(), null),
+                bossHit: safe(() => window.pineBot.bossHitRange(), null)
             });
+            // The same headline block the overlay prints, as a string — so a
+            // quick "how is it going" needs neither a paste nor a screenshot.
+            window.pineBot.summary = () => reportSummary(window.pineBot.report());
             window.pineBot.resetMarkAudit = () => {
                 markAudit = { buckets: {}, runs: 0 };
                 try { localStorage.removeItem(MARK_AUDIT_KEY); } catch (e) { }

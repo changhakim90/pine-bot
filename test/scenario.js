@@ -4178,7 +4178,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -7190,5 +7190,191 @@ if (which === 'break-even') {
         assert.ok(6 * 0.284 > be, 'WATER 6 = ' + (6 * 0.284) + ' does not clear ' + be.toFixed(3));
         assert.ok(3 * 0.284 < be, 'the bar is so low that half a WATER stack clears it');
     });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.113.0 THE OVERLAY REPORT.
+//
+// USER: "I want this all done by the report on the UI overlay. Everything you
+// need should not require things from the console" / "when asking for audit,
+// pine bot report, damage report, deep held rate, etc."
+//
+// Two defects behind the console habit: report() carried six of fourteen
+// instruments, and the copy button reported success unconditionally because
+// navigator.clipboard.writeText is async and its rejection never reached the
+// surrounding try/catch.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'overlay-report') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
+    pineBot.stop();
+    const T = pineBot.test;
+
+    // Every audit I can ask for by name must be a KEY of report(). Listed as
+    // literals: deriving them from the object under test would make this pass
+    // for any object at all.
+    const NEEDED = ['compare', 'funnel', 'phases', 'damage', 'boss', 'learning',
+                    'park', 'income', 'hunt', 'mark', 'pause', 'picks', 'cap', 'bossHit', 'summary'];
+    test('report() carries every audit — nothing needs a console', () => {
+        const r = pineBot.report();
+        const missing = NEEDED.filter(k => !(k in r));
+        assert.strictEqual(missing.length, 0, 'missing from report(): ' + missing.join(', '));
+    });
+    // JSON.stringify DROPS undefined keys, so a wrong accessor disappears
+    // instead of erroring — how `picks` was silently absent in the first draft
+    // of this version (window.pineBot.pickAudit lives under pineBot.test).
+    test('...and none of them is undefined, which JSON would silently drop', () => {
+        const r = pineBot.report();
+        const undef = NEEDED.filter(k => r[k] === undefined);
+        assert.strictEqual(undef.length, 0, 'undefined (will vanish from the paste): ' + undef.join(', '));
+        const round = JSON.parse(JSON.stringify(r));
+        const gone = NEEDED.filter(k => !(k in round));
+        assert.strictEqual(gone.length, 0, 'lost in the JSON round-trip: ' + gone.join(', '));
+    });
+    // One audit throwing must degrade that key to null, never take the report
+    // down — a thrown report sends the user straight back to the console.
+    // `null` is what a WRONG ACCESSOR looks like and also what "no data yet"
+    // looks like, and safe() collapses the two: reverting `picks` to the
+    // non-existent window.pineBot.pickAudit still produced a `picks` key, just
+    // null — so the two tests above stayed green with the bug reinstated.
+    // Asserting the SHAPE separates them. Every one of these returns a live
+    // object or array on a completely fresh store, so a null here means the
+    // accessor is wrong, not that the audit is empty.
+    test('every audit returns its real shape, not the null a bad accessor gives', () => {
+        const r = pineBot.report();
+        const SHAPE = { compare: 'object', funnel: 'object', phases: 'array', damage: 'object',
+            boss: 'object', learning: 'object', park: 'object', income: 'object', hunt: 'object',
+            mark: 'object', pause: 'object', picks: 'array', cap: 'object', bossHit: 'object' };
+        const bad = Object.keys(SHAPE).filter(k => {
+            const want = SHAPE[k], v = r[k];
+            return want === 'array' ? !Array.isArray(v) : (v === null || typeof v !== 'object');
+        });
+        assert.strictEqual(bad.length, 0,
+            'wrong shape (a null here is a broken accessor, not an empty audit): ' +
+            bad.map(k => k + '=' + (Array.isArray(r[k]) ? 'array' : (r[k] === null ? 'NULL' : typeof r[k]))).join(', '));
+    });
+    test('a throwing audit degrades to null instead of killing the report', () => {
+        const keep = pineBot.damageAudit;
+        try {
+            pineBot.damageAudit = () => { throw new Error('boom'); };
+            const r = pineBot.report();
+            assert.strictEqual(r.damage, null, 'damage should be null, got ' + JSON.stringify(r.damage));
+            assert.ok(r.funnel !== undefined && r.compare !== undefined, 'the rest of the report was lost');
+        } finally { pineBot.damageAudit = keep; }
+    });
+
+    // The human summary is a PURE function of the report, so it is asserted on
+    // a fixture rather than on whatever the empty test store happens to hold.
+    test('the summary renders the numbers the user actually asks for', () => {
+        const fixture = {
+            compare: { current: { version: '6.113.0', bartender: 'joe', n: 1250, median: 834, mean: 1068, hellRate: 0.37, supersPerRun: 0.5 } },
+            funnel: { groups: [{ dayClearRate: 0.36, entrySurvival: 0.28, deepHeldRate: 0.12, seatedRate: 0.4,
+                buildsReady: 13, medianReadyAt: 1854, medianEntryDef: 34.9, medianEntryRegen: 1.42,
+                medianDeepAt: 5100, medianDeepHold: 240, medianDeepStill: 100, medianDeepInv: 14,
+                capOuts: 2, earlyCaps: 1, laneIn: 900, laneEsc: 880,
+                medianInvAll: 33, medianCasts: 12, medianCdMul: 0.667, deaths: { day: 1 } }] },
+            damage: { sole: { contact: { n: 60 }, line: { n: 30 }, mark: { n: 10 } } },
+            boss: { kinds: [{ kind: 'GIANT', n: 40, firstGt: 1200, r0: 30, ringAt: 5200 }] },
+            learning: { gen: 343, params: { 'threat.lineWeight': { atEdge: 'min' } }, reopen: { dims: ['a', 'b'] } }
+        };
+        const s = T.reportSummary(fixture);
+        for (const want of ['6.113.0', 'joe', 'n=1250', 'deepHeld 0.12', 'ready 13@1854',
+                            'hold 240s', 'GIANT', 'ring@5200', 'lineWeight:min'])
+            assert.ok(s.indexOf(want) >= 0, 'summary missing "' + want + '":\n' + s);
+        // the damage line must be shares, biggest first
+        assert.ok(/DAMAGE\s+contact 60%\s+line 30%/.test(s), 'damage line wrong:\n' + s);
+    });
+    test('the summary survives a completely empty report', () => {
+        const s = T.reportSummary({});
+        assert.ok(typeof s === 'string' && s.length > 0, 'empty report produced no summary');
+        assert.ok(s.indexOf('census empty') >= 0, 'no boss-census hint on an empty report:\n' + s);
+        assert.ok(!/undefined|NaN|\[object/.test(s), 'raw undefined/NaN leaked into the summary:\n' + s);
+    });
+    test('...and reports the pinned CEM dims, which is what explains a flat row', () => {
+        const s = T.reportSummary({ learning: { params: {
+            'movement.hellCautionMul': { atEdge: 'max' }, 'movement.standoff': {} } } });
+        assert.ok(/AT EDGE.*hellCautionMul:max/.test(s), s);
+        assert.ok(s.indexOf('standoff') < 0, 'a dim that is NOT at an edge was listed:\n' + s);
+    });
+    // Render the overlay while spying on createElement, so the pieces can be
+    // inspected: the summary block must actually carry the summary, and the
+    // copy button must exist to be exercised below.
+    const render = (rep) => {
+        const made = [];
+        const keepCreate = global.document.createElement;
+        const keepAppend = global.document.body.appendChild;
+        let added = 0;
+        global.document.createElement = function (tag) {
+            const e = keepCreate.call(this, tag); e.__tag = tag; made.push(e); return e;
+        };
+        global.document.body.appendChild = function () { added++; return keepAppend && keepAppend.apply(this, arguments); };
+        try { T.showReport(rep); } finally {
+            global.document.createElement = keepCreate;
+            global.document.body.appendChild = keepAppend;
+        }
+        return { made, added, btn: made.filter(e => e.__tag === 'button'), ta: made.filter(e => e.__tag === 'textarea')[0] };
+    };
+    test('showReport renders, reaches the DOM, and PRINTS the summary', () => {
+        const rep = pineBot.report();
+        const { made, added } = render(rep);
+        assert.strictEqual(added, 1, 'the overlay was not appended to the document');
+        const texts = made.map(e => String(e.textContent || ''));
+        assert.ok(texts.some(t => t.indexOf('FUNNEL') >= 0),
+            'no element carries the summary — the overlay rendered an empty header');
+    });
+    test('the textarea carries the full JSON, so ⌘C always works', () => {
+        const rep = pineBot.report();
+        const { ta } = render(rep);
+        assert.ok(ta, 'no textarea — a <pre> cannot be selected, which is why the console was needed');
+        assert.ok(String(ta.value || '').length > 200 && String(ta.value).indexOf('"funnel"') >= 0,
+            'textarea does not hold the report JSON');
+    });
+    // ── THE BUG THIS VERSION EXISTS FOR ────────────────────────────────────
+    // navigator.clipboard.writeText is ASYNC. The old handler called it inside
+    // a try/catch and set the label to 'copied' on the next line, so a REJECTED
+    // write still reported success. The button lied on every failure, which is
+    // exactly when the user needed to be told to use the fallback.
+    {
+        const withClipboard = (impl, exec) => {
+            const kc = global.navigator.clipboard, ke = global.document.execCommand;
+            global.navigator.clipboard = impl;
+            global.document.execCommand = exec;
+            try {
+                const { btn } = render(pineBot.report());
+                const copy = btn.filter(b => String(b.textContent).indexOf('copy report') >= 0)[0];
+                assert.ok(copy, 'no copy button rendered');
+                copy.onclick();
+                return copy;
+            } finally { global.navigator.clipboard = kc; global.document.execCommand = ke; }
+        };
+        // NOTE: `test()` here is SYNCHRONOUS and ignores a returned promise,
+        // so an assertion inside .then() would never run and the test would
+        // pass vacuously — which is what the first draft of these four did.
+        // These synchronous thenables drive the same p.then().catch() chain to
+        // completion before the assertion, with no event loop involved.
+        const syncResolved = () => ({ then(f) { f(); return { catch() { } }; } });
+        const syncRejected = () => ({ then() { return { catch(g) { g(); } }; } });
+        test('a RESOLVED clipboard write reports success', () => {
+            const c = withClipboard({ writeText: syncResolved }, () => false);
+            assert.ok(/copied/.test(c.textContent), 'label ' + c.textContent);
+        });
+        test('a REJECTED clipboard write falls back to execCommand and says so', () => {
+            let execCalled = 0;
+            const c = withClipboard({ writeText: syncRejected }, () => { execCalled++; return true; });
+            assert.strictEqual(execCalled, 1, 'the execCommand fallback was never reached');
+            assert.ok(/copied/.test(c.textContent), 'label ' + c.textContent);
+        });
+        test('when BOTH paths fail the button must NOT claim it copied', () => {
+            const c = withClipboard({ writeText: syncRejected }, () => false);
+            assert.ok(!/copied/.test(c.textContent),
+                'the button claimed success with nothing on the clipboard: ' + c.textContent);
+            assert.ok(/\u2318C|Ctrl/.test(c.textContent), 'no manual instruction given: ' + c.textContent);
+        });
+        test('...and with no clipboard API at all it still offers a path', () => {
+            const c = withClipboard(undefined, () => false);
+            assert.ok(!/copied/.test(c.textContent), c.textContent);
+            assert.ok(/\u2318C|Ctrl/.test(c.textContent), c.textContent);
+        });
+    }
     done();
 }
