@@ -1593,7 +1593,69 @@
         // and spam ultimate". The RING is the observable signal; the clock is
         // only a fallback for when no boss is on screen. Either fires it.
         const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
-        const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
+        // ── v6.112.0 ringHuge READ THE FILTERED LIST, AND COULD NOT FIRE ────
+        //
+        // `th.enemies` is range-filtered. The gather keeps a boss beyond
+        // `threat.enemyRange` only as a `distantBoss`, and that exemption
+        // carries the clause `(!hellDetected || offRelevant || e.r <= 90 ||
+        // frozenNow)` — so IN HELL a boss with r > 90 that is out of range is
+        // dropped outright.
+        //
+        // r > 90 is precisely what "the bosses are too large" means. The test
+        // wants r >= 0.55 * 540 / 2 = 148.5, and a boss that size centred on
+        // the field sits ~345 px from the corner the bot is parked in, against
+        // an enemyRange whose box maximum is 240. So the one signal the user's
+        // whole deep-hell definition rests on was structurally unable to fire
+        // in the posture it describes — the corner. The clock fallback
+        // (cornerAnchorFromS) has been carrying the corner doctrine alone.
+        //
+        // "Is there a canvas-sized boss on the field" is a FIELD question, not
+        // a proximity one. Read the raw array, exactly as the 6.108.0
+        // saturation arm had to. Walls are excluded: a NO BOOKING wall is
+        // large and stationary and is not the growing boss this describes.
+        // v6.112.0 BOSS CENSUS — sample the RAW field, for the same reason
+        // ringHuge now does: a boss the gatherer drops is still on the board
+        // and still on the timetable. First sighting per id, then the radius
+        // re-sampled on a coarse grid so r(t) can be fitted.
+        {
+            const rawB = Array.isArray(G.enemies) ? G.enemies : null;
+            if (rawB && bossSeen) {
+                const gtB = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                for (const e of rawB) {
+                    if (!e || typeof e.r !== 'number') continue;
+                    if (!(e.boss === true || String(e.type || '') === 'boss')) continue;
+                    const id = e.id != null ? String(e.id) : (String(e.bossChar || e.type || '?') + '@' + Math.round(e.maxHp || 0));
+                    let rec = bossSeen[id];
+                    if (!rec) {
+                        if (Object.keys(bossSeen).length >= 60) continue;   // bounded
+                        rec = bossSeen[id] = {
+                            gt: Math.round(gtB), r0: Math.round(e.r),
+                            k: String(e.bossChar || e.type || '?'),
+                            no: e.bossNo != null ? e.bossNo : null,
+                            tier: e.tier != null ? e.tier : null,
+                            hp0: Math.round(e.maxHp || e.hp || 0),
+                            wall: e.wall === true || /nobook/i.test(String(e.bossChar || '') + ' ' + String(e.type || '')),
+                            rs: []
+                        };
+                    }
+                    // coarse growth samples: at most one per 30 game-seconds, 12 max
+                    const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
+                    if (rec.rs.length < 12 && (!last || gtB - last[0] >= 30)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                }
+            }
+        }
+        const ringShare = CONFIG.deepHell.ringShare != null ? CONFIG.deepHell.ringShare : 0.55;
+        const ringHuge = (() => {
+            const raw = Array.isArray(G.enemies) ? G.enemies : th.enemies;
+            for (const e of raw) {
+                if (!e || typeof e.r !== 'number') continue;
+                const isBoss = e.boss === true || String(e.type || '') === 'boss';
+                if (!isBoss) continue;
+                if (e.wall === true || /nobook/i.test(String(e.bossChar || '') + ' ' + String(e.type || ''))) continue;
+                if (e.r * 2 >= canvasW * ringShare) return true;
+            }
+            return false;
+        })();
         // v6.89.3 (user): "kiting for unkillable mobs is useless, and anchoring
         // in corner with southside to theoretically be able to kill the contact
         // mobs is better in order to land a timestop ... so anchoring might be
@@ -2981,7 +3043,13 @@
         const parkArmor = (parkDef != null)
             ? parkDef >= (DHp.parkDefense != null ? DHp.parkDefense : 30)
             : (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
-        const parkRegen = regenRate() >= (DHp.parkRegenRate != null ? DHp.parkRegenRate : 1.0);
+        // v6.112.0: the seat now requires regen that actually out-heals the
+        // contact the seat will take, not a flat 1.0 that sits below it.
+        const parkRegenFlat = DHp.parkRegenRate != null ? DHp.parkRegenRate : 1.0;
+        const parkBE = contactBreakEven();   // null = armour unreadable: no opinion
+        const parkRegenNeed = parkBE == null ? parkRegenFlat : Math.max(parkRegenFlat,
+            parkBE * (DHp.parkRegenBreakEven != null ? DHp.parkRegenBreakEven : 0));
+        const parkRegen = regenRate() >= parkRegenNeed;
         // v6.90.1 adds the OFFENSIVE half of the equilibrium. A parked player
         // survives because two things are true at once: armor and regen absorb
         // what arrives, AND the auto-attack plus the SOUTH SIDE burn clear the
@@ -3526,6 +3594,48 @@
         }
         lastDir = { x: vx, y: vy };
 
+        // ── v6.112.0 THE DEEP-HELL REGIME, measured as a state ──────────────
+        //
+        // USER: "deep hell should be framed as when corner anchoring works and
+        // the bot just fires ultimates to keep itself alive without any
+        // movement required due to the bosses being too large and stop giving
+        // tips."
+        //
+        // Placed here because it needs the FINAL heading. `parked` is set by
+        // the override chain above and `vx/vy` are only settled once that
+        // chain has run — reading either earlier books the previous tick's
+        // posture, and the whole point of this measurement is that the bot is
+        // standing still RIGHT NOW.
+        //
+        // Note what is NOT gated on: the ult. "Fires ultimates to keep itself
+        // alive" is recorded as `deepInv`, a quality of the hold, not a
+        // condition of entering it. If the regime turns out to be held at a
+        // low ult share, that is the mitigation model being right — armour,
+        // not ults, is what makes the corner survivable — and gating on the
+        // ult would have hidden the finding instead of producing it.
+        const DR = CONFIG.deepRegime || {};
+        const gtReg = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const tipsDone = gtReg >= (CONFIG.deepHell.tipWindowToS || 4800);
+        const regimeNow = hellDetected &&
+            (DR.requireRing === false || ringHuge) &&
+            (DR.requireTips === false || tipsDone) &&
+            (DR.requireParked === false || parked);
+        if (regimeNow) {
+            deepRegimeTicks++;
+            if (deepFirstGt == null) deepFirstGt = gtReg;
+            if (deepStreakFrom == null) deepStreakFrom = gtReg;
+            const held = gtReg - deepStreakFrom;
+            if (held > deepHoldBest) deepHoldBest = held;
+            // "without any movement required" — the literal claim, checked
+            // rather than assumed. park zeroes the vector; anything else is
+            // the bot still working for its survival.
+            if (vx === 0 && vy === 0) deepStillTicks++;
+            if (ultInvuln) deepInvTicks++;
+            deepHpSum += hpRatio;
+        } else {
+            deepStreakFrom = null;
+        }
+
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
         // dashUntil — it grants NO invulnerability and no i-frames. It is a
         // 0.16 s movement burst, i.e. a pure MULTIPLIER on the heading the
@@ -3575,6 +3685,13 @@
             // override is steering — a posture that cannot be observed cannot
             // be tuned, and this one replaces a dash heading nobody could see.
             laneIn: laneCov, laneEsc: laneEscape ? { x: +laneEscape.x.toFixed(2), y: +laneEscape.y.toFixed(2) } : null,
+            // v6.112.0: the regime, live on the panel and in pineBot.plan().
+            // `deepRegime` is the state right now; `ringHuge`/`tipsDone` are
+            // its two hard clauses reported separately so a row that never
+            // enters it says WHICH clause was missing rather than only that
+            // it did not happen.
+            deepRegime: regimeNow, ringHuge, tipsDone,
+            deepHold: Math.round(deepHoldBest),
             surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, lineHere, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,

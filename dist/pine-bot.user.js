@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.111.0
+// @version      6.112.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.111.0';
+    const SCRIPT_VERSION = '6.112.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -852,6 +852,11 @@
             // super evolution is still reachable and a frozen boss is a free
             // kill at point-blank range.
             tipWindowFromS: 1800,      // 30 min
+            // v6.112.0: the ring test's threshold, named so it is tunable and
+            // so `ringHuge` stops being a magic 0.55 buried in the planner.
+            // Measured against the RAW enemy array — see the comment at the
+            // ringHuge definition for why the filtered list made it dead.
+            ringShare: 0.55,
             tipWindowToS: 4800,        // 80 min
             cornerAnchorFromS: 4800,   // v6.89.2: was 9000 (150 min) — a gate no
                                        // recorded run ever reached. Now the tip
@@ -1063,6 +1068,18 @@
             capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
+            // v6.112.0: the gate is now max(parkRegenRate, breakEven * this).
+            // 1.0 means "park only when regen actually out-heals the contact
+            // the anchor will take" — see contactBreakEven(). Set to 0 to
+            // restore the pre-6.112.0 flat 1.0 gate exactly.
+            //
+            // This makes park HARDER to open, on purpose. A bot parked at
+            // regen 1.42 against a 1.579 break-even is not surviving, it is
+            // dying at 0.16 HP/s with the panic gates switched off — and it
+            // books as a seated run, which is how the seat has been scoring
+            // credit for runs it was quietly losing. Refusing the seat makes
+            // that visible in seatedRate instead of hiding it in the deaths.
+            parkRegenBreakEven: 1.0,
             parkRadius: 26,         // "arrived": stop moving inside this radius
             // v6.91.3: how far in from the TRUE corner the seat sits. The
             // mark-immunity geometry is 80.92 px at inset 0, 70.78 at 7.2 (the
@@ -1263,11 +1280,44 @@
         // entryS seconds of the hell latch (the surge the entry seat exists
         // for); 'hell' = died before deepFromS; 'deep' = past deepFromS —
         // the parked-equilibrium regime (a 12000 s cap-out books here).
+        // v6.112.0 — the mitigation constants, read from the game source and
+        // named here instead of living as literals in three comments. See
+        // contactBreakEven(); mitigation-model.md carries the derivations.
+        mitigation: {
+            invulnFrames: 38,   // hurtPlayer sets player.invuln = 38 (on the PLAYER, not per attacker)
+            contactDmg: 22.4    // flat common-mob contact, before armour subtraction
+        },
         phaseAudit: {
             entryS: 300,
+            // v6.112.0: KEPT, but demoted. `deepFromS` still labels the phase a
+            // run ended in, so every historical row stays comparable — but it
+            // is no longer the success signal. The regime below is. See
+            // deepRegime and the accumulators in 05-movement.
             deepFromS: 7200,
+            // How long the regime must be HELD before a run counts as having
+            // reached it. A couple of ticks of ringHuge while walking past a
+            // corner is not deep hell; two continuous minutes of anchored,
+            // ult-sustained, zero-movement survival is exactly what the user
+            // described. Read `medianDeepHold` before trusting this number —
+            // if holds cluster far above or below it, move it to the data the
+            // way capStable.fromS was moved to medianReadyAt in 6.103.0.
+            deepHoldS: 120,
             keep: 240              // rows kept (~120 bytes each)
         },
+        // v6.112.0 THE REGIME PREDICATE, in the user's own four clauses.
+        // Each maps to a signal the planner already computes:
+        //   "bosses being too large"   -> ringHuge (boss diameter >= 55% of canvas)
+        //   "stop giving tips"         -> gt >= deepHell.tipWindowToS (4800)
+        //   "corner anchoring works,
+        //    no movement required"     -> parked (park/seat zeroes velocity)
+        //   "fires ultimates to keep
+        //    itself alive"             -> measured as deepInv, NOT gated on
+        // The fourth is deliberately a QUALITY measure rather than a gate: if
+        // the regime is held with a low ult share, that is a finding about how
+        // the anchor survives (armour, not ults), and gating on it would hide
+        // exactly that. requireRing/requireTips exist so the two hard clauses
+        // can be relaxed one at a time when reading a row, never silently.
+        deepRegime: { requireRing: true, requireTips: true, requireParked: true },
 
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
         // strategy itself — not just the dodge physics — improves across runs.
@@ -2497,6 +2547,55 @@
     // v6.111.0 lane-escape telemetry: ticks spent inside an armed lane band,
     // and ticks the perpendicular override actually steered.
     let laneInTicks = 0, laneEscTicks = 0;
+    // ── v6.112.0 THE DEEP-HELL REGIME ───────────────────────────────────────
+    //
+    // USER, and it is a definition rather than a threshold: "deep hell should
+    // be framed as when corner anchoring works and the bot just fires
+    // ultimates to keep itself alive without any movement required due to the
+    // bosses being too large and stop giving tips."
+    //
+    // Every clause of that is already a live signal in the planner — ringHuge,
+    // tipWindowToS, parkOn zeroing velocity, ultInvuln. None of them reached
+    // the funnel, which booked `deep` off `phaseAudit.deepFromS` (7200 s), a
+    // bare clock that knows nothing about whether the regime was ever
+    // entered. A run capped at 2400 s with a perfect anchor and a run that
+    // flailed to 7201 s scored deep 0 and deep 1 respectively — exactly
+    // backwards.
+    //
+    // These accumulate the regime as a STATE the run holds, so a single run
+    // yields hundreds of samples instead of one right-censored duration. That
+    // is what moves the measurement out of the ~5000-runs-per-comparison class
+    // and into the ~40 class.
+    let deepRegimeTicks = 0, deepStreakFrom = null, deepHoldBest = 0, deepFirstGt = null,
+        deepStillTicks = 0, deepInvTicks = 0, deepHpSum = 0;
+    // ── v6.112.0 THE BOSS CENSUS ────────────────────────────────────────────
+    //
+    // USER: "given the predictability of the bosses appearance and the size at
+    // which they appear, the bot can be calibrated better" / "the boss
+    // appearance and size should be in the source code of the game."
+    //
+    // Almost certainly true — but this project's standing rule is that the
+    // truth is what is OBSERVED in the game, and it has now been burned twice
+    // by reading a proxy and reporting it as the quantity. A source read gives
+    // the spawn table; a census gives the spawn table AND the growth curve AND
+    // proof that both match what the bot actually sees through its own
+    // gatherer, which is the thing that has silently failed before (ringHuge
+    // could not fire from a corner until this version).
+    //
+    // Per boss id, first sighting only: gt, type/bossChar, radius, maxHp — plus
+    // the radius re-sampled as it grows, so r(t) can be fitted across runs
+    // rather than assumed. Cheap: bosses are a handful per run, and the census
+    // is capped. Aggregated by `pineBot.bossCensus()`.
+    const BOSS_CENSUS_KEY = 'pineBotBossCensus_v1';
+    let bossCensus = (() => {
+        const blank = { runs: [] };
+        try {
+            const raw = JSON.parse(localStorage.getItem(BOSS_CENSUS_KEY) || 'null');
+            if (raw && Array.isArray(raw.runs)) return raw;
+        } catch (e) { }
+        return blank;
+    })();
+    let bossSeen = {};
     // v6.102.0: gt at which the BUILD first met its armour+supers bars —
     // the measurement that sets capStable.fromS from data instead of guesswork.
     let capReadyGt = null;
@@ -2702,6 +2801,11 @@
     //   reading directly, so it has to be revised on purpose rather than made
     //   to pass. They stay as they are until each has its own evidence.
     const ARMOR_PER_LEVEL = 5.832;   // olive.pas.per 4 x the 1.458 ingredient stack
+    // v6.112.0: the hard ceiling the game can produce — min(60, 3*upDefense +
+    // pas.armor) with upDefense unobtainable and OLIVE capped at 6. The 60 in
+    // the source is decoration. Named so no threshold is ever again written
+    // above a value the game cannot reach (capStable.defMin 35 vs 34.992).
+    const ARMOR_CAP = 6 * ARMOR_PER_LEVEL;   // 34.992
     function liveDefense() {
         const d = safe(() => player.defense, null);
         return (typeof d === 'number' && d > 0) ? d : null;
@@ -2720,6 +2824,56 @@
         const r = safe(() => player.regenBonus, null);
         if (typeof r === 'number' && r > 0) return r;
         return 0.284 * (ownedLevels['WATER'] || 0) + 0.512 * (ownedLevels['SIMPLE SYRUP'] || 0);
+    }
+
+    // ── v6.112.0 CONTACT BREAK-EVEN ─────────────────────────────────────────
+    //
+    // USER: "normal mob damage can be absorbed and countered with simple
+    // syrup's healing regen rate." That is exactly right, and it has a number
+    // attached that the park gate was not using.
+    //
+    //   hurtPlayer sets player.invuln = 38 frames, and the invuln is on the
+    //   PLAYER, not per-attacker — so total incoming contact is rate-limited
+    //   at 60/38 = 1.579 hits/s no matter how many bodies are touching us.
+    //   That is why 260 enemies do the same contact dps as one.
+    //
+    //   Armour is FLAT subtraction with a floor of 1. Common contact is ~22.4,
+    //   so at any defense >= 21.4 every common hit does exactly 1 damage.
+    //
+    //   => break-even regen at armour cap = 1.579 * 1 = 1.579 HP/s.
+    //
+    // `deepHell.parkRegenRate` is 1.0. A build that just clears it is losing
+    // 0.58 HP/s while parked — it does not die fast, it dies slowly, which is
+    // precisely the failure the funnel recorded: of 13 ready builds, 7 died
+    // naturally between 2523 and 7394 s "because their hold never completed".
+    // parkAudit's seated median regen is 1.42: also below break-even. The one
+    // confirmed 13,244 s run sat at 2.218 — net +0.64 HP/s.
+    //
+    // For JOE this is entirely a pick problem: innate regen is ZERO (the
+    // (0.035+(lv-1)*0.025)*1.1 term is pat/minguk only). SIMPLE SYRUP pays
+    // 0.512/level and WATER 0.284, so break-even is SIMPLE SYRUP 4 — or WATER
+    // 6, the entire cap, for less. The user named the right ingredient.
+    // Returns null when armour cannot be read at all. Callers must treat null
+    // as "no opinion" and fall back to their flat threshold — NEVER as zero
+    // armour. The first draft defaulted `def` to 0, which makes the break-even
+    // 1.579 * 22.4 = 35.4 HP/s: a bar no build in this game can reach, silently
+    // closing the park gate for good. That is the same unreachable-threshold
+    // failure as capStable.defMin 35 vs a 34.992 ceiling, which killed the
+    // early cap for four versions — reproduced here within one build, and
+    // caught only because four existing park scenarios went red.
+    function contactBreakEven() {
+        const M = CONFIG.mitigation || {};
+        const hz = 60 / (M.invulnFrames || 38);
+        const dmg = M.contactDmg != null ? M.contactDmg : 22.4;
+        // liveDefense() first (the stat hurtPlayer actually subtracts), then
+        // the armour the owned levels imply. Both unavailable = no opinion.
+        let def = liveDefense();
+        if (def == null) {
+            const lv = (ownedLevels['OLIVE'] || 0) + (ownedLevels['NEGRONI'] || 0);
+            if (lv <= 0) return null;
+            def = Math.min(ARMOR_CAP, lv * ARMOR_PER_LEVEL);
+        }
+        return hz * Math.max(1, dmg - def);
     }
 
     function safe(fn, fallback) {
@@ -5239,8 +5393,44 @@
         // gates pass at entry instead of forty minutes into hell.
         {
             const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
-            if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
-                !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
+            // ── v6.112.0 PRICED BY HP/s, AND AGAINST THE RIGHT BAR ─────────
+            //
+            // USER: "normal mob damage can be absorbed and countered with
+            // simple syrup's healing regen rate." Two corrections follow.
+            //
+            // (1) THE BAR. The checkpoint fired while regen < 1.0, the old
+            // park gate — which is BELOW break-even. At armour cap the
+            // 38-frame invuln caps contact at 1.579 hits/s x 1 damage, so the
+            // anchor needs 1.579 HP/s to hold. Stopping the checkpoint at 1.0
+            // stopped it 0.58 HP/s short and handed the seat a build that
+            // loses slowly. parkAudit's seated median regen is 1.42: the runs
+            // that DID park were, at the median, still underwater.
+            //
+            // (2) THE INGREDIENT. Both cards paid a flat +16, and they are not
+            // worth the same: SIMPLE SYRUP is 0.512 HP/s per level against
+            // WATER's 0.284 — 1.8x. Joe has ZERO innate regen, so every point
+            // comes from these two, and the difference is break-even at
+            // SIMPLE SYRUP 4 versus WATER 6 (the entire cap, for less). The
+            // bonus is now proportional to the HP/s the level actually buys.
+            //
+            // WATER keeps a real bonus rather than being demoted: it is half
+            // of the SUGAR+WATER craft that MAKES simple syrup, so starving it
+            // starves the better card. That is also why DAY_ORDER puts it at 8
+            // and SIMPLE SYRUP at 9 — a prerequisite, not a preference.
+            const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
+            if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
+                !hellDetected && gtR >= 600) {
+                // null = armour unreadable; fall back to the old flat bar
+                // rather than to a threshold nothing can meet.
+                const be = contactBreakEven();
+                const need = be == null ? 1.0 : be;
+                if (regenRate() < need) {
+                    // 16 was WATER's price; scale from there by HP/s per level
+                    // so SIMPLE SYRUP lands at ~29 and outranks it outright.
+                    add(Math.round(16 * (REGEN_PER_LV[name] / REGEN_PER_LV['WATER'])),
+                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water'));
+                }
+            }
             // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
             // dead in entry at median def 29.2 — the parkAudit seat bar is
             // 35). The fund rush buys tempo; from entryPrepFromS this
@@ -6206,6 +6396,10 @@
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         invulnAllTicks = 0; ultCasts = 0; ultLastReadyAt = null; ultCdMulSeen = null;   // v6.111.0
         laneInTicks = 0; laneEscTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
+        // v6.112.0: the regime is a per-run achievement, not a session total
+        deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
+        deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
+        bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -6299,7 +6493,22 @@
             ultMax: ultMaxLv || null,
             ult6At: ultLv6At == null ? null : Math.round(ultLv6At),
             laneIn: laneInTicks || 0,
-            laneEsc: laneEscTicks || 0
+            laneEsc: laneEscTicks || 0,
+            // v6.112.0 THE DEEP-HELL REGIME — the user's definition, measured.
+            // These replace `ph === 'deep'` as the success signal; the phase
+            // label stays for continuity with every historical row.
+            //   deepAt   = gt the regime was first entered (null = never)
+            //   deepHold = longest CONTINUOUS hold, in game seconds
+            //   deepStill= share of regime ticks with velocity exactly zero
+            //              ("without any movement required", checked)
+            //   deepInv  = ult invuln share DURING the regime ("fires
+            //              ultimates to keep itself alive")
+            //   deepHp   = mean HP ratio during the regime
+            deepAt: deepFirstGt == null ? null : Math.round(deepFirstGt),
+            deepHold: Math.round(deepHoldBest),
+            deepStill: deepRegimeTicks ? +(deepStillTicks / deepRegimeTicks).toFixed(3) : null,
+            deepInv: deepRegimeTicks ? +(deepInvTicks / deepRegimeTicks).toFixed(3) : null,
+            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null
         };
     }
 
@@ -6463,6 +6672,21 @@
                     seatShare: runHellTicks ? +(parkedTicks / runHellTicks).toFixed(3) : null,
                     entry: entrySample
                 }, 80);
+            }
+        } catch (e) { }
+        // v6.112.0 BOSS CENSUS — one row per run holding every boss first
+        // sighted in it. This is the empirical half of "boss appearance and
+        // size are predictable": across runs it yields the spawn timetable and
+        // the radius growth curve, measured through the bot's own view of the
+        // field rather than assumed from it.
+        try {
+            const seen = Object.keys(bossSeen || {});
+            if (seen.length) {
+                bossCensus = appendAuditRow(BOSS_CENSUS_KEY, bossCensus, 'runs', {
+                    t: Math.round(stats.time || 0),
+                    hell: !!hellDetected,
+                    b: seen.map(k => bossSeen[k])
+                }, 60);
             }
         } catch (e) { }
         // v6.96.2 PHASE AUDIT: one row per run, EVERY run — parkAudit above
@@ -8782,7 +9006,69 @@
         // and spam ultimate". The RING is the observable signal; the clock is
         // only a fallback for when no boss is on screen. Either fires it.
         const canvasW = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
-        const ringHuge = th.enemies.some(e => e.boss && (e.r || 0) * 2 >= canvasW * 0.55);
+        // ── v6.112.0 ringHuge READ THE FILTERED LIST, AND COULD NOT FIRE ────
+        //
+        // `th.enemies` is range-filtered. The gather keeps a boss beyond
+        // `threat.enemyRange` only as a `distantBoss`, and that exemption
+        // carries the clause `(!hellDetected || offRelevant || e.r <= 90 ||
+        // frozenNow)` — so IN HELL a boss with r > 90 that is out of range is
+        // dropped outright.
+        //
+        // r > 90 is precisely what "the bosses are too large" means. The test
+        // wants r >= 0.55 * 540 / 2 = 148.5, and a boss that size centred on
+        // the field sits ~345 px from the corner the bot is parked in, against
+        // an enemyRange whose box maximum is 240. So the one signal the user's
+        // whole deep-hell definition rests on was structurally unable to fire
+        // in the posture it describes — the corner. The clock fallback
+        // (cornerAnchorFromS) has been carrying the corner doctrine alone.
+        //
+        // "Is there a canvas-sized boss on the field" is a FIELD question, not
+        // a proximity one. Read the raw array, exactly as the 6.108.0
+        // saturation arm had to. Walls are excluded: a NO BOOKING wall is
+        // large and stationary and is not the growing boss this describes.
+        // v6.112.0 BOSS CENSUS — sample the RAW field, for the same reason
+        // ringHuge now does: a boss the gatherer drops is still on the board
+        // and still on the timetable. First sighting per id, then the radius
+        // re-sampled on a coarse grid so r(t) can be fitted.
+        {
+            const rawB = Array.isArray(G.enemies) ? G.enemies : null;
+            if (rawB && bossSeen) {
+                const gtB = typeof G.gameTime === 'number' ? G.gameTime : 0;
+                for (const e of rawB) {
+                    if (!e || typeof e.r !== 'number') continue;
+                    if (!(e.boss === true || String(e.type || '') === 'boss')) continue;
+                    const id = e.id != null ? String(e.id) : (String(e.bossChar || e.type || '?') + '@' + Math.round(e.maxHp || 0));
+                    let rec = bossSeen[id];
+                    if (!rec) {
+                        if (Object.keys(bossSeen).length >= 60) continue;   // bounded
+                        rec = bossSeen[id] = {
+                            gt: Math.round(gtB), r0: Math.round(e.r),
+                            k: String(e.bossChar || e.type || '?'),
+                            no: e.bossNo != null ? e.bossNo : null,
+                            tier: e.tier != null ? e.tier : null,
+                            hp0: Math.round(e.maxHp || e.hp || 0),
+                            wall: e.wall === true || /nobook/i.test(String(e.bossChar || '') + ' ' + String(e.type || '')),
+                            rs: []
+                        };
+                    }
+                    // coarse growth samples: at most one per 30 game-seconds, 12 max
+                    const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
+                    if (rec.rs.length < 12 && (!last || gtB - last[0] >= 30)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                }
+            }
+        }
+        const ringShare = CONFIG.deepHell.ringShare != null ? CONFIG.deepHell.ringShare : 0.55;
+        const ringHuge = (() => {
+            const raw = Array.isArray(G.enemies) ? G.enemies : th.enemies;
+            for (const e of raw) {
+                if (!e || typeof e.r !== 'number') continue;
+                const isBoss = e.boss === true || String(e.type || '') === 'boss';
+                if (!isBoss) continue;
+                if (e.wall === true || /nobook/i.test(String(e.bossChar || '') + ' ' + String(e.type || ''))) continue;
+                if (e.r * 2 >= canvasW * ringShare) return true;
+            }
+            return false;
+        })();
         // v6.89.3 (user): "kiting for unkillable mobs is useless, and anchoring
         // in corner with southside to theoretically be able to kill the contact
         // mobs is better in order to land a timestop ... so anchoring might be
@@ -10170,7 +10456,13 @@
         const parkArmor = (parkDef != null)
             ? parkDef >= (DHp.parkDefense != null ? DHp.parkDefense : 30)
             : (ownedLevels['OLIVE'] || 0) >= (DHp.parkOliveLv || 6);
-        const parkRegen = regenRate() >= (DHp.parkRegenRate != null ? DHp.parkRegenRate : 1.0);
+        // v6.112.0: the seat now requires regen that actually out-heals the
+        // contact the seat will take, not a flat 1.0 that sits below it.
+        const parkRegenFlat = DHp.parkRegenRate != null ? DHp.parkRegenRate : 1.0;
+        const parkBE = contactBreakEven();   // null = armour unreadable: no opinion
+        const parkRegenNeed = parkBE == null ? parkRegenFlat : Math.max(parkRegenFlat,
+            parkBE * (DHp.parkRegenBreakEven != null ? DHp.parkRegenBreakEven : 0));
+        const parkRegen = regenRate() >= parkRegenNeed;
         // v6.90.1 adds the OFFENSIVE half of the equilibrium. A parked player
         // survives because two things are true at once: armor and regen absorb
         // what arrives, AND the auto-attack plus the SOUTH SIDE burn clear the
@@ -10715,6 +11007,48 @@
         }
         lastDir = { x: vx, y: vy };
 
+        // ── v6.112.0 THE DEEP-HELL REGIME, measured as a state ──────────────
+        //
+        // USER: "deep hell should be framed as when corner anchoring works and
+        // the bot just fires ultimates to keep itself alive without any
+        // movement required due to the bosses being too large and stop giving
+        // tips."
+        //
+        // Placed here because it needs the FINAL heading. `parked` is set by
+        // the override chain above and `vx/vy` are only settled once that
+        // chain has run — reading either earlier books the previous tick's
+        // posture, and the whole point of this measurement is that the bot is
+        // standing still RIGHT NOW.
+        //
+        // Note what is NOT gated on: the ult. "Fires ultimates to keep itself
+        // alive" is recorded as `deepInv`, a quality of the hold, not a
+        // condition of entering it. If the regime turns out to be held at a
+        // low ult share, that is the mitigation model being right — armour,
+        // not ults, is what makes the corner survivable — and gating on the
+        // ult would have hidden the finding instead of producing it.
+        const DR = CONFIG.deepRegime || {};
+        const gtReg = typeof G.gameTime === 'number' ? G.gameTime : 0;
+        const tipsDone = gtReg >= (CONFIG.deepHell.tipWindowToS || 4800);
+        const regimeNow = hellDetected &&
+            (DR.requireRing === false || ringHuge) &&
+            (DR.requireTips === false || tipsDone) &&
+            (DR.requireParked === false || parked);
+        if (regimeNow) {
+            deepRegimeTicks++;
+            if (deepFirstGt == null) deepFirstGt = gtReg;
+            if (deepStreakFrom == null) deepStreakFrom = gtReg;
+            const held = gtReg - deepStreakFrom;
+            if (held > deepHoldBest) deepHoldBest = held;
+            // "without any movement required" — the literal claim, checked
+            // rather than assumed. park zeroes the vector; anything else is
+            // the bot still working for its survival.
+            if (vx === 0 && vy === 0) deepStillTicks++;
+            if (ultInvuln) deepInvTicks++;
+            deepHpSum += hpRatio;
+        } else {
+            deepStreakFrom = null;
+        }
+
         // v6.89.8 CORNERWARD. Source-verified: `tryDash` sets only dashDx/dashDy/
         // dashUntil — it grants NO invulnerability and no i-frames. It is a
         // 0.16 s movement burst, i.e. a pure MULTIPLIER on the heading the
@@ -10764,6 +11098,13 @@
             // override is steering — a posture that cannot be observed cannot
             // be tuned, and this one replaces a dash heading nobody could see.
             laneIn: laneCov, laneEsc: laneEscape ? { x: +laneEscape.x.toFixed(2), y: +laneEscape.y.toFixed(2) } : null,
+            // v6.112.0: the regime, live on the panel and in pineBot.plan().
+            // `deepRegime` is the state right now; `ringHuge`/`tipsDone` are
+            // its two hard clauses reported separately so a row that never
+            // enters it says WHICH clause was missing rather than only that
+            // it did not happen.
+            deepRegime: regimeNow, ringHuge, tipsDone,
+            deepHold: Math.round(deepHoldBest),
             surge: surgeActive, hellRecent, rainbowRecent, projImminent, laneUrgent, rivalUrgent, frozenUrgent, sprinterUrgent, stacking: !!stopBoss, flameAnchor, cornerAnchor: cornerOn, stackStation: stopStation, chase: !!th.rival, zoner, knocker, anchor, kiting: !!kite, outrunnable, fastChasers, liveChasers, lineOnCorner, lineHere, kiteSpacing, contactGap: isFinite(contactGap) ? Math.round(contactGap) : null, kiteDamp: +kiteDamp.toFixed(2), kiteW: +kiteW.toFixed(3), kiteBuildShare: +kiteBuildShare.toFixed(2), flame: flameOn, hunger: +buildHunger.toFixed(2),
             toughness: +toughnessAvg.toFixed(2),
             passoutsNear: th.passouts.filter(po => Math.hypot(po.x - p.x, po.y - p.y) < 190).length,
@@ -11938,6 +12279,16 @@
                     // behind, which is how a per-run counter quietly becomes a
                     // per-session one.
                     startRun,
+                    // v6.112.0: startRun sets hellDetected = pendingHellEntry,
+                    // i.e. FALSE. In a live run the play-state handler latches
+                    // it from the page's `hell` flag; a scenario calling
+                    // planMove directly never reaches that handler, so a
+                    // post-startRun hell scene silently runs as a DAY scene.
+                    latchHell: () => latchHellDuringPlay(),
+                    // v6.112.0: the mitigation arithmetic and the run boundary
+                    // the boss census books on.
+                    breakEven: () => contactBreakEven(),
+                    endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     // v6.109.0: drive the RECORDER, not just the digest. The
                     // demo-digest scenario feeds pre-built samples through
@@ -12209,6 +12560,67 @@
                     note: 'parkArmor needs defense >= deepHell.parkDefense (30, about 5.15 OLIVE-equivalents) and regen >= parkRegenRate (1.0), plus SOUTH SIDE. If medianEntryDef is far below 30 in the NEVER group and at/above it in the SEATED group, the entrance build IS the lever and the fix is upstream in the picker, not in the posture.'
                 };
             };
+            // v6.112.0 pineBot.bossCensus() — the spawn timetable and the size
+            // curve, measured. USER: "given the predictability of the bosses
+            // appearance and the size at which they appear, the bot can be
+            // calibrated better."
+            //
+            // Grouped by boss KIND (bossChar/type), because that is what a
+            // timetable is indexed by. For each kind: how many runs saw it, the
+            // median gt it first appeared, the median radius at first sighting,
+            // and the median radius growth per 100 game-seconds fitted from the
+            // per-boss samples. `ringAt` is the extrapolated gt at which that
+            // kind crosses deepHell.ringShare of the canvas — i.e. when the
+            // deep-hell regime becomes available, predicted rather than waited
+            // for. A tight `ringAt` across runs IS the calibration the user is
+            // describing, and a wide one says the timetable is not the whole
+            // story and something else gates the size.
+            window.pineBot.bossCensus = () => {
+                const runs = (bossCensus && bossCensus.runs) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : +(((s[s.length / 2 - 1] + s[s.length / 2]) / 2).toFixed(2)); };
+                const W = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+                const target = W * (CONFIG.deepHell.ringShare != null ? CONFIG.deepHell.ringShare : 0.55) / 2;
+                const kinds = {};
+                for (const run of runs) {
+                    for (const b of (run.b || [])) {
+                        const k = kinds[b.k] || (kinds[b.k] = { kind: b.k, n: 0, wall: !!b.wall,
+                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [] });
+                        k.n++; k.gts.push(b.gt); k.r0s.push(b.r0);
+                        if (b.hp0) k.hp0s.push(b.hp0);
+                        // least-squares slope of r against gt over this boss's samples
+                        const s = b.rs || [];
+                        if (s.length >= 3) {
+                            let sx = 0, sy = 0, sxx = 0, sxy = 0;
+                            for (const [x, y] of s) { sx += x; sy += y; sxx += x * x; sxy += x * y; }
+                            const d = s.length * sxx - sx * sx;
+                            if (Math.abs(d) > 1e-6) {
+                                const m = (s.length * sxy - sx * sy) / d;          // px per game-second
+                                k.slopes.push(+(m * 100).toFixed(2));               // per 100 s
+                                if (m > 1e-6) k.ringAts.push(Math.round(b.gt + (target - b.r0) / m));
+                            }
+                        }
+                    }
+                }
+                return {
+                    note: 'runs = census rows kept. Per KIND: firstGt = median gt first sighted, r0 = median radius then, growth = median px per 100 game-seconds (least squares over that boss\'s own samples), ringAt = extrapolated gt it crosses ringShare of the canvas (radius ' + Math.round(target) + 'px) — i.e. when the deep-hell regime opens. A TIGHT ringAt spread across runs is the calibration; a wide one means size is not on a clean timetable. Read `n` first: n<20 is noise. Walls (NO BOOKING) are flagged and excluded from ringHuge.',
+                    runs: runs.length,
+                    ringTargetR: Math.round(target),
+                    kinds: Object.values(kinds).sort((a, b2) => (med(a.gts) || 0) - (med(b2.gts) || 0)).map(k => ({
+                        kind: k.kind, n: k.n, wall: k.wall,
+                        firstGt: med(k.gts), r0: med(k.r0s), hp0: med(k.hp0s),
+                        growthPer100s: med(k.slopes),
+                        ringAt: med(k.ringAts),
+                        ringAtSpread: k.ringAts.length >= 3
+                            ? [Math.min.apply(null, k.ringAts), Math.max.apply(null, k.ringAts)] : null
+                    }))
+                };
+            };
+            window.pineBot.resetBossCensus = () => {
+                bossCensus = { runs: [] };
+                try { localStorage.removeItem(BOSS_CENSUS_KEY); } catch (e) { }
+                return 'boss census cleared';
+            };
             window.pineBot.resetParkAudit = () => {
                 parkAudit = { runs: [] };
                 try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
@@ -12243,6 +12655,21 @@
                     // v6.102.0: when the BUILD was complete, cap-out or not —
                     // the datum capStable.fromS should be set from.
                     if (r.readyAt != null) { g.readyAts = g.readyAts || []; g.readyAts.push(r.readyAt); }
+                    // v6.112.0 THE REGIME. `deepRate` below counts runs that
+                    // ENDED past deepFromS — a clock that is blind to whether
+                    // the anchor ever worked, and that the early cap makes
+                    // structurally unreachable for exactly the runs we want
+                    // (a proven build is killed at capStable.fromS 2400, and
+                    // deepFromS is 7200). These count the state instead.
+                    if (r.deepAt != null) { g.deepAts = g.deepAts || []; g.deepAts.push(r.deepAt); }
+                    if (r.deepHold != null) {
+                        g.deepHolds = g.deepHolds || [];
+                        g.deepHolds.push(r.deepHold);
+                        if (r.deepHold >= ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepHoldS) || 120))
+                            g.deepHeld = (g.deepHeld || 0) + 1;
+                    }
+                    if (r.deepStill != null) { g.deepStills = g.deepStills || []; g.deepStills.push(r.deepStill); }
+                    if (r.deepInv != null) { g.deepInvs = g.deepInvs || []; g.deepInvs.push(r.deepInv); }
                     // v6.108.0 the stall signature, aggregated per version.
                     if (r.spd != null) { g.spds = g.spds || []; g.spds.push(r.spd); }
                     if (r.spdLo != null) { g.spdLos = g.spdLos || []; g.spdLos.push(r.spdLo); }
@@ -12256,7 +12683,13 @@
                 return {
                     rows: rows.length,
                     note: 'phase = where the run ENDED. entrySurvival = of hell entrants, the share that outlived the first ' +
-                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths).',
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths). ' +
+                          'READ deepHeldRate, NOT deepRate. deepRate counts runs that ENDED past deepFromS (' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepFromS) || 7200) + ' s) — a clock blind to whether the anchor ever worked, and one the early cap makes unreachable for the runs that matter: a proven build is killed at capStable.fromS (' +
+                          ((CONFIG.deepHell && CONFIG.deepHell.capStable && CONFIG.deepHell.capStable.fromS) || 2400) + ' s), so a WORKING build can never be booked deep while a failing one can. ' +
+                          'deepHeldRate = share of runs that held the REGIME (boss ring >= 55% of canvas, tips stopped past ' +
+                          ((CONFIG.deepHell && CONFIG.deepHell.tipWindowToS) || 4800) + ' s, corner-anchored with zero velocity) for ' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepHoldS) || 120) + ' s. deepStill/deepInv are percentages DURING the hold: how much of it needed no movement, and how much was covered by an ult window.',
                     groups: Object.values(by).map(g => ({
                         version: g.version, n: g.n, deaths: g.deaths,
                         dayClearRate: +(g.dayCleared / g.n).toFixed(2),
@@ -12267,6 +12700,19 @@
                         medianCapAt: med(g.capAts || []),
                         buildsReady: (g.readyAts || []).length,
                         medianReadyAt: med(g.readyAts || []),
+                        // v6.112.0 — the two numbers that answer "is the bot
+                        // stable enough". deepReached counts runs that ENTERED
+                        // the regime at all; deepHeldRate counts those that
+                        // held it for deepHoldS. Read deepHeldRate as the
+                        // scoreboard and deepStill/deepInv as the proof that
+                        // what was held is the posture the user described
+                        // rather than something that merely coincided with it.
+                        deepReached: (g.deepAts || []).length,
+                        medianDeepAt: med(g.deepAts || []),
+                        deepHeldRate: +((g.deepHeld || 0) / g.n).toFixed(3),
+                        medianDeepHold: med(g.deepHolds || []),
+                        medianDeepStill: med((g.deepStills || []).map(v => Math.round(v * 100))),
+                        medianDeepInv: med((g.deepInvs || []).map(v => Math.round(v * 100))),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times),
@@ -12429,6 +12875,7 @@
                 funnel: window.pineBot.phaseAudit(),
                 phases: (phaseAudit.rows || []).slice(),
                 damage: window.pineBot.damageAudit(),
+                boss: window.pineBot.bossCensus(),
                 learning: window.pineBot.learning()
             });
             window.pineBot.resetMarkAudit = () => {

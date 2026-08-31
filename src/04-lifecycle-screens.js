@@ -113,6 +113,10 @@
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         invulnAllTicks = 0; ultCasts = 0; ultLastReadyAt = null; ultCdMulSeen = null;   // v6.111.0
         laneInTicks = 0; laneEscTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
+        // v6.112.0: the regime is a per-run achievement, not a session total
+        deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
+        deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
+        bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
         computeRoadmap();   // the plan itself learns: re-derive from live build stats
@@ -206,7 +210,22 @@
             ultMax: ultMaxLv || null,
             ult6At: ultLv6At == null ? null : Math.round(ultLv6At),
             laneIn: laneInTicks || 0,
-            laneEsc: laneEscTicks || 0
+            laneEsc: laneEscTicks || 0,
+            // v6.112.0 THE DEEP-HELL REGIME — the user's definition, measured.
+            // These replace `ph === 'deep'` as the success signal; the phase
+            // label stays for continuity with every historical row.
+            //   deepAt   = gt the regime was first entered (null = never)
+            //   deepHold = longest CONTINUOUS hold, in game seconds
+            //   deepStill= share of regime ticks with velocity exactly zero
+            //              ("without any movement required", checked)
+            //   deepInv  = ult invuln share DURING the regime ("fires
+            //              ultimates to keep itself alive")
+            //   deepHp   = mean HP ratio during the regime
+            deepAt: deepFirstGt == null ? null : Math.round(deepFirstGt),
+            deepHold: Math.round(deepHoldBest),
+            deepStill: deepRegimeTicks ? +(deepStillTicks / deepRegimeTicks).toFixed(3) : null,
+            deepInv: deepRegimeTicks ? +(deepInvTicks / deepRegimeTicks).toFixed(3) : null,
+            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null
         };
     }
 
@@ -370,6 +389,21 @@
                     seatShare: runHellTicks ? +(parkedTicks / runHellTicks).toFixed(3) : null,
                     entry: entrySample
                 }, 80);
+            }
+        } catch (e) { }
+        // v6.112.0 BOSS CENSUS — one row per run holding every boss first
+        // sighted in it. This is the empirical half of "boss appearance and
+        // size are predictable": across runs it yields the spawn timetable and
+        // the radius growth curve, measured through the bot's own view of the
+        // field rather than assumed from it.
+        try {
+            const seen = Object.keys(bossSeen || {});
+            if (seen.length) {
+                bossCensus = appendAuditRow(BOSS_CENSUS_KEY, bossCensus, 'runs', {
+                    t: Math.round(stats.time || 0),
+                    hell: !!hellDetected,
+                    b: seen.map(k => bossSeen[k])
+                }, 60);
             }
         } catch (e) { }
         // v6.96.2 PHASE AUDIT: one row per run, EVERY run — parkAudit above

@@ -4178,7 +4178,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4830,9 +4830,40 @@ if (which === 'entry-seat') {
     const wWhy = () => pineBot.test.scoreCard({ n: 'WATER', type: 'passive', lv: 2, maxlv: 6 }, 0, []).why || '';
     test('late day with regen behind, WATER carries entry-regen', () =>
         assert.ok(/entry-regen/.test(wWhy()), wWhy()));
-    pineBot.test.setOwned({ 'SIMPLE SYRUP': 2 });   // 1.024 HP/s >= the park gate
-    test('...and with the gate met the checkpoint stands down', () =>
+    // v6.112.0: this block used to stand the checkpoint down at SIMPLE SYRUP 2
+    // — "1.024 HP/s >= the park gate", which was true of the old flat 1.0 gate
+    // and is 0.55 HP/s SHORT of break-even. At armour cap the 38-frame invuln
+    // caps contact at 1.579 hits/s x 1 damage, so the anchor needs 1.579 HP/s.
+    // Armour is pinned explicitly so the bar is deterministic rather than
+    // depending on whatever defense an earlier scene left behind.
+    global.player.defense = 34.992;
+    pineBot.test.setOwned({ 'SIMPLE SYRUP': 2 });   // 1.024 HP/s — the OLD "sufficient"
+    test('SIMPLE SYRUP 2 no longer stands the checkpoint down (it is below break-even)', () =>
+        assert.ok(/entry-regen/.test(wWhy()),
+            '1.024 HP/s accepted against a 1.579 break-even | ' + wWhy()));
+    pineBot.test.setOwned({ 'SIMPLE SYRUP': 4 });   // 2.048 HP/s — actually net-positive
+    test('...and with break-even actually cleared the checkpoint stands down', () =>
         assert.ok(!/entry-regen/.test(wWhy()), wWhy()));
+    // SIMPLE SYRUP pays 0.512/level against WATER's 0.284, and joe has ZERO
+    // innate regen — so the two cards are not worth the same and the flat +16
+    // they both used to get was wrong.
+    pineBot.test.setOwned({ 'SIMPLE SYRUP': 0, 'WATER': 0 });
+    test('SIMPLE SYRUP outbids WATER, by the ratio of the HP/s it buys', () => {
+        const sc = n => pineBot.test.scoreCard({ n: n, type: 'passive', lv: 2, maxlv: 6 }, 0, []);
+        const w = sc('WATER'), s = sc('SIMPLE SYRUP');
+        assert.ok(/entry-regen-water/.test(w.why) && /entry-regen-syrup/.test(s.why),
+            'w=' + w.why + ' | s=' + s.why);
+        assert.ok(s.score > w.score, 'syrup ' + Math.round(s.score) + ' <= water ' + Math.round(w.score));
+    });
+    // The break-even bar must sit under what the game can actually produce, or
+    // it is capStable.defMin 35-vs-34.992 all over again.
+    test('break-even is REACHABLE: under max buyable regen, over the old flat gate', () => {
+        const maxRegen = 6 * 0.512 + 6 * 0.284;          // SIMPLE SYRUP 6 + WATER 6 = 4.776
+        const be = 60 / pineBot.config.mitigation.invulnFrames * 1;   // at armour cap
+        assert.ok(be < maxRegen, 'break-even ' + be.toFixed(3) + ' >= max buyable ' + maxRegen.toFixed(3));
+        assert.ok(be > pineBot.config.deepHell.parkRegenRate,
+            'break-even ' + be.toFixed(3) + ' <= the old flat gate — this change does nothing');
+    });
     pineBot.test.setOwned({ 'SIMPLE SYRUP': 0 });
     // v6.99.2 ENTRY-ARMOR CHECKPOINT: defense behind at entry prep -> OLIVE jumps.
     global.gameTime = 1080;   // v6.100.0: entryPrepFromS moved 900 -> 1050
@@ -6807,6 +6838,357 @@ if (which === 'ult-economy') {
         // and the level is worth a real fraction of it, which is why the
         // pick premium now runs to lv6
         assert.ok((8 + 0.8 * 5) / 8 >= 1.4, 'lv1 -> lv6 no longer buys 40%+ more window');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.112.0 THE DEEP-HELL REGIME — a definition, not a threshold.
+//
+// USER: "deep hell should be framed as when corner anchoring works and the bot
+// just fires ultimates to keep itself alive without any movement required due
+// to the bosses being too large and stop giving tips."
+//
+// Every clause was already a live planner signal (ringHuge, tipWindowToS,
+// parked, ultInvuln) and none of them reached the funnel, which booked `deep`
+// off a bare 7200 s clock. Worse, that clock is unreachable for exactly the
+// runs that succeed: capStable.fromS kills a PROVEN build at 2400 s, so a
+// working build can never be booked deep while a failing one can.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'deep-regime') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5000, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+    const TIPS = C.deepHell.tipWindowToS, W = C.field.w;
+
+    // A boss whose diameter is >= 55% of the canvas is the "too large" signal.
+    const bigBoss = () => ({ type: 'boss', x: W * 0.5, y: W * 0.5, r: W * 0.30, hp: 9e9, maxHp: 9e9, speed: 0.4, moving: true, boss: true });
+    const smallBoss = () => Object.assign(bigBoss(), { r: 20 });
+    // Park needs armour + regen + hell + gt past parkFromS, and zeroes velocity.
+    const anchored = (gt, boss) => {
+        global.gameTime = gt;
+        global.hell = true; T.latchHell();   // startRun clears hellDetected; planMove never re-latches
+        T.setOwned({ 'SOUTH SIDE': 6 });     // parkClear = zoner: park needs SOUTH SIDE owned
+        global.player = Object.assign({}, global.player, {
+            x: 8, y: 8, hp: 100, maxHp: 100, defense: 34.992, regenBonus: 2.2, invuln: 0
+        });
+        global.enemies = [boss];
+        global.eprojectiles = []; global.dropMarks = []; global.pickups = []; global.roadLines = [];
+    };
+
+    test('the four clauses are all live signals, not new invented state', () => {
+        assert.ok(TIPS > 0, 'tipWindowToS missing');
+        assert.ok(C.deepRegime && C.deepRegime.requireRing === true, 'deepRegime.requireRing missing');
+        anchored(TIPS + 100, bigBoss());
+        const p = T.planMove();
+        assert.strictEqual(p.tipsDone, true, 'tips clause not reported');
+        assert.strictEqual(p.ringHuge, true, 'boss ring clause not reported at r = 30% of canvas');
+    });
+    // The three hard clauses, each removed on its own. This is the shape that
+    // catches a predicate that is really testing only one thing.
+    test('a SMALL boss ring is not deep hell, however late the clock', () => {
+        anchored(TIPS + 3000, smallBoss());
+        const p = T.planMove();
+        assert.strictEqual(p.ringHuge, false, 'a 20px boss counted as ring-huge');
+        assert.strictEqual(p.deepRegime, false, 'the clock alone booked the regime — this is the 7200s bug again');
+    });
+    test('a huge ring BEFORE tips stop is not deep hell either', () => {
+        anchored(TIPS - 600, bigBoss());
+        const p = T.planMove();
+        assert.strictEqual(p.tipsDone, false, 'tips clause wrong side of the window');
+        assert.strictEqual(p.deepRegime, false, 'regime entered while tips were still dropping');
+    });
+    test('...and neither is a bot that has not anchored', () => {
+        anchored(TIPS + 100, bigBoss());
+        // strip the park gates: no armour, no regen -> parkArmor/parkRegen fail
+        global.player = Object.assign({}, global.player, { defense: 2, regenBonus: 0 });
+        const p = T.planMove();
+        assert.strictEqual(p.parked, false, 'still parked with no armour — the scene is not testing the clause');
+        assert.strictEqual(p.deepRegime, false, 'regime booked while the bot was still moving');
+    });
+
+    // --- the per-run measurement
+    test('the hold is measured in GAME seconds and survives across ticks', () => {
+        T.startRun();
+        assert.strictEqual(T.phaseRow().deepAt, null, 'a fresh run already claims the regime');
+        for (let i = 0; i <= 20; i++) { anchored(TIPS + 100 + i * 10, bigBoss()); T.planMove(); }
+        const r = T.phaseRow();
+        assert.ok(r.deepAt != null && Math.abs(r.deepAt - (TIPS + 100)) < 30, 'deepAt ' + r.deepAt);
+        assert.ok(r.deepHold >= 190, 'deepHold ' + r.deepHold + ' after 200 game-seconds anchored');
+    });
+    test('a break in the regime RESETS the streak, and best-so-far is kept', () => {
+        T.startRun();
+        for (let i = 0; i <= 20; i++) { anchored(TIPS + i * 10, bigBoss()); T.planMove(); }
+        const long = T.phaseRow().deepHold;
+        anchored(TIPS + 400, smallBoss()); T.planMove();          // ring gone: break
+        for (let i = 0; i <= 3; i++) { anchored(TIPS + 500 + i * 10, bigBoss()); T.planMove(); }
+        const after = T.phaseRow().deepHold;
+        assert.ok(long >= 190, 'first hold ' + long);
+        assert.strictEqual(after, long, 'best hold ' + after + ' — a broken streak was counted as continuous');
+    });
+    // "without any movement required" is the literal claim, so it is checked
+    // rather than assumed: deepStill is the share of regime ticks at velocity
+    // exactly zero. If the anchor is really working this is ~1.
+    // deepStill is a TAUTOLOGY while requireParked is on — park zeroes the
+    // vector, so every regime tick is still by construction and the number can
+    // only ever read 1. That is worth stating rather than dressing up: its job
+    // is (a) to prove park really does zero the heading, so a future change
+    // that makes park drift shows up here instead of silently, and (b) to be
+    // the real measurement when requireParked is relaxed to read a row.
+    test('deepStill reads exactly 1 while park is required — park zeroes the heading', () => {
+        T.startRun();
+        for (let i = 0; i <= 10; i++) { anchored(TIPS + 100 + i * 10, bigBoss()); T.planMove(); }
+        const r = T.phaseRow();
+        assert.strictEqual(r.deepStill, 1, 'deepStill ' + r.deepStill + ' — park is not zeroing the vector');
+        assert.ok(r.deepHp > 0.5, 'deepHp ' + r.deepHp);
+    });
+    test('...and with the park clause relaxed it measures real movement, not 1', () => {
+        const DR = pineBot.config.deepRegime;
+        const was = DR.requireParked;
+        try {
+            DR.requireParked = false;
+            T.startRun();
+            // ring + tips satisfied, but no armour/regen/SOUTH SIDE: the bot is
+            // in the regime window and still working for its life.
+            for (let i = 0; i <= 10; i++) {
+                anchored(TIPS + 100 + i * 10, bigBoss());
+                T.setOwned({ 'SOUTH SIDE': 0 });
+                global.player = Object.assign({}, global.player, { defense: 2, regenBonus: 0 });
+                global.enemies = [bigBoss(), { type: 'drunk', x: 60, y: 60, r: 14, hp: 400, speed: 3, moving: true }];
+                T.planMove();
+            }
+            const r = T.phaseRow();
+            assert.ok(r.deepAt != null, 'the relaxed regime never opened');
+            assert.ok(r.deepStill < 1,
+                'deepStill ' + r.deepStill + ' with the bot unparked and a mob on it — the metric is hardcoded');
+        } finally { DR.requireParked = was; T.setOwned({ 'SOUTH SIDE': 6 }); }
+    });
+    // The ult is a QUALITY of the hold, never a gate — gating on it would hide
+    // the finding that armour, not ults, is what makes the corner survivable.
+    test('the ult is measured during the hold, not required to enter it', () => {
+        T.startRun();
+        for (let i = 0; i <= 6; i++) { anchored(TIPS + 100 + i * 10, bigBoss()); T.planMove(); }
+        assert.ok(T.phaseRow().deepAt != null, 'the regime refused to open with no ult running');
+        assert.strictEqual(T.phaseRow().deepInv, 0, 'deepInv ' + T.phaseRow().deepInv + ' with no ult cast');
+        for (let i = 7; i <= 20; i++) {
+            anchored(TIPS + 100 + i * 10, bigBoss());
+            global.player = Object.assign({}, global.player, { ultUntil: global.gameTime + 8 });
+            T.planMove();
+        }
+        assert.ok(T.phaseRow().deepInv > 0.3, 'deepInv ' + T.phaseRow().deepInv + ' — ult windows not counted during the hold');
+    });
+    test('the regime is per-run, not a session total', () => {
+        assert.ok(T.phaseRow().deepHold > 0, 'nothing to clear');
+        T.startRun();
+        const r = T.phaseRow();
+        assert.strictEqual(r.deepHold, 0, 'deepHold survived the run boundary: ' + r.deepHold);
+        assert.strictEqual(r.deepAt, null, 'deepAt survived the run boundary: ' + r.deepAt);
+    });
+    // --- the reason the old metric had to go, as a standing invariant.
+    test('the EARLY CAP fires before deepFromS — so deepRate cannot see a working build', () => {
+        const fromS = C.deepHell.capStable.fromS, deepFromS = C.phaseAudit.deepFromS;
+        assert.ok(fromS < deepFromS,
+            'capStable.fromS ' + fromS + ' >= deepFromS ' + deepFromS + ' — if this ever passes, re-examine whether deepRate is still blind');
+        // and the regime's own clock sits between them, which is what makes it
+        // observable at all under a cap that ends runs early
+        assert.ok(C.deepHell.tipWindowToS < deepFromS,
+            'the regime cannot start before the old clock — it would measure nothing new');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.112.0 BOSS CENSUS + the ringHuge blindness it exists to measure.
+//
+// USER: "given the predictability of the bosses appearance and the size at
+// which they appear, the bot can be calibrated better" / "the boss appearance
+// and size should be in the source code of the game."
+//
+// The source almost certainly carries the table. The census measures it
+// through the bot's OWN view of the field — which is the half that has failed
+// silently before: ringHuge read the range-filtered list and therefore could
+// not fire from the corner, the exact posture it gates.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'boss-census') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5000, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config, W = C.field.w;
+    pineBot.resetBossCensus();
+
+    const put = (gt, bosses, px, py) => {
+        global.gameTime = gt; global.hell = true; T.latchHell();
+        global.player = Object.assign({}, global.player, { x: px == null ? 26 : px, y: py == null ? 26 : py,
+            hp: 100, maxHp: 100, defense: 34.992, regenBonus: 2.2, invuln: 0 });
+        global.enemies = bosses;
+        global.eprojectiles = []; global.dropMarks = []; global.pickups = []; global.roadLines = [];
+    };
+    const boss = (id, r, x, y) => ({ id: id, type: 'boss', boss: true, bossChar: 'GIANT',
+        x: x == null ? W * 0.5 : x, y: y == null ? W * 0.5 : y, r: r, hp: 9e9, maxHp: 9e9, speed: 0.4, moving: true });
+
+    // --- THE BUG THIS VERSION FIXES, asserted as geometry.
+    test('a canvas-sized boss is seen from the CORNER, where the bot actually sits', () => {
+        T.startRun();
+        // r = 30% of canvas -> diameter 60% >= ringShare 55%. Centre-to-corner
+        // distance ~345 px, against threat.enemyRange whose box max is 240 —
+        // so the gatherer drops it, and the old ringHuge could never fire.
+        put(C.deepHell.tipWindowToS + 100, [boss(1, W * 0.30)], 26, 26);
+        const p = T.planMove();
+        const d = Math.hypot(W * 0.5 - 26, W * 0.5 - 26);
+        assert.ok(d > T.tunable()['threat.enemyRange'].max,
+            'scene is not testing the bug: boss is ' + Math.round(d) + 'px away, inside the max gather range');
+        assert.strictEqual(p.enemies, 0, 'the gatherer kept it — the scene no longer reproduces the blindness');
+        assert.strictEqual(p.ringHuge, true, 'ringHuge is still reading the range-filtered list');
+    });
+    test('a NO BOOKING wall is never the ring, however large', () => {
+        T.startRun();
+        put(C.deepHell.tipWindowToS + 100, [Object.assign(boss(2, W * 0.40), { wall: true, bossChar: 'NOBOOK' })], 26, 26);
+        assert.strictEqual(T.planMove().ringHuge, false, 'a wall counted as the growing boss');
+    });
+    test('the threshold is ringShare of the canvas, not a magic number', () => {
+        assert.ok(C.deepHell.ringShare > 0 && C.deepHell.ringShare < 1, String(C.deepHell.ringShare));
+        T.startRun();
+        const just = W * C.deepHell.ringShare / 2;
+        put(5000, [boss(3, just * 0.9)], 26, 26);
+        assert.strictEqual(T.planMove().ringHuge, false, 'fired below the share');
+        put(5010, [boss(4, just * 1.02)], 26, 26);
+        assert.strictEqual(T.planMove().ringHuge, true, 'did not fire above the share');
+    });
+
+    // --- THE CENSUS
+    test('first sighting is recorded once per boss, with gt and radius', () => {
+        T.startRun();
+        for (let i = 0; i < 4; i++) { put(600 + i * 40, [boss(11, 20 + i * 2)], 26, 26); T.planMove(); }
+        put(900, [boss(11, 30), boss(12, 14)], 26, 26); T.planMove();
+        T.endRun();
+        const c = pineBot.bossCensus();
+        assert.ok(c.runs >= 1, 'no census row written');
+        const k = c.kinds.find(x => x.kind === 'GIANT');
+        assert.ok(k, 'kind GIANT missing: ' + JSON.stringify(c.kinds));
+        assert.strictEqual(k.n, 2, 'expected 2 distinct bosses, got ' + k.n);
+        assert.ok(k.firstGt >= 600 && k.firstGt <= 900, 'firstGt ' + k.firstGt);
+    });
+    test('the radius growth curve is fitted, and predicts when the ring opens', () => {
+        pineBot.resetBossCensus();
+        T.startRun();
+        // 1 px per game-second, sampled past the census 30 s grid
+        for (let i = 0; i <= 10; i++) { put(1000 + i * 40, [boss(21, 20 + i * 40)], 26, 26); T.planMove(); }
+        T.endRun();
+        const k = pineBot.bossCensus().kinds.find(x => x.kind === 'GIANT');
+        assert.ok(k.growthPer100s > 50,
+            'growth ' + k.growthPer100s + ' px/100s against a planted 100 — the fit is not reading the samples');
+        assert.ok(k.ringAt != null && k.ringAt > 1000,
+            'ringAt ' + k.ringAt + ' — the ring crossing is not being extrapolated');
+    });
+    test('the census is per-run and bounded', () => {
+        pineBot.resetBossCensus();
+        T.startRun();
+        put(700, [boss(31, 20)], 26, 26); T.planMove();
+        T.endRun();
+        T.startRun();
+        put(700, [boss(31, 20)], 26, 26); T.planMove();   // same id, new run
+        T.endRun();
+        const c = pineBot.bossCensus();
+        assert.strictEqual(c.runs, 2, 'runs ' + c.runs + ' — a run boundary was not booked');
+        assert.strictEqual(c.kinds.find(x => x.kind === 'GIANT').n, 2,
+            'the same id in two runs collapsed to one sighting — bossSeen is not per-run');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.112.0 CONTACT BREAK-EVEN.
+//
+// USER: "normal mob damage can be absorbed and countered with simple syrup's
+// healing regen rate." The arithmetic: hurtPlayer sets player.invuln = 38
+// frames ON THE PLAYER, so total contact is rate-limited at 60/38 = 1.579
+// hits/s however many bodies are touching; armour is flat subtraction with a
+// floor of 1, so at defense >= 21.4 every common hit does 1 damage. Break-even
+// regen is therefore 1.579 HP/s — and the park gate was 1.0.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'break-even') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 6000, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+    const HZ = 60 / C.mitigation.invulnFrames;
+
+    test('the constants are the ones read from the game source', () => {
+        assert.strictEqual(C.mitigation.invulnFrames, 38, 'invuln frames');
+        assert.ok(Math.abs(C.mitigation.contactDmg - 22.4) < 0.01, 'contact damage');
+    });
+    test('at armour cap the hit floors at 1, so break-even is the hit RATE', () => {
+        global.player = Object.assign({}, global.player, { defense: 34.992 });
+        assert.ok(Math.abs(T.breakEven() - HZ) < 1e-6, 'breakEven ' + T.breakEven() + ' vs ' + HZ);
+    });
+    // NOTE: defense exactly 0 is indistinguishable from "unreadable" —
+    // liveDefense() tests `> 0` — so thin armour is asserted at 2, not 0.
+    // Writing this test at 0 and expecting the full-damage figure is what
+    // surfaced that; the accessor is left alone because "0" and "absent" mean
+    // the same thing to every other call site and changing it there would be a
+    // silent behaviour change across the whole planner.
+    test('...and with thin armour it scales with the damage that gets through', () => {
+        global.player = Object.assign({}, global.player, { defense: 2 });
+        const want = HZ * (C.mitigation.contactDmg - 2);
+        assert.ok(Math.abs(T.breakEven() - want) < 1e-3, T.breakEven() + ' vs ' + want);
+        assert.ok(T.breakEven() > 10, 'a nearly unarmoured bot needs >10 HP/s and cannot get it — armour first');
+    });
+    // The gate this replaces, stated as the finding rather than the fix.
+    test('the OLD flat park gate sat BELOW break-even — it parked on a loss', () => {
+        global.player = Object.assign({}, global.player, { defense: 34.992 });
+        assert.ok(C.deepHell.parkRegenRate < T.breakEven(),
+            'parkRegenRate ' + C.deepHell.parkRegenRate + ' >= break-even ' + T.breakEven().toFixed(3) +
+            ' — if this ever passes the finding has been undone');
+        // parkAudit's measured seated median was 1.42: also underwater
+        assert.ok(1.42 < T.breakEven(), 'the measured seated median is no longer below break-even');
+    });
+    // THE TRAP THIS ALREADY FELL INTO ONCE, this build: a null armour reading
+    // defaulted to 0, making break-even 35.4 HP/s — unreachable, silently
+    // closing the park gate forever. Same shape as capStable.defMin 35 vs a
+    // 34.992 ceiling. Null must mean "no opinion", never "no armour".
+    test('an unreadable armour stat yields NO OPINION, not an impossible bar', () => {
+        global.player = Object.assign({}, global.player, { defense: undefined });
+        T.setOwned({ 'OLIVE': 0, 'NEGRONI': 0 });
+        assert.strictEqual(T.breakEven(), null,
+            'breakEven ' + T.breakEven() + ' with no readable armour — this is the unreachable-threshold bug');
+    });
+    test('...falling back to the armour the owned levels imply when the stat is gone', () => {
+        global.player = Object.assign({}, global.player, { defense: undefined });
+        T.setOwned({ 'OLIVE': 6 });
+        assert.ok(Math.abs(T.breakEven() - HZ) < 1e-6, 'breakEven ' + T.breakEven() + ' at OLIVE 6');
+    });
+    // THE GATE ITSELF. parkAudit's seated median regen is 1.42 against a 1.579
+    // break-even: at the median, the runs that DID park were losing 0.16 HP/s
+    // with the panic gates switched off, and booking as seated successes. The
+    // seat must now refuse that build — which shows up as a lower seatedRate
+    // and is the point, not a regression.
+    {
+        const seat = (regen) => {
+            global.gameTime = 6000; global.hell = true; T.latchHell();
+            T.setOwned({ 'OLIVE': 6, 'SOUTH SIDE': 3 });
+            global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375,
+                defense: 34.992, regenBonus: regen };
+            global.enemies = []; global.dropMarks = []; global.roadLines = []; global.eprojectiles = []; global.pickups = [];
+            return T.planMove();
+        };
+        test('the seat REFUSES a build that parks at a loss (the measured 1.42 median)', () =>
+            assert.strictEqual(seat(1.42).parkOn, false,
+                'parked at 1.42 HP/s against a ' + T.breakEven().toFixed(3) + ' break-even'));
+        test('...and accepts the regen the confirmed 13,244 s run actually carried', () =>
+            assert.strictEqual(seat(2.218).parkOn, true, 'refused 2.218 HP/s, which is net +0.64'));
+        test('...and the boundary sits at break-even, not at the old flat 1.0', () => {
+            const be = (() => { seat(2.218); return T.breakEven(); })();
+            assert.strictEqual(seat(be - 0.05).parkOn, false, 'parked just BELOW break-even');
+            assert.strictEqual(seat(be + 0.05).parkOn, true, 'refused just above break-even');
+        });
+    }
+    test('the bar is reachable: SIMPLE SYRUP 4 clears it, WATER 6 does not', () => {
+        global.player = Object.assign({}, global.player, { defense: 34.992 });
+        const be = T.breakEven();
+        assert.ok(4 * 0.512 > be, 'SIMPLE SYRUP 4 = ' + (4 * 0.512) + ' does not clear ' + be.toFixed(3));
+        assert.ok(6 * 0.284 > be, 'WATER 6 = ' + (6 * 0.284) + ' does not clear ' + be.toFixed(3));
+        assert.ok(3 * 0.284 < be, 'the bar is so low that half a WATER stack clears it');
     });
     done();
 }

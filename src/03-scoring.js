@@ -1077,8 +1077,44 @@
         // gates pass at entry instead of forty minutes into hell.
         {
             const gtR = typeof G.gameTime === 'number' ? G.gameTime : 0;
-            if (!atCap && type === 'passive' && (name === 'WATER' || name === 'SIMPLE SYRUP') &&
-                !hellDetected && gtR >= 600 && regenRate() < 1.0) add(16, 'entry-regen');
+            // ── v6.112.0 PRICED BY HP/s, AND AGAINST THE RIGHT BAR ─────────
+            //
+            // USER: "normal mob damage can be absorbed and countered with
+            // simple syrup's healing regen rate." Two corrections follow.
+            //
+            // (1) THE BAR. The checkpoint fired while regen < 1.0, the old
+            // park gate — which is BELOW break-even. At armour cap the
+            // 38-frame invuln caps contact at 1.579 hits/s x 1 damage, so the
+            // anchor needs 1.579 HP/s to hold. Stopping the checkpoint at 1.0
+            // stopped it 0.58 HP/s short and handed the seat a build that
+            // loses slowly. parkAudit's seated median regen is 1.42: the runs
+            // that DID park were, at the median, still underwater.
+            //
+            // (2) THE INGREDIENT. Both cards paid a flat +16, and they are not
+            // worth the same: SIMPLE SYRUP is 0.512 HP/s per level against
+            // WATER's 0.284 — 1.8x. Joe has ZERO innate regen, so every point
+            // comes from these two, and the difference is break-even at
+            // SIMPLE SYRUP 4 versus WATER 6 (the entire cap, for less). The
+            // bonus is now proportional to the HP/s the level actually buys.
+            //
+            // WATER keeps a real bonus rather than being demoted: it is half
+            // of the SUGAR+WATER craft that MAKES simple syrup, so starving it
+            // starves the better card. That is also why DAY_ORDER puts it at 8
+            // and SIMPLE SYRUP at 9 — a prerequisite, not a preference.
+            const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
+            if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
+                !hellDetected && gtR >= 600) {
+                // null = armour unreadable; fall back to the old flat bar
+                // rather than to a threshold nothing can meet.
+                const be = contactBreakEven();
+                const need = be == null ? 1.0 : be;
+                if (regenRate() < need) {
+                    // 16 was WATER's price; scale from there by HP/s per level
+                    // so SIMPLE SYRUP lands at ~29 and outranks it outright.
+                    add(Math.round(16 * (REGEN_PER_LV[name] / REGEN_PER_LV['WATER'])),
+                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water'));
+                }
+            }
             // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
             // dead in entry at median def 29.2 — the parkAudit seat bar is
             // 35). The fund rush buys tempo; from entryPrepFromS this

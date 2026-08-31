@@ -1136,6 +1136,16 @@
                     // behind, which is how a per-run counter quietly becomes a
                     // per-session one.
                     startRun,
+                    // v6.112.0: startRun sets hellDetected = pendingHellEntry,
+                    // i.e. FALSE. In a live run the play-state handler latches
+                    // it from the page's `hell` flag; a scenario calling
+                    // planMove directly never reaches that handler, so a
+                    // post-startRun hell scene silently runs as a DAY scene.
+                    latchHell: () => latchHellDuringPlay(),
+                    // v6.112.0: the mitigation arithmetic and the run boundary
+                    // the boss census books on.
+                    breakEven: () => contactBreakEven(),
+                    endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
                     // v6.109.0: drive the RECORDER, not just the digest. The
                     // demo-digest scenario feeds pre-built samples through
@@ -1407,6 +1417,67 @@
                     note: 'parkArmor needs defense >= deepHell.parkDefense (30, about 5.15 OLIVE-equivalents) and regen >= parkRegenRate (1.0), plus SOUTH SIDE. If medianEntryDef is far below 30 in the NEVER group and at/above it in the SEATED group, the entrance build IS the lever and the fix is upstream in the picker, not in the posture.'
                 };
             };
+            // v6.112.0 pineBot.bossCensus() — the spawn timetable and the size
+            // curve, measured. USER: "given the predictability of the bosses
+            // appearance and the size at which they appear, the bot can be
+            // calibrated better."
+            //
+            // Grouped by boss KIND (bossChar/type), because that is what a
+            // timetable is indexed by. For each kind: how many runs saw it, the
+            // median gt it first appeared, the median radius at first sighting,
+            // and the median radius growth per 100 game-seconds fitted from the
+            // per-boss samples. `ringAt` is the extrapolated gt at which that
+            // kind crosses deepHell.ringShare of the canvas — i.e. when the
+            // deep-hell regime becomes available, predicted rather than waited
+            // for. A tight `ringAt` across runs IS the calibration the user is
+            // describing, and a wide one says the timetable is not the whole
+            // story and something else gates the size.
+            window.pineBot.bossCensus = () => {
+                const runs = (bossCensus && bossCensus.runs) || [];
+                const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y);
+                    return s.length % 2 ? s[(s.length - 1) / 2] : +(((s[s.length / 2 - 1] + s[s.length / 2]) / 2).toFixed(2)); };
+                const W = (typeof G.W === 'number' && G.W > 0) ? G.W : CONFIG.field.w;
+                const target = W * (CONFIG.deepHell.ringShare != null ? CONFIG.deepHell.ringShare : 0.55) / 2;
+                const kinds = {};
+                for (const run of runs) {
+                    for (const b of (run.b || [])) {
+                        const k = kinds[b.k] || (kinds[b.k] = { kind: b.k, n: 0, wall: !!b.wall,
+                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [] });
+                        k.n++; k.gts.push(b.gt); k.r0s.push(b.r0);
+                        if (b.hp0) k.hp0s.push(b.hp0);
+                        // least-squares slope of r against gt over this boss's samples
+                        const s = b.rs || [];
+                        if (s.length >= 3) {
+                            let sx = 0, sy = 0, sxx = 0, sxy = 0;
+                            for (const [x, y] of s) { sx += x; sy += y; sxx += x * x; sxy += x * y; }
+                            const d = s.length * sxx - sx * sx;
+                            if (Math.abs(d) > 1e-6) {
+                                const m = (s.length * sxy - sx * sy) / d;          // px per game-second
+                                k.slopes.push(+(m * 100).toFixed(2));               // per 100 s
+                                if (m > 1e-6) k.ringAts.push(Math.round(b.gt + (target - b.r0) / m));
+                            }
+                        }
+                    }
+                }
+                return {
+                    note: 'runs = census rows kept. Per KIND: firstGt = median gt first sighted, r0 = median radius then, growth = median px per 100 game-seconds (least squares over that boss\'s own samples), ringAt = extrapolated gt it crosses ringShare of the canvas (radius ' + Math.round(target) + 'px) — i.e. when the deep-hell regime opens. A TIGHT ringAt spread across runs is the calibration; a wide one means size is not on a clean timetable. Read `n` first: n<20 is noise. Walls (NO BOOKING) are flagged and excluded from ringHuge.',
+                    runs: runs.length,
+                    ringTargetR: Math.round(target),
+                    kinds: Object.values(kinds).sort((a, b2) => (med(a.gts) || 0) - (med(b2.gts) || 0)).map(k => ({
+                        kind: k.kind, n: k.n, wall: k.wall,
+                        firstGt: med(k.gts), r0: med(k.r0s), hp0: med(k.hp0s),
+                        growthPer100s: med(k.slopes),
+                        ringAt: med(k.ringAts),
+                        ringAtSpread: k.ringAts.length >= 3
+                            ? [Math.min.apply(null, k.ringAts), Math.max.apply(null, k.ringAts)] : null
+                    }))
+                };
+            };
+            window.pineBot.resetBossCensus = () => {
+                bossCensus = { runs: [] };
+                try { localStorage.removeItem(BOSS_CENSUS_KEY); } catch (e) { }
+                return 'boss census cleared';
+            };
             window.pineBot.resetParkAudit = () => {
                 parkAudit = { runs: [] };
                 try { localStorage.removeItem(PARK_AUDIT_KEY); } catch (e) { }
@@ -1441,6 +1512,21 @@
                     // v6.102.0: when the BUILD was complete, cap-out or not —
                     // the datum capStable.fromS should be set from.
                     if (r.readyAt != null) { g.readyAts = g.readyAts || []; g.readyAts.push(r.readyAt); }
+                    // v6.112.0 THE REGIME. `deepRate` below counts runs that
+                    // ENDED past deepFromS — a clock that is blind to whether
+                    // the anchor ever worked, and that the early cap makes
+                    // structurally unreachable for exactly the runs we want
+                    // (a proven build is killed at capStable.fromS 2400, and
+                    // deepFromS is 7200). These count the state instead.
+                    if (r.deepAt != null) { g.deepAts = g.deepAts || []; g.deepAts.push(r.deepAt); }
+                    if (r.deepHold != null) {
+                        g.deepHolds = g.deepHolds || [];
+                        g.deepHolds.push(r.deepHold);
+                        if (r.deepHold >= ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepHoldS) || 120))
+                            g.deepHeld = (g.deepHeld || 0) + 1;
+                    }
+                    if (r.deepStill != null) { g.deepStills = g.deepStills || []; g.deepStills.push(r.deepStill); }
+                    if (r.deepInv != null) { g.deepInvs = g.deepInvs || []; g.deepInvs.push(r.deepInv); }
                     // v6.108.0 the stall signature, aggregated per version.
                     if (r.spd != null) { g.spds = g.spds || []; g.spds.push(r.spd); }
                     if (r.spdLo != null) { g.spdLos = g.spdLos || []; g.spdLos.push(r.spdLo); }
@@ -1454,7 +1540,13 @@
                 return {
                     rows: rows.length,
                     note: 'phase = where the run ENDED. entrySurvival = of hell entrants, the share that outlived the first ' +
-                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths).',
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.entryS) || 300) + ' s. deep includes cap-outs (capOuts counts them; those rows are right-censored, not natural deaths). ' +
+                          'READ deepHeldRate, NOT deepRate. deepRate counts runs that ENDED past deepFromS (' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepFromS) || 7200) + ' s) — a clock blind to whether the anchor ever worked, and one the early cap makes unreachable for the runs that matter: a proven build is killed at capStable.fromS (' +
+                          ((CONFIG.deepHell && CONFIG.deepHell.capStable && CONFIG.deepHell.capStable.fromS) || 2400) + ' s), so a WORKING build can never be booked deep while a failing one can. ' +
+                          'deepHeldRate = share of runs that held the REGIME (boss ring >= 55% of canvas, tips stopped past ' +
+                          ((CONFIG.deepHell && CONFIG.deepHell.tipWindowToS) || 4800) + ' s, corner-anchored with zero velocity) for ' +
+                          ((CONFIG.phaseAudit && CONFIG.phaseAudit.deepHoldS) || 120) + ' s. deepStill/deepInv are percentages DURING the hold: how much of it needed no movement, and how much was covered by an ult window.',
                     groups: Object.values(by).map(g => ({
                         version: g.version, n: g.n, deaths: g.deaths,
                         dayClearRate: +(g.dayCleared / g.n).toFixed(2),
@@ -1465,6 +1557,19 @@
                         medianCapAt: med(g.capAts || []),
                         buildsReady: (g.readyAts || []).length,
                         medianReadyAt: med(g.readyAts || []),
+                        // v6.112.0 — the two numbers that answer "is the bot
+                        // stable enough". deepReached counts runs that ENTERED
+                        // the regime at all; deepHeldRate counts those that
+                        // held it for deepHoldS. Read deepHeldRate as the
+                        // scoreboard and deepStill/deepInv as the proof that
+                        // what was held is the posture the user described
+                        // rather than something that merely coincided with it.
+                        deepReached: (g.deepAts || []).length,
+                        medianDeepAt: med(g.deepAts || []),
+                        deepHeldRate: +((g.deepHeld || 0) / g.n).toFixed(3),
+                        medianDeepHold: med(g.deepHolds || []),
+                        medianDeepStill: med((g.deepStills || []).map(v => Math.round(v * 100))),
+                        medianDeepInv: med((g.deepInvs || []).map(v => Math.round(v * 100))),
                         seatedRate: g.hellEntered ? +(g.seated / g.hellEntered).toFixed(2) : null,
                         medianEntryDef: med(g.defs), medianEntryRegen: med(g.regens), medianEntryUlt: med(g.ults),
                         medianTimeS: med(g.times),
@@ -1627,6 +1732,7 @@
                 funnel: window.pineBot.phaseAudit(),
                 phases: (phaseAudit.rows || []).slice(),
                 damage: window.pineBot.damageAudit(),
+                boss: window.pineBot.bossCensus(),
                 learning: window.pineBot.learning()
             });
             window.pineBot.resetMarkAudit = () => {
