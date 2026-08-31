@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.115.0
+// @version      6.116.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.115.0';
+    const SCRIPT_VERSION = '6.116.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -857,10 +857,21 @@
             // Measured against the RAW enemy array — see the comment at the
             // ringHuge definition for why the filtered list made it dead.
             ringShare: 0.55,
-            // v6.115.0: 48 samples at 120 s = 5760 s per boss, past the regime
-            // opening. Was 12 x 30 s = 360 s, which reported growth 0 for every
-            // kind while bossHitRange showed reach climbing 200 -> 353.
-            bossCensusEveryS: 120,
+            // v6.116.0 THE FIXED CADENCE CANNOT WIN. A least-squares slope
+            // needs >= 3 samples, so a fixed interval T needs the boss to live
+            // 2T; a fixed horizon of 48T needs the RUN to last that long. Both
+            // shipped versions failed one of the two:
+            //   30 s  -> 3 samples in 60 s, but only 360 s of horizon, so the
+            //            fit was taken entirely before the growth showed. Every
+            //            kind reported growthPer100s = 0.
+            //   120 s -> 5760 s of horizon, but 240 s to a third sample against
+            //            a MEDIAN RUN OF 854 s. Every kind reported null.
+            // So the cadence now GROWS. Sample every `bossCensusEveryS`; when a
+            // boss fills its 48 slots, throw away every second sample and
+            // double its own interval. Coverage is 720 s at 15 s spacing, then
+            // 1440 at 30, 2880 at 60, 5760 at 120 — three samples inside the
+            // first minute AND an unbounded horizon, in 48 slots.
+            bossCensusEveryS: 15,
             bossCensusSamples: 48,
             // v6.114.0: when the day's regen checkpoint opens. Was effectively
             // 600 s — one full income bucket AFTER the pool starts draining.
@@ -1083,13 +1094,27 @@
             // the anchor will take" — see contactBreakEven(). Set to 0 to
             // restore the pre-6.112.0 flat 1.0 gate exactly.
             //
-            // This makes park HARDER to open, on purpose. A bot parked at
-            // regen 1.42 against a 1.579 break-even is not surviving, it is
-            // dying at 0.16 HP/s with the panic gates switched off — and it
-            // books as a seated run, which is how the seat has been scoring
-            // credit for runs it was quietly losing. Refusing the seat makes
-            // that visible in seatedRate instead of hiding it in the deaths.
-            parkRegenBreakEven: 1.0,
+            // v6.116.0 RETRACTED — the gate was right about the physics and
+            // wrong about the decision, and three reports of park.reachRate
+            // say so: 0.44 -> 0.34 -> 0.31 across exactly the versions this
+            // multiplier has been live.
+            //
+            // The arithmetic it enforces: at the armour cap every contact hit
+            // does 1 damage and `player.invuln = 38` rate-limits contact to
+            // 60/38 = 1.579 hits/s, so 1.579 HP/s is the steady drain on the
+            // seat. True. But `medianEntryRegen` is 1.0, so the bar vetoed the
+            // seat in the MEDIAN run — and the same report prices what the
+            // veto costs: SEATED medianTimeS 3205 against NEVER 1304. The gate
+            // was trading a measured 2.5x survival multiplier for a model of
+            // INFINITE survival the median build never reaches.
+            //
+            // A seat at regen 1.0 loses 0.58 HP/s. That is not a dying build,
+            // it is a build with ~170 s of margin per 100 HP, before the ult's
+            // 10-15% invuln share and the zoner's body-clearing are counted.
+            // Not sitting down loses faster. Back to the flat 1.0 floor; the
+            // break-even stays computed and stays in the report, where it
+            // belongs as a description rather than a veto.
+            parkRegenBreakEven: 0,
             parkRadius: 26,         // "arrived": stop moving inside this radius
             // v6.91.3: how far in from the TRUE corner the seat sits. The
             // mark-immunity geometry is 80.92 px at inset 0, 70.78 at 7.2 (the
@@ -2116,10 +2141,21 @@
     // with sigma at the floor — the config diff would ship and nothing would
     // move. This table is the missing memory, and it is needed exactly once.
     //
-    // MAINTENANCE: on the next version bump, empty this. An entry left here
-    // after its migration has run re-opens that dimension on every single
-    // load, which is a permanent 25% sigma and a search that never converges.
-    // `store-guard` asserts the keys match the dims actually widened.
+    // MAINTENANCE — v6.116.0 CORRECTS THE INSTRUCTION 6.111.0 WROTE HERE.
+    // That comment said to empty this table on the next bump, because an entry
+    // left behind "re-opens that dimension on every single load". Checked
+    // against the code rather than repeated: the seed is guarded by
+    // `d.cem.box[k] == null`, and every load rewrites `d.cem.box[k]` from the
+    // live spec before it returns. So the table is consulted exactly once per
+    // store, on the first load that has no box record, and `box-reopen` test
+    // (2) already proves the second load is silent. It is self-limiting.
+    //
+    // Emptying it would therefore buy nothing and cost the migration for any
+    // store still on a pre-6.111.0 shape — including the one `box-reopen`
+    // builds. What DOES need policing is a future version narrowing one of
+    // these boxes back, which would leave a prior identical to the live box
+    // and re-open nothing while claiming to; `store-guard` asserts every key
+    // still names a box that actually differs, and goes red if one does not.
     const TUNABLE_PRIOR = {
         'threat.lineWeight': { min: 2.0, max: 9.0 },
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
@@ -2616,6 +2652,20 @@
     // 120 s threshold was a guess; these are what it should be set from, the
     // way capStable.fromS was set from medianReadyAt in 6.103.0.
     let deepBreaks = {}, deepHolds = [];
+    // ── v6.116.0 WHY THE SEAT IS NOT UNDER THE BOT ──────────────────────────
+    //
+    // `deepBreak` answered "which clause ended the hold" and the answer was
+    // { park: 27, ring: 6 } with every hold 0 or 1 game-second long. That is
+    // not an anchor that fails; it is an anchor that flickers 33 times in one
+    // run. But `park` is a dozen conditions ORed into one boolean — three
+    // build gates, three exceptions, three higher-precedence overrides and a
+    // walk — and knowing the sum is false says nothing about which to fix.
+    //
+    // So the same move again, one level down: every hell tick the bot is not
+    // seated, book WHICH condition took it, in the planner's own precedence
+    // order. This is a census of the gap between "hell" and "anchored", which
+    // is precisely the consistency the user asked for.
+    let parkMiss = {};
     // ── v6.112.0 THE BOSS CENSUS ────────────────────────────────────────────
     //
     // USER: "given the predictability of the bosses appearance and the size at
@@ -6506,6 +6556,7 @@
         deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
         deepBreaks = {}; deepHolds = [];   // v6.115.0
+        parkMiss = {};   // v6.116.0: the seat-miss census is per-run
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -6624,7 +6675,14 @@
             // best-hold number cannot say whether the anchor fails once or
             // flickers twenty times, and those need opposite fixes.
             deepHolds: deepHolds.length ? deepHolds.slice(0, 20) : null,
-            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null
+            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null,
+            // v6.116.0: hell ticks the bot was NOT seated, by cause, in the
+            // planner's precedence order. Paired with hellT they say what
+            // fraction of hell the anchor actually held and what is holding
+            // the rest of it open. See the parkMiss declaration in 01.
+            hellT: runHellTicks || 0,
+            parkT: parkedTicks || 0,
+            parkMiss: Object.keys(parkMiss).length ? parkMiss : null
         };
     }
 
@@ -9182,10 +9240,34 @@
                     //
                     // 48 samples at 120 s = 5760 s of coverage, which reaches
                     // past the regime opening (deepAt clustered 4808-5400).
-                    const every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 120;
+                    //
+                    // ── v6.116.0 AND IT MADE THE FIT IMPOSSIBLE INSTEAD ────
+                    // The next report came back with growthPer100s NULL for 9
+                    // of 10 kinds — worse than the 0s it replaced, because a
+                    // null is not even a datum. Three samples at 120 s spacing
+                    // need a boss to survive 240 s in a run whose MEDIAN LENGTH
+                    // IS 854 s. The window was no longer too short; it was
+                    // longer than the runs.
+                    //
+                    // A fixed interval cannot serve both ends. So decimate:
+                    // sample fast, and when the 48 slots fill, drop every
+                    // second sample and double this boss's own interval. The
+                    // kept samples stay evenly spaced (the fit is unbiased),
+                    // the early ones survive the thinning (r0 and the first
+                    // minute are never lost), and the horizon doubles each
+                    // time instead of being chosen in advance.
                     const cap = CONFIG.deepHell.bossCensusSamples != null ? CONFIG.deepHell.bossCensusSamples : 48;
+                    if (rec.every == null) rec.every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 15;
                     const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
-                    if (rec.rs.length < cap && (!last || gtB - last[0] >= every)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                    if (!last || gtB - last[0] >= rec.every) {
+                        rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                        if (rec.rs.length >= cap) {
+                            const thin = [];
+                            for (let i = 0; i < rec.rs.length; i += 2) thin.push(rec.rs[i]);
+                            rec.rs = thin;
+                            rec.every *= 2;
+                        }
+                    }
                 }
             }
         }
@@ -11146,6 +11228,27 @@
             }
             if (parkOn) { parkOnTicks++; if (parkFirstS == null) parkFirstS = Math.round(gtCorner); }
             if (parked) parkedTicks++;
+            // v6.116.0: the miss census. Evaluated in the SAME order the
+            // planner evaluates — parkOn's own clauses first (they are what
+            // the boolean is built from), then the overrides that outrank the
+            // park branch in the chain above, then the walk. First match wins,
+            // so every hell tick lands in exactly one bucket and the buckets
+            // sum to hellTicks - parkedTicks.
+            if (!parked) {
+                const why = DHp.park === false ? 'off'
+                    : !parkArmor ? 'armor'
+                    : !parkRegen ? 'regen'
+                    : !parkClear ? 'clear'
+                    : gtCorner <= (DHp.parkFromS != null ? DHp.parkFromS : 1200) ? 'early'
+                    : markHere ? 'mark'
+                    : lineOnCorner ? 'line'
+                    : parkYieldFrozen ? 'yield'
+                    : capDive ? 'cap'
+                    : laneEscape ? 'lane'
+                    : (huntOn && huntPost) ? 'hunt'
+                    : 'walk';
+                parkMiss[why] = (parkMiss[why] || 0) + 1;
+            }
         }
         lastDir = { x: vx, y: vy };
 
@@ -12160,6 +12263,16 @@
                 '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%   hp ' + n(g.medianDeepHp));
             if (g.holds) L.push('        holds ' + n(g.holds) + '  median ' + n(g.medianHold) + 's  max ' + n(g.maxHold) +
                 's  broke-by ' + (g.deepBreak ? Object.keys(g.deepBreak).map(k => k + ':' + g.deepBreak[k]).join(' ') : '-'));
+            // v6.116.0: the seat census. The line that says what is standing
+            // between "in hell" and "anchored", sorted biggest-first — which
+            // is the version-to-version target while deepHeldRate is 0.
+            if (g.seatShare != null) {
+                const ms = g.parkMiss || {};
+                const mr = Object.keys(ms).map(k => [k, ms[k]]).sort((a, b) => b[1] - a[1]);
+                const mt = mr.reduce((s, x) => s + x[1], 0) || 1;
+                L.push('SEAT    held ' + n(Math.round(g.seatShare * 100)) + '% of hell   missed-by ' +
+                    (mr.length ? mr.slice(0, 6).map(x => x[0] + ' ' + Math.round(x[1] / mt * 100) + '%').join('  ') : '-'));
+            }
             L.push('SURVIVE median ' + n(cur.medianTimeS) + 's   mean ' + n(cur.meanTimeS) +
                 's   hell ' + n(cur.hellRate) + '   caps ' + n(g.capOuts) + '/' + n(g.earlyCaps));
             // v6.114.0 THE HP ECONOMY, promoted to the headline. The income
@@ -12909,9 +13022,15 @@
                 for (const run of runs) {
                     for (const b of (run.b || [])) {
                         const k = kinds[b.k] || (kinds[b.k] = { kind: b.k, n: 0, wall: !!b.wall,
-                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [] });
+                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [], spans: [] });
                         k.n++; k.gts.push(b.gt); k.r0s.push(b.r0);
                         if (b.hp0) k.hp0s.push(b.hp0);
+                        // v6.116.0: how much game time the KEPT samples actually
+                        // cover. Two versions of this census reported nothing
+                        // because the sampling window was wrong in opposite
+                        // directions, and neither report said so — the span is
+                        // the number that would have caught both immediately.
+                        if ((b.rs || []).length >= 2) k.spans.push(b.rs[b.rs.length - 1][0] - b.rs[0][0]);
                         // least-squares slope of r against gt over this boss's samples
                         const s = b.rs || [];
                         if (s.length >= 3) {
@@ -12933,6 +13052,12 @@
                     kinds: Object.values(kinds).sort((a, b2) => (med(a.gts) || 0) - (med(b2.gts) || 0)).map(k => ({
                         kind: k.kind, n: k.n, wall: k.wall,
                         firstGt: med(k.gts), r0: med(k.r0s), hp0: med(k.hp0s),
+                        // spanS = median game-seconds the kept samples cover.
+                        // A null growth with a SHORT span means the cadence is
+                        // too slow for how long these bosses live; a flat
+                        // growth with a short span means the fit was taken
+                        // before the growth. Both have shipped.
+                        spanS: med(k.spans),
                         growthPer100s: med(k.slopes),
                         ringAt: med(k.ringAts),
                         ringAtSpread: k.ringAts.length >= 3
@@ -12997,6 +13122,12 @@
                     if (Array.isArray(r.deepHolds)) { g.allHolds = (g.allHolds || []).concat(r.deepHolds); }
                     if (r.deepBreak) { g.breaks = g.breaks || {};
                         for (const k of Object.keys(r.deepBreak)) g.breaks[k] = (g.breaks[k] || 0) + r.deepBreak[k]; }
+                    // v6.116.0: the seat-miss census, summed across runs, plus
+                    // the two totals it is a share of.
+                    if (r.parkMiss) { g.miss = g.miss || {};
+                        for (const k of Object.keys(r.parkMiss)) g.miss[k] = (g.miss[k] || 0) + r.parkMiss[k]; }
+                    if (r.hellT != null) g.hellT = (g.hellT || 0) + r.hellT;
+                    if (r.parkT != null) g.parkT = (g.parkT || 0) + r.parkT;
                     // v6.113.0: the v6.111.0 instruments were written to every
                     // phase ROW and never aggregated, so the funnel — the thing
                     // actually read — could not show whether the lane override
@@ -13058,6 +13189,16 @@
                         medianHold: med(g.allHolds || []),
                         maxHold: (g.allHolds || []).length ? Math.max.apply(null, g.allHolds) : null,
                         deepBreak: g.breaks || null,
+                        // v6.116.0 THE SEAT CENSUS. seatShare is the fraction
+                        // of all hell ticks the bot was actually anchored;
+                        // parkMiss is every other tick sorted by what took it,
+                        // in planner precedence (build gates armor/regen/clear,
+                        // then early, then the exceptions mark/line/yield, then
+                        // the overrides cap/lane/hunt, then walk = parkOn was
+                        // true and the bot was still crossing to the corner).
+                        // The largest bucket is the next version's target.
+                        seatShare: g.hellT ? +((g.parkT || 0) / g.hellT).toFixed(3) : null,
+                        parkMiss: g.miss || null,
                         // v6.113.0 lane override + ult economy, aggregated
                         laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0, laneDiv: g.laneDiv || 0,
                         medianInv: med((g.invs || []).map(v => Math.round(v * 100))),

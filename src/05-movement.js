@@ -1653,10 +1653,34 @@
                     //
                     // 48 samples at 120 s = 5760 s of coverage, which reaches
                     // past the regime opening (deepAt clustered 4808-5400).
-                    const every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 120;
+                    //
+                    // ── v6.116.0 AND IT MADE THE FIT IMPOSSIBLE INSTEAD ────
+                    // The next report came back with growthPer100s NULL for 9
+                    // of 10 kinds — worse than the 0s it replaced, because a
+                    // null is not even a datum. Three samples at 120 s spacing
+                    // need a boss to survive 240 s in a run whose MEDIAN LENGTH
+                    // IS 854 s. The window was no longer too short; it was
+                    // longer than the runs.
+                    //
+                    // A fixed interval cannot serve both ends. So decimate:
+                    // sample fast, and when the 48 slots fill, drop every
+                    // second sample and double this boss's own interval. The
+                    // kept samples stay evenly spaced (the fit is unbiased),
+                    // the early ones survive the thinning (r0 and the first
+                    // minute are never lost), and the horizon doubles each
+                    // time instead of being chosen in advance.
                     const cap = CONFIG.deepHell.bossCensusSamples != null ? CONFIG.deepHell.bossCensusSamples : 48;
+                    if (rec.every == null) rec.every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 15;
                     const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
-                    if (rec.rs.length < cap && (!last || gtB - last[0] >= every)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                    if (!last || gtB - last[0] >= rec.every) {
+                        rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                        if (rec.rs.length >= cap) {
+                            const thin = [];
+                            for (let i = 0; i < rec.rs.length; i += 2) thin.push(rec.rs[i]);
+                            rec.rs = thin;
+                            rec.every *= 2;
+                        }
+                    }
                 }
             }
         }
@@ -3617,6 +3641,27 @@
             }
             if (parkOn) { parkOnTicks++; if (parkFirstS == null) parkFirstS = Math.round(gtCorner); }
             if (parked) parkedTicks++;
+            // v6.116.0: the miss census. Evaluated in the SAME order the
+            // planner evaluates — parkOn's own clauses first (they are what
+            // the boolean is built from), then the overrides that outrank the
+            // park branch in the chain above, then the walk. First match wins,
+            // so every hell tick lands in exactly one bucket and the buckets
+            // sum to hellTicks - parkedTicks.
+            if (!parked) {
+                const why = DHp.park === false ? 'off'
+                    : !parkArmor ? 'armor'
+                    : !parkRegen ? 'regen'
+                    : !parkClear ? 'clear'
+                    : gtCorner <= (DHp.parkFromS != null ? DHp.parkFromS : 1200) ? 'early'
+                    : markHere ? 'mark'
+                    : lineOnCorner ? 'line'
+                    : parkYieldFrozen ? 'yield'
+                    : capDive ? 'cap'
+                    : laneEscape ? 'lane'
+                    : (huntOn && huntPost) ? 'hunt'
+                    : 'walk';
+                parkMiss[why] = (parkMiss[why] || 0) + 1;
+            }
         }
         lastDir = { x: vx, y: vy };
 

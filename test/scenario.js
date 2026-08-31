@@ -4187,7 +4187,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -7211,8 +7211,11 @@ if (which === 'break-even') {
         assert.ok(Math.abs(T.breakEven() - want) < 1e-3, T.breakEven() + ' vs ' + want);
         assert.ok(T.breakEven() > 10, 'a nearly unarmoured bot needs >10 HP/s and cannot get it — armour first');
     });
-    // The gate this replaces, stated as the finding rather than the fix.
-    test('the OLD flat park gate sat BELOW break-even — it parked on a loss', () => {
+    // The finding, which v6.116.0's retraction does NOT touch: the flat park
+    // gate sits below break-even, so a build that just clears it is losing HP
+    // on the seat. True then, true now. What changed is what follows from it —
+    // see the gate tests below.
+    test('the flat park gate sits BELOW break-even — the seat runs at a loss', () => {
         global.player = Object.assign({}, global.player, { defense: 34.992 });
         assert.ok(C.deepHell.parkRegenRate < T.breakEven(),
             'parkRegenRate ' + C.deepHell.parkRegenRate + ' >= break-even ' + T.breakEven().toFixed(3) +
@@ -7235,11 +7238,20 @@ if (which === 'break-even') {
         T.setOwned({ 'OLIVE': 6 });
         assert.ok(Math.abs(T.breakEven() - HZ) < 1e-6, 'breakEven ' + T.breakEven() + ' at OLIVE 6');
     });
-    // THE GATE ITSELF. parkAudit's seated median regen is 1.42 against a 1.579
-    // break-even: at the median, the runs that DID park were losing 0.16 HP/s
-    // with the panic gates switched off, and booking as seated successes. The
-    // seat must now refuse that build — which shows up as a lower seatedRate
-    // and is the point, not a regression.
+    // THE GATE ITSELF — and v6.116.0's RETRACTION of what 6.112.0 did with it.
+    //
+    // 6.112.0 turned break-even into a VETO: refuse the seat unless regen
+    // out-heals the contact. The physics was right and the decision was wrong,
+    // and three reports of park.reachRate signed it: 0.44 -> 0.34 -> 0.31
+    // across exactly the versions the veto was live. `medianEntryRegen` is
+    // 1.0, so the bar closed the seat in the median run, and the same report
+    // prices what the seat is worth — SEATED medianTimeS 3205 against NEVER
+    // 1304. Refusing to sit down because the seat is not IMMORTAL costs a
+    // measured 2.5x, and the bot dies faster standing up.
+    //
+    // So the gate is the flat floor again. Break-even stays computed, stays in
+    // the report, and stays out of the decision. These tests pin the boundary
+    // to the floor, which is what goes red if the veto is ever re-introduced.
     {
         const seat = (regen) => {
             global.gameTime = 6000; global.hell = true; T.latchHell();
@@ -7249,15 +7261,30 @@ if (which === 'break-even') {
             global.enemies = []; global.dropMarks = []; global.roadLines = []; global.eprojectiles = []; global.pickups = [];
             return T.planMove();
         };
-        test('the seat REFUSES a build that parks at a loss (the measured 1.42 median)', () =>
-            assert.strictEqual(seat(1.42).parkOn, false,
-                'parked at 1.42 HP/s against a ' + T.breakEven().toFixed(3) + ' break-even'));
+        test('the seat ACCEPTS the median entry build (medianEntryRegen 1.0)', () =>
+            assert.strictEqual(seat(1.0).parkOn, true,
+                'refused the MEDIAN build — this is the veto that took park.reachRate 0.44 -> 0.31'));
+        test('...and the measured seated median, which the veto also refused', () =>
+            assert.strictEqual(seat(1.42).parkOn, true, 'refused 1.42 HP/s'));
         test('...and accepts the regen the confirmed 13,244 s run actually carried', () =>
             assert.strictEqual(seat(2.218).parkOn, true, 'refused 2.218 HP/s, which is net +0.64'));
-        test('...and the boundary sits at break-even, not at the old flat 1.0', () => {
+        test('...and still refuses a build with no regen to speak of', () =>
+            assert.strictEqual(seat(0.4).parkOn, false, 'seated a build with 0.4 HP/s — the floor is gone entirely'));
+        test('the boundary is the FLAT floor, and break-even is not in the decision', () => {
             const be = (() => { seat(2.218); return T.breakEven(); })();
-            assert.strictEqual(seat(be - 0.05).parkOn, false, 'parked just BELOW break-even');
-            assert.strictEqual(seat(be + 0.05).parkOn, true, 'refused just above break-even');
+            const flat = C.deepHell.parkRegenRate;
+            // the two thresholds must be far enough apart for the test to mean
+            // anything — otherwise it would pass under either regime
+            assert.ok(be > flat + 0.3,
+                'break-even ' + be.toFixed(3) + ' is not meaningfully above the flat floor ' + flat +
+                ' — this test cannot distinguish the two gates');
+            assert.strictEqual(seat(flat + 0.05).parkOn, true, 'refused just above the flat floor');
+            assert.strictEqual(seat(flat - 0.05).parkOn, false, 'parked just below the flat floor');
+            // the retraction itself: BETWEEN the floor and break-even the seat
+            // must open. This is the assertion that goes red if the multiplier
+            // ever comes back.
+            assert.strictEqual(seat(be - 0.05).parkOn, true,
+                'refused a build above the floor and below break-even — the 6.112.0 veto is back');
         });
     }
     test('the bar is reachable: SIMPLE SYRUP 4 clears it, WATER 6 does not', () => {
@@ -7504,12 +7531,34 @@ if (which === 'regime-breaks') {
         global.eprojectiles = []; global.dropMarks = []; global.pickups = []; global.roadLines = [];
     };
 
-    test('the census window now spans past the regime opening', () => {
-        const every = C.deepHell.bossCensusEveryS, cap = C.deepHell.bossCensusSamples;
-        assert.ok(every * cap > TIPS,
-            'census covers ' + (every * cap) + ' s but the regime opens at ' + TIPS + ' s — growth past that is invisible');
-        // literal, so shrinking the window later cannot quietly re-break it
-        assert.ok(every * cap >= 5000, 'coverage ' + (every * cap) + ' s < 5000');
+    // ── v6.116.0: THE TWO ENDS OF THE CADENCE, both of which have shipped
+    // broken. A fixed interval T needs 2T of boss life for a 3-point fit and
+    // 48T of RUN for a horizon; 30 s had the samples and no horizon (growth 0
+    // for every kind), 120 s had the horizon and no samples (growth null for
+    // 9 of 10 kinds, against a median run of 854 s). These two tests pin both
+    // ends, so no single fixed interval can pass them.
+    test('a boss that lives only a minute still yields a fit', () => {
+        pineBot.resetBossCensus(); T.startRun();
+        for (let gt = 600; gt <= 660; gt += 5) { scene(gt, Math.round(28 + (gt - 600) * 0.5)); T.planMove(); }
+        T.endRun();
+        const k = pineBot.bossCensus().kinds.filter(x => x.kind === 'GIANT')[0];
+        assert.ok(k, 'no GIANT row');
+        assert.ok(k.growthPer100s != null,
+            'a boss alive 60 s produced no fit — the cadence is slower than these bosses live');
+        assert.ok(k.growthPer100s > 20,
+            'growth ' + k.growthPer100s + ' px/100s against a planted 50');
+    });
+    test('...and a boss tracked for 100 minutes is still being sampled at the end', () => {
+        pineBot.resetBossCensus(); T.startRun();
+        for (let gt = 600; gt <= 6600; gt += 5) { scene(gt, Math.round(28 + (gt - 600) * (132 / 4800))); T.planMove(); }
+        T.endRun();
+        const k = pineBot.bossCensus().kinds.filter(x => x.kind === 'GIANT')[0];
+        assert.ok(k && k.spanS != null, 'no span recorded');
+        assert.ok(k.spanS >= 5000,
+            'kept samples span ' + k.spanS + ' s of a 6000 s life — the slots ran out and the tail was never seen');
+        assert.ok(k.growthPer100s > 2.0 && k.growthPer100s < 3.5,
+            'growth ' + k.growthPer100s + ' px/100s against a planted 2.75 — decimation biased the fit');
+        assert.ok(k.n >= 1 && (pineBot.bossCensus().kinds.length >= 1), 'census row missing');
     });
     test('a boss tracked across the whole run yields a real growth fit', () => {
         pineBot.resetBossCensus(); T.startRun();
@@ -7563,6 +7612,135 @@ if (which === 'regime-breaks') {
         assert.ok(C.learning.enemyMulCeil > 1.42,
             'ceiling ' + C.learning.enemyMulCeil + ' still clamps drunk 1.404 / runner 1.417');
         assert.ok(C.learning.enemyMulCeil <= 2.2, 'ceiling ' + C.learning.enemyMulCeil + ' is now unbounded in practice');
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.116.0 THE SEAT-MISS CENSUS.
+//
+// v6.115.0 asked which clause ended the deep-hell hold and got
+// `deepBreak: { park: 27, ring: 6 }` with every recorded hold 0 or 1 game-
+// second long. That is not an anchor that fails once; it is an anchor that
+// flickers 33 times in a single run, and `park` is a dozen conditions folded
+// into one boolean — three build gates, three exceptions, three
+// higher-precedence overrides and a walk. Knowing the sum is false says
+// nothing about which one to fix.
+//
+// So the census goes one level down: every hell tick the bot is not seated is
+// booked against the condition that took it, in the planner's own precedence
+// order. These tests exist to make sure each bucket is reachable, that they
+// are mutually exclusive, and that the totals reconcile — because a census
+// that silently pools two causes is worse than no census at all, which is
+// exactly the failure `laneIn === laneEsc` was in 6.113.0.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'park-miss') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 6000, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+    const W = C.field.w, H = C.field.h;
+
+    // The seat itself: hell, past parkFromS, armour at cap, regen clear of the
+    // floor, SOUTH SIDE owned, standing 10 px from the true corner. Every test
+    // below changes exactly ONE thing about this scene.
+    const seat = (o) => {
+        o = o || {};
+        global.gameTime = o.gt != null ? o.gt : 6000;
+        global.hell = true; T.latchHell();
+        T.setOwned(o.owned || { 'OLIVE': 6, 'SOUTH SIDE': 3 });
+        global.player = Object.assign({ x: W - 7, y: H - 7, r: 7.2, hp: 300, maxHp: 309,
+            speed: 2.375, defense: 34.992, regenBonus: 2.218, invuln: 0 }, o.player || {});
+        global.enemies = o.enemies || [];
+        global.dropMarks = o.marks || [];
+        global.roadLines = o.lines || [];
+        global.eprojectiles = []; global.pickups = [];
+        return T.planMove();
+    };
+    // one tick from a clean run, so parkMiss holds that tick and nothing else
+    const oneTick = (o) => { T.startRun(); const p = seat(o); return { plan: p, row: T.phaseRow() }; };
+    const missOf = (o) => { const r = oneTick(o).row; return r.parkMiss || {}; };
+    const only = (o) => { const m = missOf(o); const k = Object.keys(m); return k.length === 1 ? k[0] : k.join('+'); };
+
+    // --- (1) THE BASELINE. If the seat itself does not latch, every test
+    // below is measuring the wrong thing, so this is asserted first.
+    test('the reference scene actually seats the bot', () => {
+        const r = oneTick().row;
+        assert.strictEqual(r.parkT, 1, 'parkT ' + r.parkT + ' — the reference scene does not park');
+        assert.strictEqual(r.parkMiss, null, 'a seated tick booked a miss: ' + JSON.stringify(r.parkMiss));
+        assert.strictEqual(r.hellT, 1, 'hellT ' + r.hellT);
+    });
+
+    // --- (2) EVERY BUCKET IS REACHABLE, and names the condition that took it.
+    test('regen below the floor books "regen"', () =>
+        assert.strictEqual(only({ player: { regenBonus: 0.2 } }), 'regen'));
+    test('armour below parkDefense books "armor"', () =>
+        assert.strictEqual(only({ player: { defense: 4 }, owned: { 'OLIVE': 0, 'SOUTH SIDE': 3 } }), 'armor'));
+    test('no zoner books "clear"', () =>
+        assert.strictEqual(only({ owned: { 'OLIVE': 6, 'SOUTH SIDE': 0 } }), 'clear'));
+    test('hell before parkFromS books "early"', () =>
+        assert.strictEqual(only({ gt: 900 }), 'early'));
+    test('a mark on the seat books "mark"', () =>
+        // shape matters: the gatherer drops anything with no dmg/tele as loot
+        assert.strictEqual(only({ marks: [{ x: W - 7, y: H - 7, r: 58, dmg: 72, tele: 0.6, at: 6000.3 }] }), 'mark'));
+    test('a charge lane across the corner books "line"', () =>
+        assert.strictEqual(only({ lines: [{ x: W - 200, y: H - 7, ang: 0, armed: true, dmg: 60, life: 200 }] }), 'line'));
+    test('standing away from a seat it is allowed to take books "walk"', () =>
+        assert.strictEqual(only({ player: { x: W * 0.5, y: H * 0.5 } }), 'walk'));
+
+    // --- (3) EXCLUSIVITY AND RECONCILIATION. The whole value of the census is
+    // that the buckets partition the non-seated hell ticks; if two causes can
+    // both book the same tick, the largest bucket is an artefact of ordering
+    // rather than a target. Asserted as arithmetic over a mixed run.
+    test('the buckets partition every hell tick', () => {
+        T.startRun();
+        seat();                                        // seated
+        seat({ player: { regenBonus: 0.2 } });         // regen
+        seat({ gt: 900 });                             // early
+        seat({ player: { x: W * 0.5, y: H * 0.5 } });  // walk
+        seat();                                        // seated again
+        const r = T.phaseRow();
+        const sum = Object.keys(r.parkMiss || {}).reduce((s, k) => s + r.parkMiss[k], 0);
+        assert.strictEqual(r.hellT, 5, 'hellT ' + r.hellT);
+        assert.strictEqual(r.parkT + sum, r.hellT,
+            'seated ' + r.parkT + ' + missed ' + sum + ' != hell ' + r.hellT + ' — a tick was double-booked or lost');
+        assert.strictEqual(r.parkT, 2, 'parkT ' + r.parkT);
+    });
+    test('a scene that trips TWO conditions books exactly one, the earlier in precedence', () => {
+        // no regen AND standing off the corner: `regen` is a parkOn clause and
+        // `walk` is downstream of parkOn, so regen must win and walk must be absent
+        const m = missOf({ player: { regenBonus: 0.2, x: W * 0.5, y: H * 0.5 } });
+        assert.strictEqual(Object.keys(m).length, 1, 'booked ' + JSON.stringify(m));
+        assert.strictEqual(m.regen, 1, 'booked ' + JSON.stringify(m) + ' — precedence is not the planner\'s');
+    });
+
+    // --- (4) IT REACHES THE FUNNEL. The v6.111.0 instruments were written to
+    // every phase row and never aggregated, so the report — the thing actually
+    // read — could not show whether they had moved. Not again.
+    test('the census aggregates into the funnel with a share to read it against', () => {
+        pineBot.resetPhaseAudit();
+        T.startRun(); seat(); seat({ player: { regenBonus: 0.2 } }); seat({ gt: 900 }); T.endRun();
+        const g = (pineBot.phaseAudit().groups || [])[0];
+        assert.ok(g, 'no funnel group');
+        assert.ok(g.parkMiss, 'parkMiss never reached the funnel');
+        assert.strictEqual(g.parkMiss.regen, 1, 'funnel parkMiss ' + JSON.stringify(g.parkMiss));
+        assert.strictEqual(g.parkMiss.early, 1, 'funnel parkMiss ' + JSON.stringify(g.parkMiss));
+        assert.strictEqual(g.seatShare, 0.333,
+            'seatShare ' + g.seatShare + ' — 1 seated tick of 3 hell ticks');
+    });
+    test('...and the overlay prints it, biggest cause first', () => {
+        pineBot.resetPhaseAudit();
+        T.startRun();
+        seat();
+        for (let i = 0; i < 4; i++) seat({ player: { regenBonus: 0.2 } });
+        seat({ gt: 900 });
+        T.endRun();
+        const lines = T.reportSummary(pineBot.report()).split('\n');
+        const seatLine = lines.filter(l => /^SEAT/.test(l))[0];
+        assert.ok(seatLine, 'no SEAT line in the summary:\n' + lines.join('\n'));
+        assert.ok(/held 17%/.test(seatLine), 'share not printed: ' + seatLine);
+        assert.ok(/regen 80%\s+early 20%/.test(seatLine),
+            'causes not printed largest-first: ' + seatLine);
     });
     done();
 }

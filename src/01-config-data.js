@@ -855,10 +855,21 @@
             // Measured against the RAW enemy array — see the comment at the
             // ringHuge definition for why the filtered list made it dead.
             ringShare: 0.55,
-            // v6.115.0: 48 samples at 120 s = 5760 s per boss, past the regime
-            // opening. Was 12 x 30 s = 360 s, which reported growth 0 for every
-            // kind while bossHitRange showed reach climbing 200 -> 353.
-            bossCensusEveryS: 120,
+            // v6.116.0 THE FIXED CADENCE CANNOT WIN. A least-squares slope
+            // needs >= 3 samples, so a fixed interval T needs the boss to live
+            // 2T; a fixed horizon of 48T needs the RUN to last that long. Both
+            // shipped versions failed one of the two:
+            //   30 s  -> 3 samples in 60 s, but only 360 s of horizon, so the
+            //            fit was taken entirely before the growth showed. Every
+            //            kind reported growthPer100s = 0.
+            //   120 s -> 5760 s of horizon, but 240 s to a third sample against
+            //            a MEDIAN RUN OF 854 s. Every kind reported null.
+            // So the cadence now GROWS. Sample every `bossCensusEveryS`; when a
+            // boss fills its 48 slots, throw away every second sample and
+            // double its own interval. Coverage is 720 s at 15 s spacing, then
+            // 1440 at 30, 2880 at 60, 5760 at 120 — three samples inside the
+            // first minute AND an unbounded horizon, in 48 slots.
+            bossCensusEveryS: 15,
             bossCensusSamples: 48,
             // v6.114.0: when the day's regen checkpoint opens. Was effectively
             // 600 s — one full income bucket AFTER the pool starts draining.
@@ -1081,13 +1092,27 @@
             // the anchor will take" — see contactBreakEven(). Set to 0 to
             // restore the pre-6.112.0 flat 1.0 gate exactly.
             //
-            // This makes park HARDER to open, on purpose. A bot parked at
-            // regen 1.42 against a 1.579 break-even is not surviving, it is
-            // dying at 0.16 HP/s with the panic gates switched off — and it
-            // books as a seated run, which is how the seat has been scoring
-            // credit for runs it was quietly losing. Refusing the seat makes
-            // that visible in seatedRate instead of hiding it in the deaths.
-            parkRegenBreakEven: 1.0,
+            // v6.116.0 RETRACTED — the gate was right about the physics and
+            // wrong about the decision, and three reports of park.reachRate
+            // say so: 0.44 -> 0.34 -> 0.31 across exactly the versions this
+            // multiplier has been live.
+            //
+            // The arithmetic it enforces: at the armour cap every contact hit
+            // does 1 damage and `player.invuln = 38` rate-limits contact to
+            // 60/38 = 1.579 hits/s, so 1.579 HP/s is the steady drain on the
+            // seat. True. But `medianEntryRegen` is 1.0, so the bar vetoed the
+            // seat in the MEDIAN run — and the same report prices what the
+            // veto costs: SEATED medianTimeS 3205 against NEVER 1304. The gate
+            // was trading a measured 2.5x survival multiplier for a model of
+            // INFINITE survival the median build never reaches.
+            //
+            // A seat at regen 1.0 loses 0.58 HP/s. That is not a dying build,
+            // it is a build with ~170 s of margin per 100 HP, before the ult's
+            // 10-15% invuln share and the zoner's body-clearing are counted.
+            // Not sitting down loses faster. Back to the flat 1.0 floor; the
+            // break-even stays computed and stays in the report, where it
+            // belongs as a description rather than a veto.
+            parkRegenBreakEven: 0,
             parkRadius: 26,         // "arrived": stop moving inside this radius
             // v6.91.3: how far in from the TRUE corner the seat sits. The
             // mark-immunity geometry is 80.92 px at inset 0, 70.78 at 7.2 (the
@@ -2114,10 +2139,21 @@
     // with sigma at the floor — the config diff would ship and nothing would
     // move. This table is the missing memory, and it is needed exactly once.
     //
-    // MAINTENANCE: on the next version bump, empty this. An entry left here
-    // after its migration has run re-opens that dimension on every single
-    // load, which is a permanent 25% sigma and a search that never converges.
-    // `store-guard` asserts the keys match the dims actually widened.
+    // MAINTENANCE — v6.116.0 CORRECTS THE INSTRUCTION 6.111.0 WROTE HERE.
+    // That comment said to empty this table on the next bump, because an entry
+    // left behind "re-opens that dimension on every single load". Checked
+    // against the code rather than repeated: the seed is guarded by
+    // `d.cem.box[k] == null`, and every load rewrites `d.cem.box[k]` from the
+    // live spec before it returns. So the table is consulted exactly once per
+    // store, on the first load that has no box record, and `box-reopen` test
+    // (2) already proves the second load is silent. It is self-limiting.
+    //
+    // Emptying it would therefore buy nothing and cost the migration for any
+    // store still on a pre-6.111.0 shape — including the one `box-reopen`
+    // builds. What DOES need policing is a future version narrowing one of
+    // these boxes back, which would leave a prior identical to the live box
+    // and re-open nothing while claiming to; `store-guard` asserts every key
+    // still names a box that actually differs, and goes red if one does not.
     const TUNABLE_PRIOR = {
         'threat.lineWeight': { min: 2.0, max: 9.0 },
         'movement.hellCautionMul': { min: 0.8, max: 2.2 },
@@ -2614,6 +2650,20 @@
     // 120 s threshold was a guess; these are what it should be set from, the
     // way capStable.fromS was set from medianReadyAt in 6.103.0.
     let deepBreaks = {}, deepHolds = [];
+    // ── v6.116.0 WHY THE SEAT IS NOT UNDER THE BOT ──────────────────────────
+    //
+    // `deepBreak` answered "which clause ended the hold" and the answer was
+    // { park: 27, ring: 6 } with every hold 0 or 1 game-second long. That is
+    // not an anchor that fails; it is an anchor that flickers 33 times in one
+    // run. But `park` is a dozen conditions ORed into one boolean — three
+    // build gates, three exceptions, three higher-precedence overrides and a
+    // walk — and knowing the sum is false says nothing about which to fix.
+    //
+    // So the same move again, one level down: every hell tick the bot is not
+    // seated, book WHICH condition took it, in the planner's own precedence
+    // order. This is a census of the gap between "hell" and "anchored", which
+    // is precisely the consistency the user asked for.
+    let parkMiss = {};
     // ── v6.112.0 THE BOSS CENSUS ────────────────────────────────────────────
     //
     // USER: "given the predictability of the bosses appearance and the size at

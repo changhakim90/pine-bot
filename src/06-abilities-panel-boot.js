@@ -862,6 +862,16 @@
                 '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%   hp ' + n(g.medianDeepHp));
             if (g.holds) L.push('        holds ' + n(g.holds) + '  median ' + n(g.medianHold) + 's  max ' + n(g.maxHold) +
                 's  broke-by ' + (g.deepBreak ? Object.keys(g.deepBreak).map(k => k + ':' + g.deepBreak[k]).join(' ') : '-'));
+            // v6.116.0: the seat census. The line that says what is standing
+            // between "in hell" and "anchored", sorted biggest-first — which
+            // is the version-to-version target while deepHeldRate is 0.
+            if (g.seatShare != null) {
+                const ms = g.parkMiss || {};
+                const mr = Object.keys(ms).map(k => [k, ms[k]]).sort((a, b) => b[1] - a[1]);
+                const mt = mr.reduce((s, x) => s + x[1], 0) || 1;
+                L.push('SEAT    held ' + n(Math.round(g.seatShare * 100)) + '% of hell   missed-by ' +
+                    (mr.length ? mr.slice(0, 6).map(x => x[0] + ' ' + Math.round(x[1] / mt * 100) + '%').join('  ') : '-'));
+            }
             L.push('SURVIVE median ' + n(cur.medianTimeS) + 's   mean ' + n(cur.meanTimeS) +
                 's   hell ' + n(cur.hellRate) + '   caps ' + n(g.capOuts) + '/' + n(g.earlyCaps));
             // v6.114.0 THE HP ECONOMY, promoted to the headline. The income
@@ -1611,9 +1621,15 @@
                 for (const run of runs) {
                     for (const b of (run.b || [])) {
                         const k = kinds[b.k] || (kinds[b.k] = { kind: b.k, n: 0, wall: !!b.wall,
-                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [] });
+                            gts: [], r0s: [], hp0s: [], slopes: [], ringAts: [], spans: [] });
                         k.n++; k.gts.push(b.gt); k.r0s.push(b.r0);
                         if (b.hp0) k.hp0s.push(b.hp0);
+                        // v6.116.0: how much game time the KEPT samples actually
+                        // cover. Two versions of this census reported nothing
+                        // because the sampling window was wrong in opposite
+                        // directions, and neither report said so — the span is
+                        // the number that would have caught both immediately.
+                        if ((b.rs || []).length >= 2) k.spans.push(b.rs[b.rs.length - 1][0] - b.rs[0][0]);
                         // least-squares slope of r against gt over this boss's samples
                         const s = b.rs || [];
                         if (s.length >= 3) {
@@ -1635,6 +1651,12 @@
                     kinds: Object.values(kinds).sort((a, b2) => (med(a.gts) || 0) - (med(b2.gts) || 0)).map(k => ({
                         kind: k.kind, n: k.n, wall: k.wall,
                         firstGt: med(k.gts), r0: med(k.r0s), hp0: med(k.hp0s),
+                        // spanS = median game-seconds the kept samples cover.
+                        // A null growth with a SHORT span means the cadence is
+                        // too slow for how long these bosses live; a flat
+                        // growth with a short span means the fit was taken
+                        // before the growth. Both have shipped.
+                        spanS: med(k.spans),
                         growthPer100s: med(k.slopes),
                         ringAt: med(k.ringAts),
                         ringAtSpread: k.ringAts.length >= 3
@@ -1699,6 +1721,12 @@
                     if (Array.isArray(r.deepHolds)) { g.allHolds = (g.allHolds || []).concat(r.deepHolds); }
                     if (r.deepBreak) { g.breaks = g.breaks || {};
                         for (const k of Object.keys(r.deepBreak)) g.breaks[k] = (g.breaks[k] || 0) + r.deepBreak[k]; }
+                    // v6.116.0: the seat-miss census, summed across runs, plus
+                    // the two totals it is a share of.
+                    if (r.parkMiss) { g.miss = g.miss || {};
+                        for (const k of Object.keys(r.parkMiss)) g.miss[k] = (g.miss[k] || 0) + r.parkMiss[k]; }
+                    if (r.hellT != null) g.hellT = (g.hellT || 0) + r.hellT;
+                    if (r.parkT != null) g.parkT = (g.parkT || 0) + r.parkT;
                     // v6.113.0: the v6.111.0 instruments were written to every
                     // phase ROW and never aggregated, so the funnel — the thing
                     // actually read — could not show whether the lane override
@@ -1760,6 +1788,16 @@
                         medianHold: med(g.allHolds || []),
                         maxHold: (g.allHolds || []).length ? Math.max.apply(null, g.allHolds) : null,
                         deepBreak: g.breaks || null,
+                        // v6.116.0 THE SEAT CENSUS. seatShare is the fraction
+                        // of all hell ticks the bot was actually anchored;
+                        // parkMiss is every other tick sorted by what took it,
+                        // in planner precedence (build gates armor/regen/clear,
+                        // then early, then the exceptions mark/line/yield, then
+                        // the overrides cap/lane/hunt, then walk = parkOn was
+                        // true and the bot was still crossing to the corner).
+                        // The largest bucket is the next version's target.
+                        seatShare: g.hellT ? +((g.parkT || 0) / g.hellT).toFixed(3) : null,
+                        parkMiss: g.miss || null,
                         // v6.113.0 lane override + ult economy, aggregated
                         laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0, laneDiv: g.laneDiv || 0,
                         medianInv: med((g.invs || []).map(v => Math.round(v * 100))),

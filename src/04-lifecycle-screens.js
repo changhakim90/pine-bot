@@ -117,6 +117,7 @@
         deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
         deepBreaks = {}; deepHolds = [];   // v6.115.0
+        parkMiss = {};   // v6.116.0: the seat-miss census is per-run
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -235,7 +236,14 @@
             // best-hold number cannot say whether the anchor fails once or
             // flickers twenty times, and those need opposite fixes.
             deepHolds: deepHolds.length ? deepHolds.slice(0, 20) : null,
-            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null
+            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null,
+            // v6.116.0: hell ticks the bot was NOT seated, by cause, in the
+            // planner's precedence order. Paired with hellT they say what
+            // fraction of hell the anchor actually held and what is holding
+            // the rest of it open. See the parkMiss declaration in 01.
+            hellT: runHellTicks || 0,
+            parkT: parkedTicks || 0,
+            parkMiss: Object.keys(parkMiss).length ? parkMiss : null
         };
     }
 
