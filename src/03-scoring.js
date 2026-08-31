@@ -1101,18 +1101,76 @@
             // of the SUGAR+WATER craft that MAKES simple syrup, so starving it
             // starves the better card. That is also why DAY_ORDER puts it at 8
             // and SIMPLE SYRUP at 9 — a prerequisite, not a preference.
+            // ── v6.114.0 THE DAY IS AN HP ECONOMY, AND IT IS NEGATIVE ───────
+            //
+            // The first live 6.113.0 report carried the income audit, and its
+            // first bucket settles what the day actually is:
+            //
+            //   0-10 min   loss 1.27/s   gain 1.00/s   net -0.27 HP/s
+            //   10-20 min  loss 3.34/s   gain 2.57/s   net -0.77 HP/s
+            //   20-30 min  loss 6.50/s   gain 5.02/s   net -1.48 HP/s
+            //   firstNegativeMin: 20 (reported) — but bucket ZERO is already
+            //   negative, and every bucket after it is too.
+            //
+            // Joe's pool is 100 HP. At -0.27 HP/s a full pool drains in 370 s,
+            // and the day-death rows cluster at 360-1100 s. The day is not
+            // being lost to a movement mistake; it is being lost to arithmetic.
+            // The audit's own note says so: "no posture fixes that, only heal
+            // income or time-stop uptime."
+            //
+            // One level of SIMPLE SYRUP is +0.512 HP/s and flips bucket zero
+            // POSITIVE on its own. The checkpoint that buys it did not open
+            // until gt 600 — i.e. after the entire first bucket had already
+            // been spent bleeding. That gate is the bug.
+            //
+            // Two changes, and the second matters more than the first:
+            //   1. Opens at `regenFromS` (120 s: after the first weapon, so the
+            //      opening sprint still funds itself) instead of 600.
+            //   2. The bonus is now proportional to the DEFICIT — how far below
+            //      break-even the current regen is — rather than a flat +16
+            //      that never came close to outbidding a base-attack card at
+            //      560. At zero regen it pays `strategy.regenDeficit`, decaying
+            //      to nothing as break-even is reached, so it stops bidding the
+            //      moment the economy is solved rather than pouring the whole
+            //      day into WATER.
+            //
+            // The size of that bonus is a genuine trade-off — every pick spent
+            // on regen is a pick not spent on the super line, and supersPerRun
+            // 0.5 against a supersMin of 3 is the OTHER binding constraint. I
+            // do not know the right number, so it is a TUNABLE dimension and
+            // the search settles it. That is the honest form of this change.
             const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
+            const regenFromS = CONFIG.deepHell.regenFromS != null ? CONFIG.deepHell.regenFromS : 120;
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                !hellDetected && gtR >= 600) {
+                !hellDetected && gtR >= regenFromS) {
                 // null = armour unreadable; fall back to the old flat bar
                 // rather than to a threshold nothing can meet.
                 const be = contactBreakEven();
                 const need = be == null ? 1.0 : be;
-                if (regenRate() < need) {
-                    // 16 was WATER's price; scale from there by HP/s per level
-                    // so SIMPLE SYRUP lands at ~29 and outranks it outright.
-                    add(Math.round(16 * (REGEN_PER_LV[name] / REGEN_PER_LV['WATER'])),
-                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water'));
+                const have = regenRate();
+                if (have < need) {
+                    // v6.114.0 RETRACTION. 6.112.0 scaled this by HP/s per
+                    // level so SIMPLE SYRUP (0.512) outbid WATER (0.284)
+                    // outright. That is right on regen arithmetic and WRONG on
+                    // craft mechanics: SIMPLE SYRUP is the WATER + SUGAR craft,
+                    // and DAY_ORDER deliberately ranks it after both halves
+                    // (WATER 8, SUGAR 3). Opening the checkpoint at 120 s made
+                    // the conflict live and `slot-lockout` caught it — the two
+                    // cards came out 319 / 322, syrup ahead of its own
+                    // ingredient. The per-level split is withdrawn; DAY_ORDER
+                    // decides between the two regen cards, and the deficit term
+                    // lifts BOTH equally. The user's point stands (syrup is the
+                    // better regen source); it is expressed by the day order
+                    // already putting them adjacent, not by outbidding the
+                    // prerequisite.
+                    const perLv = 16;
+                    // ...and add the deficit term on top: full weight at zero
+                    // regen, zero weight once break-even is reached.
+                    const deficit = Math.max(0, Math.min(1, (need - have) / need));
+                    const k = CONFIG.strategy.regenDeficit != null ? CONFIG.strategy.regenDeficit : 0;
+                    add(perLv + Math.round(k * deficit),
+                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water') +
+                        (deficit > 0 ? '(' + Math.round(deficit * 100) + '%short)' : ''));
                 }
             }
             // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31

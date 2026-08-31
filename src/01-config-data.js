@@ -855,6 +855,16 @@
             // Measured against the RAW enemy array — see the comment at the
             // ringHuge definition for why the filtered list made it dead.
             ringShare: 0.55,
+            // v6.115.0: 48 samples at 120 s = 5760 s per boss, past the regime
+            // opening. Was 12 x 30 s = 360 s, which reported growth 0 for every
+            // kind while bossHitRange showed reach climbing 200 -> 353.
+            bossCensusEveryS: 120,
+            bossCensusSamples: 48,
+            // v6.114.0: when the day's regen checkpoint opens. Was effectively
+            // 600 s — one full income bucket AFTER the pool starts draining.
+            // 120 lets the opening weapon land first and then starts fixing the
+            // arithmetic while there is still a pool to protect.
+            regenFromS: 120,
             tipWindowToS: 4800,        // 80 min
             cornerAnchorFromS: 4800,   // v6.89.2: was 9000 (150 min) — a gate no
                                        // recorded run ever reached. Now the tip
@@ -1213,7 +1223,14 @@
             enemyMulApply: true,   // one live dial: false restores static fear
             enemyMulMinN: 8,       // sole-candidate contact events before a type counts at all
             enemyMulFloor: 0.8,
-            enemyMulCeil: 1.4,
+            // v6.115.0: was 1.4, and BOTH of the two types that do the killing
+            // were pinned against it — drunk stored 1.404 / applied 1.4,
+            // runner 1.417 / applied 1.4, on 149k and 139k sole hits. A clamp
+            // that binds on the two highest-evidence types is a box that is
+            // too small, exactly like the CEM bounds this project keeps
+            // widening. 1.8 gives the estimate room to say what it measured;
+            // the floor is untouched because nothing is near it.
+            enemyMulCeil: 1.8,
             // CEM (Cross-Entropy Method) optimizer for movement/dodge params:
             // sample from a Gaussian per parameter, batch runs, refit the
             // distribution toward the top-ranked runs. Rank-based selection
@@ -1316,6 +1333,10 @@
         // exactly that. requireRing/requireTips exist so the two hard clauses
         // can be relaxed one at a time when reading a row, never silently.
         deepRegime: { requireRing: true, requireTips: true, requireParked: true },
+        // v6.115.0: how the boss census samples radius over a run. See the
+        // comment at the sampler — the first window (12 x 30 s) was far too
+        // short to see growth that bossHitRange proves is happening.
+        // (placed on deepHell below; kept here only as documentation anchor)
 
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
         // strategy itself — not just the dodge physics — improves across runs.
@@ -1324,6 +1345,20 @@
             roadmapBonus: 16,      // pull toward the USER'S prescribed rainbow roster
             earlyDps: 12,          // extra weight on leveling owned weapons early
             expandPenalty: 20,     // deep-focus penalty on new cocktails
+            // v6.114.0: bonus a regen card earns at ZERO regen, decaying to 0
+            // at contact break-even. Default 120 puts WATER around 338 and
+            // SIMPLE SYRUP around 351 against OLIVE's 432 and a base-attack
+            // card's 560 — ahead of junk and of a third weapon level, behind
+            // the armour anchor and the ult. Searchable; see TUNABLE.
+            // 40, not 120. At 120 a regen card scored 319 against super keys
+            // at 247-278 — it outbid the super line, and supersPerRun (0.5
+            // against a supersMin of 3) is the binding constraint on every
+            // build. `slot-lockout` holds that invariant. 40 keeps regen ahead
+            // of junk and behind the super keys, the armour anchor and the
+            // base attack. The BOX runs to 220: if the HP economy really is
+            // worth more than the super line, the search can say so with
+            // evidence instead of me asserting it.
+            regenDeficit: 40,
             dpsDeficitGain: 28,    // how hard picks shift to damage when losing the DPS race
             // USER + CEM: the Rainbow Gun pickup time. The gun starts weak —
             // too early = contact death, too late = kiting can't cover. The
@@ -2138,6 +2173,15 @@
         'strategy.roadmapBonus': { min: 10, max: 24 },   // floored: the prescribed roster stays dominant
         'strategy.earlyDps': { min: 4, max: 24 },
         'strategy.expandPenalty': { min: 8, max: 30 },
+        // v6.114.0 — how hard a regen card bids while the HP economy is under
+        // break-even. The live income audit says the day is net NEGATIVE from
+        // minute zero (bucket 0: loss 1.27/s vs gain 1.00/s), and one SIMPLE
+        // SYRUP level (+0.512 HP/s) flips it. But every pick spent here is a
+        // pick not spent on the super line, and supersPerRun 0.5 against a
+        // supersMin of 3 is the other binding constraint. The trade-off is real
+        // and I do not know where it sits, so the search settles it. The box
+        // CONTAINS 0, so "regen is not worth a pick" stays expressible.
+        'strategy.regenDeficit': { min: 0, max: 220 },
         'strategy.dpsDeficitGain': { min: 10, max: 40 },
         // v6.86.9: `strategy.rainbowReadyS` REMOVED from the search. With the
         // gun banned the window it describes can never be reached, and it had
@@ -2544,7 +2588,7 @@
     let ultCasts = 0, ultLastReadyAt = null, ultCdMulSeen = null;
     // v6.111.0 lane-escape telemetry: ticks spent inside an armed lane band,
     // and ticks the perpendicular override actually steered.
-    let laneInTicks = 0, laneEscTicks = 0;
+    let laneInTicks = 0, laneEscTicks = 0, laneDivTicks = 0;
     // ── v6.112.0 THE DEEP-HELL REGIME ───────────────────────────────────────
     //
     // USER, and it is a definition rather than a threshold: "deep hell should
@@ -2566,6 +2610,10 @@
     // and into the ~40 class.
     let deepRegimeTicks = 0, deepStreakFrom = null, deepHoldBest = 0, deepFirstGt = null,
         deepStillTicks = 0, deepInvTicks = 0, deepHpSum = 0;
+    // v6.115.0: which clause ended each hold, and every hold length. The
+    // 120 s threshold was a guess; these are what it should be set from, the
+    // way capStable.fromS was set from medianReadyAt in 6.103.0.
+    let deepBreaks = {}, deepHolds = [];
     // ── v6.112.0 THE BOSS CENSUS ────────────────────────────────────────────
     //
     // USER: "given the predictability of the bosses appearance and the size at

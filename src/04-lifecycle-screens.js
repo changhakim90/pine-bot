@@ -112,10 +112,11 @@
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         invulnAllTicks = 0; ultCasts = 0; ultLastReadyAt = null; ultCdMulSeen = null;   // v6.111.0
-        laneInTicks = 0; laneEscTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
+        laneInTicks = 0; laneEscTicks = 0; laneDivTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
         // v6.112.0: the regime is a per-run achievement, not a session total
         deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
+        deepBreaks = {}; deepHolds = [];   // v6.115.0
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -211,6 +212,10 @@
             ult6At: ultLv6At == null ? null : Math.round(ultLv6At),
             laneIn: laneInTicks || 0,
             laneEsc: laneEscTicks || 0,
+            // v6.114.0: ticks the override actually OVERRULED the danger
+            // field. laneEsc alone was a copy of laneIn; this is the number
+            // that says whether the override is doing anything.
+            laneDiv: laneDivTicks || 0,
             // v6.112.0 THE DEEP-HELL REGIME — the user's definition, measured.
             // These replace `ph === 'deep'` as the success signal; the phase
             // label stays for continuity with every historical row.
@@ -225,7 +230,12 @@
             deepHold: Math.round(deepHoldBest),
             deepStill: deepRegimeTicks ? +(deepStillTicks / deepRegimeTicks).toFixed(3) : null,
             deepInv: deepRegimeTicks ? +(deepInvTicks / deepRegimeTicks).toFixed(3) : null,
-            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null
+            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null,
+            // v6.115.0: every hold this run, and what ended each one. A single
+            // best-hold number cannot say whether the anchor fails once or
+            // flickers twenty times, and those need opposite fixes.
+            deepHolds: deepHolds.length ? deepHolds.slice(0, 20) : null,
+            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null
         };
     }
 

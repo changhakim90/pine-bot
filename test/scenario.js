@@ -1118,8 +1118,17 @@ if (which === 'learned') {
     // ...and the ratchet that caused the regression cannot be reproduced.
     pineBot.test.setEnemyMul({ bomber: 2.2 });
     const wCap = pineBot.test.gatherThreats(global.player).enemies[0].w;
-    test('a 2.2 store value is clamped to the 1.4 APPLIED ceiling', () =>
-        assert.ok(Math.abs(wCap / w1 - 1.4) < 0.02, 'w1 ' + w1 + ' wCap ' + wCap));
+    // v6.115.0: reads the ceiling instead of hardcoding 1.4 — this test is
+    // about the CLAMP existing, and the ceiling moved (1.4 -> 1.8) because
+    // drunk and runner were both pinned against it on 149k/139k sole hits.
+    // Deriving the bound here is normally the toothless-test trap; it is safe
+    // only because `regime-breaks` carries the literal invariant that the
+    // ceiling must sit above what those two types measured.
+    test('a store value above the ceiling is clamped to the APPLIED ceiling', () => {
+        const ceil = pineBot.config.learning.enemyMulCeil;
+        assert.ok(2.2 > ceil, 'the probe value 2.2 no longer exceeds the ceiling ' + ceil);
+        assert.ok(Math.abs(wCap / w1 - ceil) < 0.02, 'w1 ' + w1 + ' wCap ' + wCap + ' ceil ' + ceil);
+    });
     test('enemyMulApply:false restores the static profile weight exactly', () => {
         pineBot.test.setParam('learning.enemyMulApply', false);
         const wOff = pineBot.test.gatherThreats(global.player).enemies[0].w;
@@ -4178,7 +4187,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -4848,12 +4857,49 @@ if (which === 'entry-seat') {
     // innate regen — so the two cards are not worth the same and the flat +16
     // they both used to get was wrong.
     pineBot.test.setOwned({ 'SIMPLE SYRUP': 0, 'WATER': 0 });
-    test('SIMPLE SYRUP outbids WATER, by the ratio of the HP/s it buys', () => {
+    // v6.114.0 REVERSED — this test was wrong and slot-lockout proved it.
+    // 6.112.0 scaled the checkpoint by HP/s per level so SIMPLE SYRUP (0.512)
+    // outbid WATER (0.284). Correct on regen arithmetic, wrong on craft
+    // mechanics: SIMPLE SYRUP *is* the WATER + SUGAR craft, and DAY_ORDER ranks
+    // it after both halves on purpose. The conflict only became visible when
+    // 6.114.0 opened the checkpoint at 120 s instead of 600 s, at which point
+    // the two cards scored 319 / 322 — syrup ahead of its own ingredient. Both
+    // cards now take the SAME deficit bonus and the day order decides.
+    test('both regen cards take the checkpoint, and the craft order survives it', () => {
         const sc = n => pineBot.test.scoreCard({ n: n, type: 'passive', lv: 2, maxlv: 6 }, 0, []);
         const w = sc('WATER'), s = sc('SIMPLE SYRUP');
         assert.ok(/entry-regen-water/.test(w.why) && /entry-regen-syrup/.test(s.why),
             'w=' + w.why + ' | s=' + s.why);
-        assert.ok(s.score > w.score, 'syrup ' + Math.round(s.score) + ' <= water ' + Math.round(w.score));
+        assert.ok(w.score >= s.score,
+            'syrup ' + Math.round(s.score) + ' outbids its own ingredient WATER ' + Math.round(w.score));
+    });
+    // THE GATE TIME. The income audit says the pool is draining from minute
+    // zero (bucket 0: loss 1.27/s vs gain 1.00/s); the checkpoint used to open
+    // at 600 s, one whole bucket after the bleeding starts. Asserted against a
+    // literal so moving the config cannot move the assertion with it.
+    test('the regen checkpoint opens inside the first income bucket, not after it', () => {
+        assert.ok(pineBot.config.deepHell.regenFromS < 600,
+            'regenFromS ' + pineBot.config.deepHell.regenFromS + ' — still opens after the pool has drained');
+        const sc = () => pineBot.test.scoreCard({ n: 'WATER', type: 'passive', lv: 2, maxlv: 6 }, 0, []);
+        global.gameTime = pineBot.config.deepHell.regenFromS + 20;
+        assert.ok(/entry-regen/.test(sc().why), 'silent just after the gate: ' + sc().why);
+        global.gameTime = pineBot.config.deepHell.regenFromS - 20;
+        assert.ok(!/entry-regen/.test(sc().why), 'firing before the gate: ' + sc().why);
+        global.gameTime = 800;
+    });
+    // The deficit term itself: a bot with NO regen must bid harder than one
+    // that is nearly there, or the checkpoint is just a flat bonus again.
+    test('the bonus scales with how far under break-even the bot is', () => {
+        const sc = () => pineBot.test.scoreCard({ n: 'WATER', type: 'passive', lv: 2, maxlv: 6 }, 0, []);
+        pineBot.test.setOwned({ 'SIMPLE SYRUP': 0, 'WATER': 0 });
+        const broke = sc();
+        pineBot.test.setOwned({ 'SIMPLE SYRUP': 2 });          // 1.024 of a 1.579 bar
+        const closer = sc();
+        pineBot.test.setOwned({ 'SIMPLE SYRUP': 0 });
+        assert.ok(/short\)/.test(broke.why), 'the deficit is not reported: ' + broke.why);
+        assert.ok(broke.score > closer.score + 10,
+            'zero-regen ' + Math.round(broke.score) + ' vs nearly-there ' + Math.round(closer.score) +
+            ' — the bonus is flat, not deficit-scaled');
     });
     // The break-even bar must sit under what the game can actually produce, or
     // it is capStable.defMin 35-vs-34.992 all over again.
@@ -6222,13 +6268,18 @@ if (which === 'learn-probe') {
         for (const k of ['freeze', 'line', 'control']) assert.ok(t[k], k + ' missing: ' + JSON.stringify(Object.keys(t)));
     });
     // --- enemy types: report the APPLIED value, not just the stored one.
-    // A store may hold 2.2 while the danger field is using 1.4; printing the
-    // store alone would be reading a proxy and calling it the quantity.
+    // A store may hold 2.2 while the danger field is using the ceiling;
+    // printing the store alone would be reading a proxy and calling it the
+    // quantity. v6.115.0: the ceiling is read, not hardcoded — it moved from
+    // 1.4 to 1.8 when drunk (1.404) and runner (1.417) were both found pinned
+    // against it. `regime-breaks` holds the literal bound.
     T.setEnemyMul({ bomber: 2.2 }); T.setEnemyN({ bomber: 40 });
     test('the enemy table reports stored mul AND what was actually applied', () => {
+        const ceil = pineBot.config.learning.enemyMulCeil;
         const e = pineBot.learning().enemy.bomber;
-        assert.ok(e && Math.abs(e.mul - 2.2) < 0.01 && Math.abs(e.applied - 1.4) < 0.01,
-            JSON.stringify(e));
+        assert.ok(2.2 > ceil, 'probe 2.2 no longer exceeds ceiling ' + ceil);
+        assert.ok(e && Math.abs(e.mul - 2.2) < 0.01 && Math.abs(e.applied - ceil) < 0.01,
+            JSON.stringify(e) + ' ceil ' + ceil);
     });
     test('...and a type under the sample floor reports applied 1, not its store value', () => {
         T.setEnemyN({ bomber: 2 });
@@ -6621,6 +6672,32 @@ if (which === 'lane-escape') {
         assert.ok(hot < cold - 0.05,
             'telegraph avoidance ' + hot.toFixed(2) + ' at max vs ' + cold.toFixed(2) + ' at 0 — the weight does nothing');
         pineBot.test.applyDefaults();
+    });
+    // laneDiv counts the ticks the override actually OVERRULED the danger
+    // field. The first live report came back laneIn === laneEsc in every row
+    // (6475/6475), because the override fires on every covered tick — so that
+    // pair carried one number twice. A diversion is the thing worth counting.
+    test('laneDiv counts overrules, not firings', () => {
+        T.startRun();
+        // player deep in an armed lane with a crowd sitting on the exit: the
+        // field wants to stay, the override leaves anyway = a real diversion.
+        put(300, 285, [lane(true)]);
+        global.enemies = [220, 260, 300, 340, 380].map(x => ({ type: 'drunk', x: x, y: 215, r: 14, hp: 400, speed: 1.2, moving: true }));
+        for (let i = 0; i < 5; i++) T.planMove();
+        const hot = T.phaseRow();
+        assert.ok(hot.laneEsc >= 5, 'the override did not fire (' + hot.laneEsc + ')');
+        assert.ok(hot.laneDiv >= 1, 'laneDiv ' + hot.laneDiv + ' — no diversion counted while overruling a crowd');
+        // now an empty field: the danger field ALREADY points out of the lane,
+        // so the override agrees with it and nothing is being overruled.
+        T.startRun();
+        put(300, 285, [lane(true)]);
+        global.enemies = [];
+        for (let i = 0; i < 5; i++) T.planMove();
+        const cold = T.phaseRow();
+        assert.ok(cold.laneEsc >= 5, 'the override did not fire on the empty field');
+        assert.ok(cold.laneDiv < cold.laneEsc,
+            'laneDiv ' + cold.laneDiv + ' == laneEsc ' + cold.laneEsc +
+            ' — every firing counted as a diversion, which is the tautology this replaces');
     });
     test('a lane the player is CLEAR of triggers nothing', () => {
         pineBot.test.applyDefaults();
@@ -7266,8 +7343,23 @@ if (which === 'overlay-report') {
     // The human summary is a PURE function of the report, so it is asserted on
     // a fixture rather than on whatever the empty test store happens to hold.
     test('the summary renders the numbers the user actually asks for', () => {
+        // v6.114.0 — THE FIXTURE WAS THE BUG. This object used
+        //   compare: { current: { version, bartender, n, median, mean } }
+        // and the live report uses
+        //   compare: { current: "6.113.0+crown+joe", versions: [ {version, runs, medianTimeS, meanTimeS} ] }
+        // — `current` is a STRING and the row lives in `versions`. The summary
+        // was written against the fixture, the fixture was written against my
+        // assumption, and the first real paste rendered "v—  —  n=—". A test
+        // built on a hand-made shape only ever proves the shape.
         const fixture = {
-            compare: { current: { version: '6.113.0', bartender: 'joe', n: 1250, median: 834, mean: 1068, hellRate: 0.37, supersPerRun: 0.5 } },
+            compare: {
+                current: '6.113.0+crown+joe',
+                versions: [
+                    { version: '6.111.0+crown+joe', runs: 163, medianTimeS: 927 },
+                    { version: '6.113.0+crown+joe', runs: 1250, medianTimeS: 834, meanTimeS: 1068, hellRate: 0.37, supersPerRun: 0.5 }
+                ]
+            },
+            income: { firstNegativeMin: 20, buckets: [{ fromMin: 0, net: -0.27, lossPerSec: 1.27, gainPerSec: 1 }] },
             funnel: { groups: [{ dayClearRate: 0.36, entrySurvival: 0.28, deepHeldRate: 0.12, seatedRate: 0.4,
                 buildsReady: 13, medianReadyAt: 1854, medianEntryDef: 34.9, medianEntryRegen: 1.42,
                 medianDeepAt: 5100, medianDeepHold: 240, medianDeepStill: 100, medianDeepInv: 14,
@@ -7278,8 +7370,10 @@ if (which === 'overlay-report') {
             learning: { gen: 343, params: { 'threat.lineWeight': { atEdge: 'min' } }, reopen: { dims: ['a', 'b'] } }
         };
         const s = T.reportSummary(fixture);
-        for (const want of ['6.113.0', 'joe', 'n=1250', 'deepHeld 0.12', 'ready 13@1854',
-                            'hold 240s', 'GIANT', 'ring@5200', 'lineWeight:min'])
+        for (const want of ['6.113.0+crown+joe', 'n=1250', 'deepHeld 0.12', 'ready 13@1854',
+                            'bestHold 240s', 'GIANT', 'ring@5200', 'lineWeight:min',
+                            'median 834s',                 // read from versions[], not from `current`
+                            'DRAINING FROM MINUTE ZERO'])  // the headline the income audit earns
             assert.ok(s.indexOf(want) >= 0, 'summary missing "' + want + '":\n' + s);
         // the damage line must be shares, biggest first
         assert.ok(/DAMAGE\s+contact 60%\s+line 30%/.test(s), 'damage line wrong:\n' + s);
@@ -7376,5 +7470,99 @@ if (which === 'overlay-report') {
             assert.ok(/\u2318C|Ctrl/.test(c.textContent), c.textContent);
         });
     }
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.115.0 — what the first live regime rows demanded.
+//
+// deepReached 4, deepAt 4808-5400, deepStill 1 in every one, deepHp 0.70-0.82,
+// deepHold 75 / 17 / 1 / 0 against a deepHoldS of 120. So deepHeldRate 0 is a
+// THRESHOLD artifact, not a verdict on the anchor — and a single best-hold
+// number cannot say whether the run failed once or flickered twenty times.
+//
+// And the census reported growthPer100s = 0 for every non-wall kind with
+// r0 = 27-28, which would make ringHuge (r >= 149) impossible — while
+// bossHitRange in the same report showed reach climbing 200 -> 353 (max 697).
+// The sampler's 12 x 30 s window simply ended before the growth.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'regime-breaks') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5000, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config, W = C.field.w;
+    const TIPS = C.deepHell.tipWindowToS;
+
+    const boss = (id, r) => ({ id: id, type: 'boss', boss: true, bossChar: 'GIANT',
+        x: W * 0.5, y: W * 0.5, r: r, hp: 9e9, maxHp: 9e9, speed: 0.4, moving: true });
+    const scene = (gt, r) => {
+        global.gameTime = gt; global.hell = true; T.latchHell();
+        T.setOwned({ 'SOUTH SIDE': 6 });
+        global.player = Object.assign({}, global.player, { x: 8, y: 8, hp: 100, maxHp: 100,
+            defense: 34.992, regenBonus: 2.2, invuln: 0 });
+        global.enemies = [boss(1, r)];
+        global.eprojectiles = []; global.dropMarks = []; global.pickups = []; global.roadLines = [];
+    };
+
+    test('the census window now spans past the regime opening', () => {
+        const every = C.deepHell.bossCensusEveryS, cap = C.deepHell.bossCensusSamples;
+        assert.ok(every * cap > TIPS,
+            'census covers ' + (every * cap) + ' s but the regime opens at ' + TIPS + ' s — growth past that is invisible');
+        // literal, so shrinking the window later cannot quietly re-break it
+        assert.ok(every * cap >= 5000, 'coverage ' + (every * cap) + ' s < 5000');
+    });
+    test('a boss tracked across the whole run yields a real growth fit', () => {
+        pineBot.resetBossCensus(); T.startRun();
+        // r climbs 28 -> 160 over 4800 s: the shape bossHitRange implies
+        for (let gt = 600; gt <= 5400; gt += 120) {
+            scene(gt, Math.round(28 + (gt - 600) * (132 / 4800)));
+            T.planMove();
+        }
+        T.endRun();
+        const k = pineBot.bossCensus().kinds.filter(x => x.kind === 'GIANT')[0];
+        assert.ok(k, 'no GIANT row');
+        assert.ok(k.growthPer100s > 1,
+            'growth ' + k.growthPer100s + ' px/100s against a planted 2.75 — the window still ends too early');
+        assert.ok(k.ringAt != null && k.ringAt > 600 && k.ringAt < 9000,
+            'ringAt ' + k.ringAt + ' — the crossing is not being extrapolated');
+    });
+
+    test('a broken hold records WHICH clause dropped, and the length it reached', () => {
+        T.startRun();
+        for (let i = 0; i < 8; i++) { scene(TIPS + 100 + i * 10, W * 0.30); T.planMove(); }
+        scene(TIPS + 300, 20); T.planMove();          // ring gone -> break by 'ring'
+        const r = T.phaseRow();
+        assert.ok(r.deepBreak && r.deepBreak.ring >= 1, 'break reason: ' + JSON.stringify(r.deepBreak));
+        assert.ok(Array.isArray(r.deepHolds) && r.deepHolds.length >= 1, 'holds: ' + JSON.stringify(r.deepHolds));
+        assert.ok(r.deepHolds[0] >= 60, 'first hold ' + r.deepHolds[0] + ' — the length was not captured');
+    });
+    test('...and the park clause is distinguished from the ring clause', () => {
+        T.startRun();
+        for (let i = 0; i < 5; i++) { scene(TIPS + 100 + i * 10, W * 0.30); T.planMove(); }
+        scene(TIPS + 200, W * 0.30);
+        T.setOwned({ 'SOUTH SIDE': 0 });               // parkClear fails -> break by 'park'
+        T.planMove();
+        const r = T.phaseRow();
+        assert.ok(r.deepBreak && r.deepBreak.park >= 1 && !r.deepBreak.ring,
+            'expected a park break only, got ' + JSON.stringify(r.deepBreak));
+        T.setOwned({ 'SOUTH SIDE': 6 });
+    });
+    test('many short flickers and one long hold are distinguishable', () => {
+        T.startRun();
+        for (let rep = 0; rep < 3; rep++) {
+            for (let i = 0; i < 3; i++) { scene(TIPS + rep * 400 + i * 10, W * 0.30); T.planMove(); }
+            scene(TIPS + rep * 400 + 100, 20); T.planMove();
+        }
+        const r = T.phaseRow();
+        assert.strictEqual(r.deepHolds.length, 3, 'holds ' + JSON.stringify(r.deepHolds));
+        assert.ok(r.deepBreak.ring === 3, JSON.stringify(r.deepBreak));
+    });
+
+    // The clamp that was binding on the two highest-evidence enemy types.
+    test('the enemy-fear ceiling is above what the two killers measured', () => {
+        assert.ok(C.learning.enemyMulCeil > 1.42,
+            'ceiling ' + C.learning.enemyMulCeil + ' still clamps drunk 1.404 / runner 1.417');
+        assert.ok(C.learning.enemyMulCeil <= 2.2, 'ceiling ' + C.learning.enemyMulCeil + ' is now unbounded in practice');
+    });
     done();
 }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.113.0
+// @version      6.115.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.113.0';
+    const SCRIPT_VERSION = '6.115.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -857,6 +857,16 @@
             // Measured against the RAW enemy array — see the comment at the
             // ringHuge definition for why the filtered list made it dead.
             ringShare: 0.55,
+            // v6.115.0: 48 samples at 120 s = 5760 s per boss, past the regime
+            // opening. Was 12 x 30 s = 360 s, which reported growth 0 for every
+            // kind while bossHitRange showed reach climbing 200 -> 353.
+            bossCensusEveryS: 120,
+            bossCensusSamples: 48,
+            // v6.114.0: when the day's regen checkpoint opens. Was effectively
+            // 600 s — one full income bucket AFTER the pool starts draining.
+            // 120 lets the opening weapon land first and then starts fixing the
+            // arithmetic while there is still a pool to protect.
+            regenFromS: 120,
             tipWindowToS: 4800,        // 80 min
             cornerAnchorFromS: 4800,   // v6.89.2: was 9000 (150 min) — a gate no
                                        // recorded run ever reached. Now the tip
@@ -1215,7 +1225,14 @@
             enemyMulApply: true,   // one live dial: false restores static fear
             enemyMulMinN: 8,       // sole-candidate contact events before a type counts at all
             enemyMulFloor: 0.8,
-            enemyMulCeil: 1.4,
+            // v6.115.0: was 1.4, and BOTH of the two types that do the killing
+            // were pinned against it — drunk stored 1.404 / applied 1.4,
+            // runner 1.417 / applied 1.4, on 149k and 139k sole hits. A clamp
+            // that binds on the two highest-evidence types is a box that is
+            // too small, exactly like the CEM bounds this project keeps
+            // widening. 1.8 gives the estimate room to say what it measured;
+            // the floor is untouched because nothing is near it.
+            enemyMulCeil: 1.8,
             // CEM (Cross-Entropy Method) optimizer for movement/dodge params:
             // sample from a Gaussian per parameter, batch runs, refit the
             // distribution toward the top-ranked runs. Rank-based selection
@@ -1318,6 +1335,10 @@
         // exactly that. requireRing/requireTips exist so the two hard clauses
         // can be relaxed one at a time when reading a row, never silently.
         deepRegime: { requireRing: true, requireTips: true, requireParked: true },
+        // v6.115.0: how the boss census samples radius over a run. See the
+        // comment at the sampler — the first window (12 x 30 s) was far too
+        // short to see growth that bossHitRange proves is happening.
+        // (placed on deepHell below; kept here only as documentation anchor)
 
         // Strategy weights. These are CEM-TUNABLE (see TUNABLE below), so the
         // strategy itself — not just the dodge physics — improves across runs.
@@ -1326,6 +1347,20 @@
             roadmapBonus: 16,      // pull toward the USER'S prescribed rainbow roster
             earlyDps: 12,          // extra weight on leveling owned weapons early
             expandPenalty: 20,     // deep-focus penalty on new cocktails
+            // v6.114.0: bonus a regen card earns at ZERO regen, decaying to 0
+            // at contact break-even. Default 120 puts WATER around 338 and
+            // SIMPLE SYRUP around 351 against OLIVE's 432 and a base-attack
+            // card's 560 — ahead of junk and of a third weapon level, behind
+            // the armour anchor and the ult. Searchable; see TUNABLE.
+            // 40, not 120. At 120 a regen card scored 319 against super keys
+            // at 247-278 — it outbid the super line, and supersPerRun (0.5
+            // against a supersMin of 3) is the binding constraint on every
+            // build. `slot-lockout` holds that invariant. 40 keeps regen ahead
+            // of junk and behind the super keys, the armour anchor and the
+            // base attack. The BOX runs to 220: if the HP economy really is
+            // worth more than the super line, the search can say so with
+            // evidence instead of me asserting it.
+            regenDeficit: 40,
             dpsDeficitGain: 28,    // how hard picks shift to damage when losing the DPS race
             // USER + CEM: the Rainbow Gun pickup time. The gun starts weak —
             // too early = contact death, too late = kiting can't cover. The
@@ -2140,6 +2175,15 @@
         'strategy.roadmapBonus': { min: 10, max: 24 },   // floored: the prescribed roster stays dominant
         'strategy.earlyDps': { min: 4, max: 24 },
         'strategy.expandPenalty': { min: 8, max: 30 },
+        // v6.114.0 — how hard a regen card bids while the HP economy is under
+        // break-even. The live income audit says the day is net NEGATIVE from
+        // minute zero (bucket 0: loss 1.27/s vs gain 1.00/s), and one SIMPLE
+        // SYRUP level (+0.512 HP/s) flips it. But every pick spent here is a
+        // pick not spent on the super line, and supersPerRun 0.5 against a
+        // supersMin of 3 is the other binding constraint. The trade-off is real
+        // and I do not know where it sits, so the search settles it. The box
+        // CONTAINS 0, so "regen is not worth a pick" stays expressible.
+        'strategy.regenDeficit': { min: 0, max: 220 },
         'strategy.dpsDeficitGain': { min: 10, max: 40 },
         // v6.86.9: `strategy.rainbowReadyS` REMOVED from the search. With the
         // gun banned the window it describes can never be reached, and it had
@@ -2546,7 +2590,7 @@
     let ultCasts = 0, ultLastReadyAt = null, ultCdMulSeen = null;
     // v6.111.0 lane-escape telemetry: ticks spent inside an armed lane band,
     // and ticks the perpendicular override actually steered.
-    let laneInTicks = 0, laneEscTicks = 0;
+    let laneInTicks = 0, laneEscTicks = 0, laneDivTicks = 0;
     // ── v6.112.0 THE DEEP-HELL REGIME ───────────────────────────────────────
     //
     // USER, and it is a definition rather than a threshold: "deep hell should
@@ -2568,6 +2612,10 @@
     // and into the ~40 class.
     let deepRegimeTicks = 0, deepStreakFrom = null, deepHoldBest = 0, deepFirstGt = null,
         deepStillTicks = 0, deepInvTicks = 0, deepHpSum = 0;
+    // v6.115.0: which clause ended each hold, and every hold length. The
+    // 120 s threshold was a guess; these are what it should be set from, the
+    // way capStable.fromS was set from medianReadyAt in 6.103.0.
+    let deepBreaks = {}, deepHolds = [];
     // ── v6.112.0 THE BOSS CENSUS ────────────────────────────────────────────
     //
     // USER: "given the predictability of the bosses appearance and the size at
@@ -5417,18 +5465,76 @@
             // of the SUGAR+WATER craft that MAKES simple syrup, so starving it
             // starves the better card. That is also why DAY_ORDER puts it at 8
             // and SIMPLE SYRUP at 9 — a prerequisite, not a preference.
+            // ── v6.114.0 THE DAY IS AN HP ECONOMY, AND IT IS NEGATIVE ───────
+            //
+            // The first live 6.113.0 report carried the income audit, and its
+            // first bucket settles what the day actually is:
+            //
+            //   0-10 min   loss 1.27/s   gain 1.00/s   net -0.27 HP/s
+            //   10-20 min  loss 3.34/s   gain 2.57/s   net -0.77 HP/s
+            //   20-30 min  loss 6.50/s   gain 5.02/s   net -1.48 HP/s
+            //   firstNegativeMin: 20 (reported) — but bucket ZERO is already
+            //   negative, and every bucket after it is too.
+            //
+            // Joe's pool is 100 HP. At -0.27 HP/s a full pool drains in 370 s,
+            // and the day-death rows cluster at 360-1100 s. The day is not
+            // being lost to a movement mistake; it is being lost to arithmetic.
+            // The audit's own note says so: "no posture fixes that, only heal
+            // income or time-stop uptime."
+            //
+            // One level of SIMPLE SYRUP is +0.512 HP/s and flips bucket zero
+            // POSITIVE on its own. The checkpoint that buys it did not open
+            // until gt 600 — i.e. after the entire first bucket had already
+            // been spent bleeding. That gate is the bug.
+            //
+            // Two changes, and the second matters more than the first:
+            //   1. Opens at `regenFromS` (120 s: after the first weapon, so the
+            //      opening sprint still funds itself) instead of 600.
+            //   2. The bonus is now proportional to the DEFICIT — how far below
+            //      break-even the current regen is — rather than a flat +16
+            //      that never came close to outbidding a base-attack card at
+            //      560. At zero regen it pays `strategy.regenDeficit`, decaying
+            //      to nothing as break-even is reached, so it stops bidding the
+            //      moment the economy is solved rather than pouring the whole
+            //      day into WATER.
+            //
+            // The size of that bonus is a genuine trade-off — every pick spent
+            // on regen is a pick not spent on the super line, and supersPerRun
+            // 0.5 against a supersMin of 3 is the OTHER binding constraint. I
+            // do not know the right number, so it is a TUNABLE dimension and
+            // the search settles it. That is the honest form of this change.
             const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
+            const regenFromS = CONFIG.deepHell.regenFromS != null ? CONFIG.deepHell.regenFromS : 120;
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                !hellDetected && gtR >= 600) {
+                !hellDetected && gtR >= regenFromS) {
                 // null = armour unreadable; fall back to the old flat bar
                 // rather than to a threshold nothing can meet.
                 const be = contactBreakEven();
                 const need = be == null ? 1.0 : be;
-                if (regenRate() < need) {
-                    // 16 was WATER's price; scale from there by HP/s per level
-                    // so SIMPLE SYRUP lands at ~29 and outranks it outright.
-                    add(Math.round(16 * (REGEN_PER_LV[name] / REGEN_PER_LV['WATER'])),
-                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water'));
+                const have = regenRate();
+                if (have < need) {
+                    // v6.114.0 RETRACTION. 6.112.0 scaled this by HP/s per
+                    // level so SIMPLE SYRUP (0.512) outbid WATER (0.284)
+                    // outright. That is right on regen arithmetic and WRONG on
+                    // craft mechanics: SIMPLE SYRUP is the WATER + SUGAR craft,
+                    // and DAY_ORDER deliberately ranks it after both halves
+                    // (WATER 8, SUGAR 3). Opening the checkpoint at 120 s made
+                    // the conflict live and `slot-lockout` caught it — the two
+                    // cards came out 319 / 322, syrup ahead of its own
+                    // ingredient. The per-level split is withdrawn; DAY_ORDER
+                    // decides between the two regen cards, and the deficit term
+                    // lifts BOTH equally. The user's point stands (syrup is the
+                    // better regen source); it is expressed by the day order
+                    // already putting them adjacent, not by outbidding the
+                    // prerequisite.
+                    const perLv = 16;
+                    // ...and add the deficit term on top: full weight at zero
+                    // regen, zero weight once break-even is reached.
+                    const deficit = Math.max(0, Math.min(1, (need - have) / need));
+                    const k = CONFIG.strategy.regenDeficit != null ? CONFIG.strategy.regenDeficit : 0;
+                    add(perLv + Math.round(k * deficit),
+                        'entry-regen-' + (name === 'SIMPLE SYRUP' ? 'syrup' : 'water') +
+                        (deficit > 0 ? '(' + Math.round(deficit * 100) + '%short)' : ''));
                 }
             }
             // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
@@ -6395,10 +6501,11 @@
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
         invulnAllTicks = 0; ultCasts = 0; ultLastReadyAt = null; ultCdMulSeen = null;   // v6.111.0
-        laneInTicks = 0; laneEscTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
+        laneInTicks = 0; laneEscTicks = 0; laneDivTicks = 0;   // v6.111.0: lane exposure and escapes are per-run
         // v6.112.0: the regime is a per-run achievement, not a session total
         deepRegimeTicks = 0; deepStreakFrom = null; deepHoldBest = 0; deepFirstGt = null;
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
+        deepBreaks = {}; deepHolds = [];   // v6.115.0
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -6494,6 +6601,10 @@
             ult6At: ultLv6At == null ? null : Math.round(ultLv6At),
             laneIn: laneInTicks || 0,
             laneEsc: laneEscTicks || 0,
+            // v6.114.0: ticks the override actually OVERRULED the danger
+            // field. laneEsc alone was a copy of laneIn; this is the number
+            // that says whether the override is doing anything.
+            laneDiv: laneDivTicks || 0,
             // v6.112.0 THE DEEP-HELL REGIME — the user's definition, measured.
             // These replace `ph === 'deep'` as the success signal; the phase
             // label stays for continuity with every historical row.
@@ -6508,7 +6619,12 @@
             deepHold: Math.round(deepHoldBest),
             deepStill: deepRegimeTicks ? +(deepStillTicks / deepRegimeTicks).toFixed(3) : null,
             deepInv: deepRegimeTicks ? +(deepInvTicks / deepRegimeTicks).toFixed(3) : null,
-            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null
+            deepHp: deepRegimeTicks ? +(deepHpSum / deepRegimeTicks).toFixed(3) : null,
+            // v6.115.0: every hold this run, and what ended each one. A single
+            // best-hold number cannot say whether the anchor fails once or
+            // flickers twenty times, and those need opposite fixes.
+            deepHolds: deepHolds.length ? deepHolds.slice(0, 20) : null,
+            deepBreak: Object.keys(deepBreaks).length ? deepBreaks : null
         };
     }
 
@@ -9051,9 +9167,25 @@
                             rs: []
                         };
                     }
-                    // coarse growth samples: at most one per 30 game-seconds, 12 max
+                    // ── v6.115.0 THE WINDOW WAS TOO SHORT TO SEE THE GROWTH ────
+                    // 12 samples at 30 s covered 360 s per boss. The first live
+                    // census (n=60 runs, 82-236 sightings per kind) came back
+                    // with growthPer100s = 0 for EVERY non-wall kind and r0 =
+                    // 27-28 across the board — which would mean bosses never
+                    // grow and `ringHuge` (r >= 149) could never fire.
+                    //
+                    // `bossHitRange` in the same report says otherwise: median
+                    // reach 353, p95 370, max 697 on a 540 px canvas, up from a
+                    // median of 200 one report earlier. Bosses plainly do grow.
+                    // A boss first sighted at gt 630 was simply dropped at gt
+                    // 990, hundreds of seconds before it got big.
+                    //
+                    // 48 samples at 120 s = 5760 s of coverage, which reaches
+                    // past the regime opening (deepAt clustered 4808-5400).
+                    const every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 120;
+                    const cap = CONFIG.deepHell.bossCensusSamples != null ? CONFIG.deepHell.bossCensusSamples : 48;
                     const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
-                    if (rec.rs.length < 12 && (!last || gtB - last[0] >= 30)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                    if (rec.rs.length < cap && (!last || gtB - last[0] >= every)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
                 }
             }
         }
@@ -10928,6 +11060,16 @@
             // price lanes for every ordinary step, which is what keeps the bot
             // from wandering into one; this fires only once it is already
             // standing in a band that is live or about to be.
+            // v6.114.0: count the DIVERSIONS, not the firings. The first live
+            // report came back with laneIn === laneEsc in every single row
+            // (6475/6475, 97/97, ...), because the override runs on every tick
+            // a lane covers the player — so the second number was a copy of the
+            // first and carried no information at all. What is worth knowing is
+            // how often the override actually OVERRULED the danger field, which
+            // is the whole claim being made for it. Compare against the field's
+            // own argmax before replacing it.
+            const fdot = (best.dx || 0) * laneEscape.x + (best.dy || 0) * laneEscape.y;
+            if (fdot < 0.7) laneDivTicks++;
             vx = laneEscape.x; vy = laneEscape.y;
             laneEscTicks++;
         } else if (huntOn && huntPost) {
@@ -11046,6 +11188,19 @@
             if (ultInvuln) deepInvTicks++;
             deepHpSum += hpRatio;
         } else {
+            // v6.115.0: WHY the streak broke. The first live rows held the
+            // regime for 75 / 17 / 1 / 0 s against a 120 s threshold, so
+            // deepHeldRate 0 says nothing about whether the anchor works — it
+            // says the run kept falling out of the regime. Which clause drops
+            // is the whole question, and the boolean could not answer it.
+            if (deepStreakFrom != null) {
+                const why = (DR.requireRing !== false && !ringHuge) ? 'ring'
+                    : (DR.requireTips !== false && !tipsDone) ? 'tips'
+                    : (DR.requireParked !== false && !parked) ? 'park' : 'hell';
+                deepBreaks[why] = (deepBreaks[why] || 0) + 1;
+                const held = gtReg - deepStreakFrom;
+                if (held > 0) deepHolds.push(Math.round(held));
+            }
             deepStreakFrom = null;
         }
 
@@ -11982,20 +12137,43 @@
         const n = v => (v == null ? '—' : v);
         const pct = v => (v == null ? '—' : Math.round(v * 100) + '%');
         try {
+            // v6.114.0: `compare.current` is a STRING ("6.113.0+crown+joe"),
+            // not a row. The first draft read `.version`/`.n` off it and the
+            // header rendered "v—  —  n=—" on the very first live paste. The
+            // row lives in compare.versions; find it by that string.
             const cmp = (r && r.compare) || {};
-            const cur = cmp.current || {};
-            L.push('v' + n(cur.version || (r && r.version)) + '  ' + n(cur.bartender || cmp.bartender) +
-                '  n=' + n(cur.n) + '  gen=' + n(r && r.learning && r.learning.gen));
+            const curId = typeof cmp.current === 'string' ? cmp.current : null;
+            const vers = Array.isArray(cmp.versions) ? cmp.versions : [];
+            const cur = (curId && vers.filter(v => v && v.version === curId)[0]) ||
+                        (typeof cmp.current === 'object' && cmp.current) || {};
+            L.push('v' + n(curId || cur.version) +
+                '  n=' + n(cur.runs != null ? cur.runs : cur.n) +
+                '  gen=' + n(r && r.learning && r.learning.gen) +
+                '  runs=' + n(r && r.learning && r.learning.runs));
             const g = (r && r.funnel && r.funnel.groups && r.funnel.groups[0]) || {};
             L.push('FUNNEL  day ' + n(g.dayClearRate) + '   entry ' + n(g.entrySurvival) +
                 '   deepHeld ' + n(g.deepHeldRate) + '   seated ' + n(g.seatedRate));
             L.push('BUILD   ready ' + n(g.buildsReady) + '@' + n(g.medianReadyAt) +
                 '   supers/run ' + n(cur.supersPerRun) +
                 '   entryDef ' + n(g.medianEntryDef) + '   entryRegen ' + n(g.medianEntryRegen));
-            L.push('DEEP    at ' + n(g.medianDeepAt) + '   hold ' + n(g.medianDeepHold) + 's' +
-                '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%');
-            L.push('SURVIVE median ' + n(cur.median) + 's   mean ' + n(cur.mean) +
+            L.push('DEEP    at ' + n(g.medianDeepAt) + '   bestHold ' + n(g.medianDeepHold) + 's' +
+                '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%   hp ' + n(g.medianDeepHp));
+            if (g.holds) L.push('        holds ' + n(g.holds) + '  median ' + n(g.medianHold) + 's  max ' + n(g.maxHold) +
+                's  broke-by ' + (g.deepBreak ? Object.keys(g.deepBreak).map(k => k + ':' + g.deepBreak[k]).join(' ') : '-'));
+            L.push('SURVIVE median ' + n(cur.medianTimeS) + 's   mean ' + n(cur.meanTimeS) +
                 's   hell ' + n(cur.hellRate) + '   caps ' + n(g.capOuts) + '/' + n(g.earlyCaps));
+            // v6.114.0 THE HP ECONOMY, promoted to the headline. The income
+            // audit's first bucket is the single most diagnostic number in the
+            // report and it was buried: a negative net at minute 0 means the
+            // pool drains from the start and no amount of movement tuning can
+            // fix it. `firstNeg` is the first depth at which the bot is losing.
+            const inc = (r && r.income && r.income.buckets) || [];
+            if (inc.length) {
+                const b0 = inc[0] || {};
+                L.push('HP NET  0-10min ' + (b0.net > 0 ? '+' : '') + n(b0.net) + ' HP/s  (loss ' + n(b0.lossPerSec) +
+                    ' gain ' + n(b0.gainPerSec) + ')   firstNegative@' + n(r.income.firstNegativeMin) + 'min' +
+                    (b0.net < 0 ? '   <-- DRAINING FROM MINUTE ZERO' : ''));
+            }
             // deaths, biggest first — the line that says what to fix next
             const d = (r && r.funnel && r.funnel.groups && r.funnel.groups[0] && r.funnel.groups[0].deaths) || null;
             const dmg = (r && r.damage && r.damage.sole) || null;
@@ -12007,7 +12185,7 @@
                 L.push('DEATHS  ' + Object.keys(d).map(k => k + ' ' + d[k]).join('  '));
             }
             // the two v6.111/112 instruments, so a row that is not moving says so
-            L.push('LANES   in ' + n(g.laneIn) + '  esc ' + n(g.laneEsc) +
+            L.push('LANES   in ' + n(g.laneIn) + '  divert ' + n(g.laneDiv) +
                 '        ULT  invAll ' + n(g.medianInvAll) + '  casts ' + n(g.medianCasts) + '  cdMul ' + n(g.medianCdMul));
             const bk = (r && r.boss && r.boss.kinds) || [];
             if (bk.length) {
@@ -12816,12 +12994,16 @@
                     }
                     if (r.deepStill != null) { g.deepStills = g.deepStills || []; g.deepStills.push(r.deepStill); }
                     if (r.deepInv != null) { g.deepInvs = g.deepInvs || []; g.deepInvs.push(r.deepInv); }
+                    if (Array.isArray(r.deepHolds)) { g.allHolds = (g.allHolds || []).concat(r.deepHolds); }
+                    if (r.deepBreak) { g.breaks = g.breaks || {};
+                        for (const k of Object.keys(r.deepBreak)) g.breaks[k] = (g.breaks[k] || 0) + r.deepBreak[k]; }
                     // v6.113.0: the v6.111.0 instruments were written to every
                     // phase ROW and never aggregated, so the funnel — the thing
                     // actually read — could not show whether the lane override
                     // or the ult economy had moved at all.
                     if (r.laneIn != null) g.laneIn = (g.laneIn || 0) + r.laneIn;
                     if (r.laneEsc != null) g.laneEsc = (g.laneEsc || 0) + r.laneEsc;
+                    if (r.laneDiv != null) g.laneDiv = (g.laneDiv || 0) + r.laneDiv;
                     if (r.invAll != null) { g.invAlls = g.invAlls || []; g.invAlls.push(r.invAll); }
                     if (r.inv != null) { g.invs = g.invs || []; g.invs.push(r.inv); }
                     if (r.casts != null) { g.castsArr = g.castsArr || []; g.castsArr.push(r.casts); }
@@ -12870,8 +13052,14 @@
                         medianDeepHold: med(g.deepHolds || []),
                         medianDeepStill: med((g.deepStills || []).map(v => Math.round(v * 100))),
                         medianDeepInv: med((g.deepInvs || []).map(v => Math.round(v * 100))),
+                        // v6.115.0 — set deepHoldS from medianHold, and read
+                        // deepBreak to see WHICH clause keeps dropping.
+                        holds: (g.allHolds || []).length,
+                        medianHold: med(g.allHolds || []),
+                        maxHold: (g.allHolds || []).length ? Math.max.apply(null, g.allHolds) : null,
+                        deepBreak: g.breaks || null,
                         // v6.113.0 lane override + ult economy, aggregated
-                        laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0,
+                        laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0, laneDiv: g.laneDiv || 0,
                         medianInv: med((g.invs || []).map(v => Math.round(v * 100))),
                         medianInvAll: med((g.invAlls || []).map(v => Math.round(v * 100))),
                         medianCasts: med(g.castsArr || []),

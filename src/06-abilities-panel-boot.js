@@ -839,20 +839,43 @@
         const n = v => (v == null ? '—' : v);
         const pct = v => (v == null ? '—' : Math.round(v * 100) + '%');
         try {
+            // v6.114.0: `compare.current` is a STRING ("6.113.0+crown+joe"),
+            // not a row. The first draft read `.version`/`.n` off it and the
+            // header rendered "v—  —  n=—" on the very first live paste. The
+            // row lives in compare.versions; find it by that string.
             const cmp = (r && r.compare) || {};
-            const cur = cmp.current || {};
-            L.push('v' + n(cur.version || (r && r.version)) + '  ' + n(cur.bartender || cmp.bartender) +
-                '  n=' + n(cur.n) + '  gen=' + n(r && r.learning && r.learning.gen));
+            const curId = typeof cmp.current === 'string' ? cmp.current : null;
+            const vers = Array.isArray(cmp.versions) ? cmp.versions : [];
+            const cur = (curId && vers.filter(v => v && v.version === curId)[0]) ||
+                        (typeof cmp.current === 'object' && cmp.current) || {};
+            L.push('v' + n(curId || cur.version) +
+                '  n=' + n(cur.runs != null ? cur.runs : cur.n) +
+                '  gen=' + n(r && r.learning && r.learning.gen) +
+                '  runs=' + n(r && r.learning && r.learning.runs));
             const g = (r && r.funnel && r.funnel.groups && r.funnel.groups[0]) || {};
             L.push('FUNNEL  day ' + n(g.dayClearRate) + '   entry ' + n(g.entrySurvival) +
                 '   deepHeld ' + n(g.deepHeldRate) + '   seated ' + n(g.seatedRate));
             L.push('BUILD   ready ' + n(g.buildsReady) + '@' + n(g.medianReadyAt) +
                 '   supers/run ' + n(cur.supersPerRun) +
                 '   entryDef ' + n(g.medianEntryDef) + '   entryRegen ' + n(g.medianEntryRegen));
-            L.push('DEEP    at ' + n(g.medianDeepAt) + '   hold ' + n(g.medianDeepHold) + 's' +
-                '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%');
-            L.push('SURVIVE median ' + n(cur.median) + 's   mean ' + n(cur.mean) +
+            L.push('DEEP    at ' + n(g.medianDeepAt) + '   bestHold ' + n(g.medianDeepHold) + 's' +
+                '   still ' + n(g.medianDeepStill) + '%   ult ' + n(g.medianDeepInv) + '%   hp ' + n(g.medianDeepHp));
+            if (g.holds) L.push('        holds ' + n(g.holds) + '  median ' + n(g.medianHold) + 's  max ' + n(g.maxHold) +
+                's  broke-by ' + (g.deepBreak ? Object.keys(g.deepBreak).map(k => k + ':' + g.deepBreak[k]).join(' ') : '-'));
+            L.push('SURVIVE median ' + n(cur.medianTimeS) + 's   mean ' + n(cur.meanTimeS) +
                 's   hell ' + n(cur.hellRate) + '   caps ' + n(g.capOuts) + '/' + n(g.earlyCaps));
+            // v6.114.0 THE HP ECONOMY, promoted to the headline. The income
+            // audit's first bucket is the single most diagnostic number in the
+            // report and it was buried: a negative net at minute 0 means the
+            // pool drains from the start and no amount of movement tuning can
+            // fix it. `firstNeg` is the first depth at which the bot is losing.
+            const inc = (r && r.income && r.income.buckets) || [];
+            if (inc.length) {
+                const b0 = inc[0] || {};
+                L.push('HP NET  0-10min ' + (b0.net > 0 ? '+' : '') + n(b0.net) + ' HP/s  (loss ' + n(b0.lossPerSec) +
+                    ' gain ' + n(b0.gainPerSec) + ')   firstNegative@' + n(r.income.firstNegativeMin) + 'min' +
+                    (b0.net < 0 ? '   <-- DRAINING FROM MINUTE ZERO' : ''));
+            }
             // deaths, biggest first — the line that says what to fix next
             const d = (r && r.funnel && r.funnel.groups && r.funnel.groups[0] && r.funnel.groups[0].deaths) || null;
             const dmg = (r && r.damage && r.damage.sole) || null;
@@ -864,7 +887,7 @@
                 L.push('DEATHS  ' + Object.keys(d).map(k => k + ' ' + d[k]).join('  '));
             }
             // the two v6.111/112 instruments, so a row that is not moving says so
-            L.push('LANES   in ' + n(g.laneIn) + '  esc ' + n(g.laneEsc) +
+            L.push('LANES   in ' + n(g.laneIn) + '  divert ' + n(g.laneDiv) +
                 '        ULT  invAll ' + n(g.medianInvAll) + '  casts ' + n(g.medianCasts) + '  cdMul ' + n(g.medianCdMul));
             const bk = (r && r.boss && r.boss.kinds) || [];
             if (bk.length) {
@@ -1673,12 +1696,16 @@
                     }
                     if (r.deepStill != null) { g.deepStills = g.deepStills || []; g.deepStills.push(r.deepStill); }
                     if (r.deepInv != null) { g.deepInvs = g.deepInvs || []; g.deepInvs.push(r.deepInv); }
+                    if (Array.isArray(r.deepHolds)) { g.allHolds = (g.allHolds || []).concat(r.deepHolds); }
+                    if (r.deepBreak) { g.breaks = g.breaks || {};
+                        for (const k of Object.keys(r.deepBreak)) g.breaks[k] = (g.breaks[k] || 0) + r.deepBreak[k]; }
                     // v6.113.0: the v6.111.0 instruments were written to every
                     // phase ROW and never aggregated, so the funnel — the thing
                     // actually read — could not show whether the lane override
                     // or the ult economy had moved at all.
                     if (r.laneIn != null) g.laneIn = (g.laneIn || 0) + r.laneIn;
                     if (r.laneEsc != null) g.laneEsc = (g.laneEsc || 0) + r.laneEsc;
+                    if (r.laneDiv != null) g.laneDiv = (g.laneDiv || 0) + r.laneDiv;
                     if (r.invAll != null) { g.invAlls = g.invAlls || []; g.invAlls.push(r.invAll); }
                     if (r.inv != null) { g.invs = g.invs || []; g.invs.push(r.inv); }
                     if (r.casts != null) { g.castsArr = g.castsArr || []; g.castsArr.push(r.casts); }
@@ -1727,8 +1754,14 @@
                         medianDeepHold: med(g.deepHolds || []),
                         medianDeepStill: med((g.deepStills || []).map(v => Math.round(v * 100))),
                         medianDeepInv: med((g.deepInvs || []).map(v => Math.round(v * 100))),
+                        // v6.115.0 — set deepHoldS from medianHold, and read
+                        // deepBreak to see WHICH clause keeps dropping.
+                        holds: (g.allHolds || []).length,
+                        medianHold: med(g.allHolds || []),
+                        maxHold: (g.allHolds || []).length ? Math.max.apply(null, g.allHolds) : null,
+                        deepBreak: g.breaks || null,
                         // v6.113.0 lane override + ult economy, aggregated
-                        laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0,
+                        laneIn: g.laneIn || 0, laneEsc: g.laneEsc || 0, laneDiv: g.laneDiv || 0,
                         medianInv: med((g.invs || []).map(v => Math.round(v * 100))),
                         medianInvAll: med((g.invAlls || []).map(v => Math.round(v * 100))),
                         medianCasts: med(g.castsArr || []),

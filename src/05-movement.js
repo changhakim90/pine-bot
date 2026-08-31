@@ -1638,9 +1638,25 @@
                             rs: []
                         };
                     }
-                    // coarse growth samples: at most one per 30 game-seconds, 12 max
+                    // ── v6.115.0 THE WINDOW WAS TOO SHORT TO SEE THE GROWTH ────
+                    // 12 samples at 30 s covered 360 s per boss. The first live
+                    // census (n=60 runs, 82-236 sightings per kind) came back
+                    // with growthPer100s = 0 for EVERY non-wall kind and r0 =
+                    // 27-28 across the board — which would mean bosses never
+                    // grow and `ringHuge` (r >= 149) could never fire.
+                    //
+                    // `bossHitRange` in the same report says otherwise: median
+                    // reach 353, p95 370, max 697 on a 540 px canvas, up from a
+                    // median of 200 one report earlier. Bosses plainly do grow.
+                    // A boss first sighted at gt 630 was simply dropped at gt
+                    // 990, hundreds of seconds before it got big.
+                    //
+                    // 48 samples at 120 s = 5760 s of coverage, which reaches
+                    // past the regime opening (deepAt clustered 4808-5400).
+                    const every = CONFIG.deepHell.bossCensusEveryS != null ? CONFIG.deepHell.bossCensusEveryS : 120;
+                    const cap = CONFIG.deepHell.bossCensusSamples != null ? CONFIG.deepHell.bossCensusSamples : 48;
                     const last = rec.rs.length ? rec.rs[rec.rs.length - 1] : null;
-                    if (rec.rs.length < 12 && (!last || gtB - last[0] >= 30)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
+                    if (rec.rs.length < cap && (!last || gtB - last[0] >= every)) rec.rs.push([Math.round(gtB), Math.round(e.r)]);
                 }
             }
         }
@@ -3515,6 +3531,16 @@
             // price lanes for every ordinary step, which is what keeps the bot
             // from wandering into one; this fires only once it is already
             // standing in a band that is live or about to be.
+            // v6.114.0: count the DIVERSIONS, not the firings. The first live
+            // report came back with laneIn === laneEsc in every single row
+            // (6475/6475, 97/97, ...), because the override runs on every tick
+            // a lane covers the player — so the second number was a copy of the
+            // first and carried no information at all. What is worth knowing is
+            // how often the override actually OVERRULED the danger field, which
+            // is the whole claim being made for it. Compare against the field's
+            // own argmax before replacing it.
+            const fdot = (best.dx || 0) * laneEscape.x + (best.dy || 0) * laneEscape.y;
+            if (fdot < 0.7) laneDivTicks++;
             vx = laneEscape.x; vy = laneEscape.y;
             laneEscTicks++;
         } else if (huntOn && huntPost) {
@@ -3633,6 +3659,19 @@
             if (ultInvuln) deepInvTicks++;
             deepHpSum += hpRatio;
         } else {
+            // v6.115.0: WHY the streak broke. The first live rows held the
+            // regime for 75 / 17 / 1 / 0 s against a 120 s threshold, so
+            // deepHeldRate 0 says nothing about whether the anchor works — it
+            // says the run kept falling out of the regime. Which clause drops
+            // is the whole question, and the boolean could not answer it.
+            if (deepStreakFrom != null) {
+                const why = (DR.requireRing !== false && !ringHuge) ? 'ring'
+                    : (DR.requireTips !== false && !tipsDone) ? 'tips'
+                    : (DR.requireParked !== false && !parked) ? 'park' : 'hell';
+                deepBreaks[why] = (deepBreaks[why] || 0) + 1;
+                const held = gtReg - deepStreakFrom;
+                if (held > 0) deepHolds.push(Math.round(held));
+            }
             deepStreakFrom = null;
         }
 
