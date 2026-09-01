@@ -1339,6 +1339,12 @@
                     // planMove directly never reaches that handler, so a
                     // post-startRun hell scene silently runs as a DAY scene.
                     latchHell: () => latchHellDuringPlay(),
+                    // v6.120.0: read the latch back. The day-spine retraction
+                    // tests are only meaningful if the "day" scene really is a
+                    // day scene, and the ONLY way to know is to ask the latch —
+                    // `global.hell` is the page flag, not the bot's state, and
+                    // the two disagree for exactly one startRun.
+                    hellLatched: () => hellDetected,
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),

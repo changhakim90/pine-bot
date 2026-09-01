@@ -522,6 +522,17 @@
         return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
     }
 
+    // v6.120.0: the raw perpendicular distance to a charge ray, or null if this
+    // lane shape has no readable ray. Separated from lineCost because lineCost
+    // returns a PADDED, GRADED cost (good for the danger field, useless for
+    // "am I in the part that kills"), and the telegraph test needs the actual
+    // geometry against the game's own source-verified hit radius.
+    function linePerp(l, x, y) {
+        if (!l || typeof l.ang !== 'number' ||
+            typeof l.x !== 'number' || typeof l.y !== 'number') return null;
+        return Math.abs((y - l.y) * Math.cos(l.ang) - (x - l.x) * Math.sin(l.ang));
+    }
+
     function lineCost(l, x, y) {
         // roadLines are charge lanes. REAL game shape (source-verified via the
         // Last Call Linebacker): {x, y, ang, armed, dmg} — an angled RAY
@@ -1414,11 +1425,44 @@
             if (inBand <= 0.15) continue;                 // clear of this lane
             let urgent = false;
             if (l.armed === true) urgent = true;          // charge is LIVE: go now
-            // TELEGRAPH WINDOW (source: 210-frame life, arms for the last 90).
-            // Standing in the band as it approaches arming is the moment to
-            // dash — once it arms, walking out is already too late.
+            // ══ v6.120.0 THE TELEGRAPH WINDOW HAS NEVER ONCE OPENED ═════════
+            //
+            // USER: "I am seeing lane mark deaths from the linebacker kill the
+            // bot in early hell when they should be the most easily avoided
+            // considering that it is an attack that is predictable to avoid."
+            //
+            // Correct, and here is why the prediction was never used. The
+            // clause that was here read `l.life <= laneArmS * 60`. The
+            // source-verified roadLine shape — established in 6.88.0, by the
+            // audit that found `l.owner` never existed either — is:
+            //     {x, y, ang, armed, dmg}
+            // There is no `life`. `l.life` appears exactly ONCE in this entire
+            // codebase: in the condition that was on this line. `typeof
+            // undefined === 'number'` is false, so the branch was dead from the
+            // day it shipped. Same failure as `l.owner`: read a field the real
+            // shape does not have, get no error, get a silently dead branch.
+            //
+            // Which left two live paths, and the comment above the dead one
+            // condemns the first: "once it arms, walking out is already too
+            // late." That was the ONLY reliable trigger.
+            //
+            // The second, `inBand > 0.55`, is worse than it looks. inBand is
+            // 1 - (perp/width)*0.85 with width = 63 + linePad = 77, so 0.55
+            // resolves to perp < 40.8 — while the game's own hit test, also
+            // source-verified, kills at perp < 63. The bot therefore stood
+            // between 40.8 and 63 px of the ray, INSIDE the lethal band, for
+            // the whole telegraph, and only moved once the charge went live.
+            //
+            // The telegraph is observable without `life`: `armed === false` on
+            // a lane that already exists IS the telegraph. So an unarmed lane
+            // covering the player inside the real kill width is urgent now —
+            // which is what "predictable to avoid" means. The `life` reading is
+            // kept as an accepted signal in case a shape ever carries one, but
+            // nothing depends on it any more.
             else if (typeof l.life === 'number' && l.life <= laneArmS * 60) urgent = true;
-            // no life field to read: treat deep-in-band telegraphs as urgent
+            else if (linePerp(l, p.x, p.y) != null &&
+                     linePerp(l, p.x, p.y) < (T.lineKillPerp != null ? T.lineKillPerp : 63)) urgent = true;
+            // shapes with no readable ray: fall back to the old depth test
             else if (inBand > 0.55) urgent = true;
             if (!urgent) continue;
             laneUrgent = true;

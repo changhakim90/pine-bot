@@ -2702,40 +2702,64 @@ if (which === 'slot-lockout') {
     // (the super-line and craft-half terms both move these cards).
     // \b matters: /day-order1\b/ must NOT match `day-order11`.
     const tagOf = n => T.scoreCard({ n, type: 'passive', lv: 0, maxlv: 6 }, 0, []).why || '';
-    // ── v6.119.0 THE RANKS ARE NOW THE USER'S DOCTRINE ──────────────────
-    // These assertions were rewritten deliberately, not repaired. They used to
-    // pin TONIC at rank 1 on 6.106.0's evidence that supers separate survivors
-    // from deaths. That evidence licensed "a super key first", and the user has
-    // now said which key: "mint is essential for super cocktail for southside,
-    // the best boss killer during hell mode" — and every one of 6.118.0's top
-    // five runs is a SOUTH SIDE build. TONIC is not on the user's essentials
-    // list at all and moves to the back of the ingredients.
-    test('MINT is rank 1 — SOUTH SIDE, the hell boss killer', () =>
-        assert.ok(/day-order1\b/.test(tagOf('MINT')), tagOf('MINT')));
-    test('OLIVE is rank 2 — defense', () =>
-        assert.ok(/day-order2\b/.test(tagOf('OLIVE')), tagOf('OLIVE')));
-    test('the regen chain is 3-4-5, halves before the craft', () => {
+    // ── v6.120.0 THE 6.119.0 RE-RANK IS RETRACTED; 6.106.0's RANKS RETURN ──
+    // 6.119.0 rewrote these assertions to pin MINT at rank 1 and demote TONIC
+    // to 11 on the user's doctrine ("mint is essential for super cocktail for
+    // southside"). The doctrine is not wrong about what is GOOD; the ordering
+    // was mine and it defunded the entrance. Measured at n=40: entrySurvival
+    // 0.40 -> 0.09, buildsReady 13 -> 0, supersPerRun 0.7 -> 0.4, capOuts
+    // 8 -> 0, median 860 -> 764, z = -2.49. The picks audit says why in one
+    // line: with TONIC at 11 the bot opened ESPRESSO MARTINI, then GIN TONIC,
+    // then MOSCOW MULE, and MINT was never picked at all. Promoting MINT did
+    // not buy SOUTH SIDE — it bought nothing, and the demotion paid for it.
+    // TONIC keys TWO super lines, which is the whole of 6.106.0's evidence
+    // (entry deaths 65% zero-supers vs 0% for survivors, replicated at 50%/0%).
+    // The doctrine gets re-introduced ONE rank at a time against its own batch;
+    // CRANBERRY is the first candidate, because it touches no super key.
+    test('TONIC is rank 1 — it keys TWO super lines', () =>
+        assert.ok(/day-order1\b/.test(tagOf('TONIC')), tagOf('TONIC')));
+    test('MINT is rank 2 — the SOUTH SIDE key, and still ahead of every filler', () =>
+        assert.ok(/day-order2\b/.test(tagOf('MINT')), tagOf('MINT')));
+    test('SUGAR is rank 3 and OLIVE rank 4 — the keys, then the armour', () => {
         assert.ok(/day-order3\b/.test(tagOf('SUGAR')), tagOf('SUGAR'));
-        assert.ok(/day-order4\b/.test(tagOf('WATER')), tagOf('WATER'));
-        assert.ok(/day-order5\b/.test(tagOf('SIMPLE SYRUP')), tagOf('SIMPLE SYRUP'));
+        assert.ok(/day-order4\b/.test(tagOf('OLIVE')), tagOf('OLIVE'));
     });
-    test('CRANBERRY is rank 9 — the pickup radius the user named essential', () =>
-        assert.ok(/day-order9\b/.test(tagOf('CRANBERRY')), tagOf('CRANBERRY')));
-    test('TONIC is demoted to rank 11, behind every essential', () =>
-        assert.ok(/day-order11\b/.test(tagOf('TONIC')), tagOf('TONIC')));
-    // ...and behaviourally, the consequence the re-rank exists for.
-    test('the user\'s essentials all outscore TONIC in a real day', () => {
+    // ...and behaviourally, the property the ranks exist for: each super key
+    // outscores the vermouth filler it used to trail.
+    test('every super key outscores DRY VERMOUTH, the filler below them', () => {
         const got = { tonic: sc('TONIC', 'passive', 0), mint: sc('MINT', 'passive', 0),
-                      olive: sc('OLIVE', 'passive', 0), water: sc('WATER', 'passive', 0),
-                      cranberry: sc('CRANBERRY', 'passive', 0) };
+                      sugar: sc('SUGAR', 'passive', 0), olive: sc('OLIVE', 'passive', 0),
+                      dry: sc('DRY VERMOUTH', 'passive', 0) };
         const show = JSON.stringify(Object.fromEntries(
             Object.entries(got).map(([k, v]) => [k, Math.round(v)])));
-        assert.ok(got.mint > got.tonic, 'MINT must lead: ' + show);
-        assert.ok(got.olive > got.tonic, 'OLIVE must lead: ' + show);
-        // the user's own words: "water instead of tonic could have been a
-        // better early pick". This is that sentence, as an assertion.
-        assert.ok(got.water > got.tonic, 'WATER must beat TONIC: ' + show);
-        assert.ok(got.cranberry > got.tonic, 'CRANBERRY must lead: ' + show);
+        for (const key of ['tonic', 'mint', 'sugar', 'olive'])
+            assert.ok(got[key] > got.dry, key + ' must lead dry: ' + show);
+    });
+    // ── v6.120.0 AN OPEN FINDING, PINNED SO IT CANNOT DRIFT SILENTLY ────
+    // Writing the invariant above as "every key beats BOTH vermouths" was the
+    // obvious form, and it FAILED — on SWEET VERMOUTH, not on anything 6.119.0
+    // touched. Measured in a real day at gt 500, level 0, applyDefaults:
+    //   OLIVE 373 > MINT 278 > SUGAR 273 > SWEET VERMOUTH 271 > TONIC 262
+    //   > DRY VERMOUTH 247 > BLACK VERMOUTH 242 > WATER 239 > CRANBERRY 186
+    // TONIC is DAY_ORDER rank 1 and is picked FIFTH. The rank ladder pays
+    // 200/189/178/167/156/145 — an 11-point step — while SWEET VERMOUTH
+    // collects survival-kit+30, essential-hp+14, minguk-core+10,
+    // tank-mitigation+4 and craft-half+34 on top of its rank, and TONIC
+    // collects only tonic-two-lines+32 on top of its. 55 points of rank lead
+    // against 60 points of premium: the stated order does not govern, and
+    // 6.106.0's promotion of TONIC to rank 1 bought less than it looked like.
+    //
+    // This is NOT fixed here. 6.119.0 regressed at z=-2.49 because two
+    // day-side changes shipped together and neither could be attributed; the
+    // retraction has to go out clean or the next batch is unreadable for the
+    // same reason. Pinned as the measured state instead, so the fix — when it
+    // ships alone — reddens this test on purpose rather than passing unnoticed.
+    test('OPEN: TONIC is rank 1 but is outscored by SWEET VERMOUTH (rank 6)', () => {
+        const t = sc('TONIC', 'passive', 0), s = sc('SWEET VERMOUTH', 'passive', 0);
+        assert.ok(s > t, 'the rank-vs-premium inversion is GONE — if that was ' +
+            'deliberate, retire this test and assert the invariant instead; if ' +
+            'not, something moved the day economy by accident. TONIC ' +
+            Math.round(t) + ' SWEET ' + Math.round(s));
     });
     // The craft ordering is NOT doctrine — it is mechanics, and it survives any
     // reorder. A craft result is unreachable until both halves are maxed, so it
@@ -6808,6 +6832,56 @@ if (which === 'lane-escape') {
         for (let i = 0; i < 4; i++) T.planMove();
         assert.strictEqual(T.phaseRow().laneIn, before, 'laneIn climbing while clear of every lane');
     });
+    // ══ v6.120.0 THE TELEGRAPH ═══════════════════════════════════════════
+    // USER: "lane mark deaths from the linebacker kill the bot in early hell
+    // when they should be the most easily avoided considering that it is an
+    // attack that is predictable to avoid."
+    //
+    // The clause meant to use that prediction read `l.life <= laneArmS * 60`.
+    // The source-verified roadLine shape is {x, y, ang, armed, dmg} — there is
+    // no `life`, the branch was dead from the day it shipped, and note that the
+    // FIXTURE above invents `life: 200`, so the tests were kinder to the code
+    // than the game is. What remained was `armed === true` (whose own comment
+    // says "already too late") and `inBand > 0.55`, which resolves to perp 40.8
+    // against a kill radius of 63 — the bot stood in the lethal 40.8-63 band
+    // for the entire telegraph.
+    {
+        // a lane with NO life field: exactly what the game actually sends
+        const realLane = (armed, y) => ({ x: 300, y: y == null ? 300 : y, ang: 0, armed: armed, dmg: 60 });
+        const at = (perp, armed) => {
+            // ang 0 => perp is |player.y - lane.y|
+            put(300, 300 - perp, [realLane(armed)]);
+            return T.planMove();
+        };
+        test('the real lane shape carries no `life` — nothing may depend on one', () => {
+            const l = realLane(false);
+            assert.strictEqual(typeof l.life, 'undefined',
+                'the fixture is inventing a field the game does not send');
+        });
+        test('an UNARMED lane covering the player inside the kill radius steers', () => {
+            const p = at(50, false);   // 50 < 63 kill, and > 40.8 old threshold
+            assert.ok(p.laneEsc, 'no escape from a telegraphed lane at perp 50 — ' +
+                'this is the band the bot was dying in');
+            assert.ok(p.dy < 0, 'dy ' + p.dy + ' — escaping toward the ray, not away');
+        });
+        test('...and it does NOT fire outside the kill radius', () => {
+            const p = at(70, false);   // 70 > 63: the game cannot hit us here
+            assert.ok(!p.laneEsc,
+                'override firing at perp 70, outside the 63px hit test — the bot ' +
+                'will be yanked off the seat by lanes that cannot touch it');
+        });
+        test('an ARMED lane still steers at any depth in the band', () => {
+            const p = at(70, true);
+            assert.ok(p.laneEsc, 'a LIVE charge at perp 70 produced no escape');
+        });
+        test('the kill radius is the source-verified 63, not the padded cost', () => {
+            assert.strictEqual(C.threat.lineKillPerp, 63,
+                'lineKillPerp ' + C.threat.lineKillPerp + ' — the game hit test is 63');
+            assert.ok(C.threat.lineKillPerp > 63 * 0.6,
+                'the escape threshold has drifted back inside the lethal band');
+        });
+    }
+
     test('a synthetic thrower line never steers the override', () => {
         put(300, 300, []);
         global.enemies = [{ type: 'thrower', x: 500, y: 300, r: 14, hp: 900, windup: true, telegraph: true }];
@@ -8006,12 +8080,23 @@ if (which === 'regen-spine') {
         assert.ok(!/regen-spine/.test(why('WATER', 'passive', 6)),
             'the spine is still paying after the floor is met: ' + why('WATER', 'passive', 6));
     });
-    // ── v6.119.0 THE SPINE RUNS IN THE DAY, WHICH IS WHERE THE RUN IS WON ──
-    // 6.118.0 scoped it to hell and the first batch showed why that fails:
-    // `regen` became the LARGEST seat-miss bucket at 33%, while entrySurvival
-    // 0.40 means 60% of hell entrants die within 300 s of the entrance. A spine
-    // that only opens at hell entry gets a couple of hundred seconds to fix an
-    // economy the whole day was needed to build.
+    // ── v6.120.0 THE DAY SPINE IS RETRACTED — AND GUARDED IN ITS ABSENCE ──
+    // 6.119.0 opened the spine in the day on the argument that `regen` was the
+    // largest seat-miss bucket (33%) and that entrySurvival 0.40 means a spine
+    // opening at hell entry has a couple of hundred seconds to fix an economy
+    // the whole day was needed to build. That argument may still be right. It
+    // is untestable as shipped: the day spine went out in the SAME version as
+    // the DAY_ORDER re-rank, and that version measured z = -2.49 with
+    // entrySurvival collapsing 0.40 -> 0.09 and buildsReady 13 -> 0. Two
+    // day-side changes, one regression, no attribution — so both come back and
+    // the day side is re-tried ALONE against its own batch.
+    //
+    // These tests now assert the RETRACTED state, on purpose. The day spine is
+    // a card-scoring change with a live seat gate downstream of it; leaving no
+    // test here would let it drift back in unmeasured, which is exactly how it
+    // got in the first time. `slot-lockout` is the other half of this guard:
+    // the first time the spine was paid in the day it put `water: 479` ahead of
+    // every super key, and that is the failure this asserts cannot recur.
     {
         // NOTE: T.setOwned MERGES into ownedLevels, it does not replace. The
         // first draft of these tests inherited WATER 6 from the test above and
@@ -8028,27 +8113,28 @@ if (which === 'regen-spine') {
             return null;
         };
         const dscore = (n) => { const r = T.scoreCard({ n: n, type: 'passive', lv: 0, maxlv: 6 }, 0, []); return r; };
-        test('WATER takes the spine in the DAY, past regenFromS', () => {
+        test('the day scene is real: regen 0, past regenFromS, and NOT latched hell', () => {
             pineBot.stop(); day(600);
-            const w = dscore('WATER');
-            assert.ok(/regen-spine/.test(w.why || ''),
-                'no spine on WATER in the day at regen 0: ' + (w.why || ''));
+            assert.strictEqual(T.regenRate(), 0, 'the day scene already has regen');
+            assert.ok(!T.hellLatched(), 'startRun did not un-latch hell — the scene is a hell scene');
         });
-        test("...and it beats TONIC, which is the user's own sentence", () => {
+        test('WATER does NOT take the spine in the day — the day side is retracted', () => {
+            day(600);
+            assert.ok(!/regen-spine/.test(dscore('WATER').why || ''),
+                'the day spine is back without a batch behind it: ' + (dscore('WATER').why || ''));
+        });
+        test('...and so the day economy is still ordered by DAY_ORDER, not by regen', () => {
             day(600);
             const w = dscore('WATER').score, t = dscore('TONIC').score;
-            assert.ok(w > t, 'WATER ' + Math.round(w) + ' does not beat TONIC ' + Math.round(t));
+            assert.ok(t > w, 'TONIC ' + Math.round(t) + ' no longer leads WATER ' + Math.round(w) +
+                ' in the day — the 6.119.0 inversion is back');
         });
-        test('...and stops the moment the floor is met, in the day too', () => {
-            day(600, { 'WATER': 6 });
-            assert.ok(T.regenRate() >= C.deepHell.parkRegenRate, 'scene wrong: regen ' + T.regenRate());
-            assert.ok(!/regen-spine/.test(dscore('WATER').why || ''),
-                'still paying above the floor: ' + dscore('WATER').why);
-        });
-        test('...and not before regenFromS — the opening weapon still lands first', () => {
-            day(30);
-            assert.ok(!/regen-spine/.test(dscore('WATER').why || ''),
-                'spine paying at gt 30, before regenFromS: ' + dscore('WATER').why);
+        test('...while the SAME build in hell still gets the spine, which is the scope', () => {
+            day(600);
+            global.hell = true; T.latchHell();
+            assert.ok(/regen-spine/.test(dscore('WATER').why || ''),
+                'the spine is gone from hell too — this is a deletion, not a scoping: ' +
+                (dscore('WATER').why || ''));
         });
         test("...and the floor test above is restored for what follows", () => {
             global.gameTime = 4600; global.hell = true; T.latchHell();

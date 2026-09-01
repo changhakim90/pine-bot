@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.119.0
+// @version      6.120.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.119.0';
+    const SCRIPT_VERSION = '6.120.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -762,6 +762,13 @@
             lineWeight: 3.0,          // unarmed telegraph lanes
             lineArmedWeight: 8.0,     // live charges
             linePad: 14,
+            // v6.120.0: the game's OWN hit test for a charge lane, source-
+            // verified twice (the 547-run line-death audit that corrected 18 ->
+            // 63, and lineCost's comment). This is the radius that kills, with
+            // no padding — the telegraph escape needs the real number, because
+            // the padded/graded cost put its threshold at perp 40.8 and left
+            // the bot standing in the 40.8-63 band for the whole telegraph.
+            lineKillPerp: 63,
             // v6.111.0 LANE ESCAPE. `laneUrgent` has fired the dash on an
             // armed lane since 6.8x, but the dash takes its DIRECTION from
             // plan.dx/dy — the argmax of the danger field, in which the lane
@@ -1962,14 +1969,31 @@
     // never be picked before both of its halves:
     //   SIMPLE SYRUP after WATER + SUGAR;  BLACK VERMOUTH after DRY + SWEET.
     // `slot-lockout` asserts both, and asserts the new ranks as literals.
+    // ══ v6.120.0 THE 6.119.0 RE-RANK IS RETRACTED ═══════════════════════════
+    //
+    // It measured z = -2.49 ("worse") at n=40, and the funnel says where:
+    //     entrySurvival  0.40 -> 0.09      buildsReady  13 -> 0
+    //     supersPerRun   0.7  -> 0.4       capOuts       8 -> 0
+    // A FOUR-FOLD collapse in the share of hell entrants that survive 300 s.
+    // Of eleven entrants, one lived.
+    //
+    // 6.106.0 predicted exactly this and I overrode it on doctrine. Its
+    // measurement — replicated on two batches — is that SUPERS separate
+    // survivors from deaths and defense shows no separation. I read that as
+    // licensing "a super key first, and the user says which key", and moved
+    // TONIC from rank 1 to rank 11, behind six other ingredients. TONIC keys
+    // TWO super lines. The picks audit from a 6.119.0 run shows the result:
+    // ESPRESSO MARTINI taken as the first weapon, then GIN TONIC, then MOSCOW
+    // MULE — and MINT never picked at all. Promoting MINT did not buy SOUTH
+    // SIDE; demoting TONIC just defunded the entrance.
+    //
+    // The user's doctrine is not wrong about what is GOOD. It was my ordering
+    // that starved the early super lines, and the ordering was mine. Back to
+    // the 6.106.0 order, and the doctrine gets re-introduced one rank at a
+    // time against measurements rather than all at once.
     const DAY_ORDER = [
-        'MINT',                                  // 1  SOUTH SIDE — the hell boss killer
-        'OLIVE',                                 // 2  defense
-        'SUGAR', 'WATER', 'SIMPLE SYRUP',        // 3-5 regen/HP, halves before the craft
-        'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH',   // 6-8 halves before the craft
-        'CRANBERRY',                             // 9  pickup radius (tequila / time stop / flame cross)
-        'TOMATO JUICE',                          // 10 cooldown — "good to have"
-        'TONIC',                                 // 11 still keys two lines; no longer first
+        'TONIC', 'MINT', 'SUGAR', 'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH',
+        'BLACK VERMOUTH', 'WATER', 'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY',
         'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
     ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 4, SUGAR 3).
          // OLIVE is still the first thing after the three keys, and 6.105.0's
@@ -5789,8 +5813,11 @@
             // constraint there, regen 0 was — and `!hellDetected` meant 57
             // minutes of hell could not buy a single WATER. That is the half
             // this ships.
+            // v6.120.0: hell-only again. The day spine shipped in the same
+            // version as the re-rank, so the two are confounded in a z=-2.49
+            // regression; both go back and the day side is re-tried alone.
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                gtR >= regenFromS) {
+                hellDetected && gtR >= regenFromS) {
                 const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
                 const haveR = regenRate();
                 // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
@@ -8409,6 +8436,17 @@
         return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
     }
 
+    // v6.120.0: the raw perpendicular distance to a charge ray, or null if this
+    // lane shape has no readable ray. Separated from lineCost because lineCost
+    // returns a PADDED, GRADED cost (good for the danger field, useless for
+    // "am I in the part that kills"), and the telegraph test needs the actual
+    // geometry against the game's own source-verified hit radius.
+    function linePerp(l, x, y) {
+        if (!l || typeof l.ang !== 'number' ||
+            typeof l.x !== 'number' || typeof l.y !== 'number') return null;
+        return Math.abs((y - l.y) * Math.cos(l.ang) - (x - l.x) * Math.sin(l.ang));
+    }
+
     function lineCost(l, x, y) {
         // roadLines are charge lanes. REAL game shape (source-verified via the
         // Last Call Linebacker): {x, y, ang, armed, dmg} — an angled RAY
@@ -9301,11 +9339,44 @@
             if (inBand <= 0.15) continue;                 // clear of this lane
             let urgent = false;
             if (l.armed === true) urgent = true;          // charge is LIVE: go now
-            // TELEGRAPH WINDOW (source: 210-frame life, arms for the last 90).
-            // Standing in the band as it approaches arming is the moment to
-            // dash — once it arms, walking out is already too late.
+            // ══ v6.120.0 THE TELEGRAPH WINDOW HAS NEVER ONCE OPENED ═════════
+            //
+            // USER: "I am seeing lane mark deaths from the linebacker kill the
+            // bot in early hell when they should be the most easily avoided
+            // considering that it is an attack that is predictable to avoid."
+            //
+            // Correct, and here is why the prediction was never used. The
+            // clause that was here read `l.life <= laneArmS * 60`. The
+            // source-verified roadLine shape — established in 6.88.0, by the
+            // audit that found `l.owner` never existed either — is:
+            //     {x, y, ang, armed, dmg}
+            // There is no `life`. `l.life` appears exactly ONCE in this entire
+            // codebase: in the condition that was on this line. `typeof
+            // undefined === 'number'` is false, so the branch was dead from the
+            // day it shipped. Same failure as `l.owner`: read a field the real
+            // shape does not have, get no error, get a silently dead branch.
+            //
+            // Which left two live paths, and the comment above the dead one
+            // condemns the first: "once it arms, walking out is already too
+            // late." That was the ONLY reliable trigger.
+            //
+            // The second, `inBand > 0.55`, is worse than it looks. inBand is
+            // 1 - (perp/width)*0.85 with width = 63 + linePad = 77, so 0.55
+            // resolves to perp < 40.8 — while the game's own hit test, also
+            // source-verified, kills at perp < 63. The bot therefore stood
+            // between 40.8 and 63 px of the ray, INSIDE the lethal band, for
+            // the whole telegraph, and only moved once the charge went live.
+            //
+            // The telegraph is observable without `life`: `armed === false` on
+            // a lane that already exists IS the telegraph. So an unarmed lane
+            // covering the player inside the real kill width is urgent now —
+            // which is what "predictable to avoid" means. The `life` reading is
+            // kept as an accepted signal in case a shape ever carries one, but
+            // nothing depends on it any more.
             else if (typeof l.life === 'number' && l.life <= laneArmS * 60) urgent = true;
-            // no life field to read: treat deep-in-band telegraphs as urgent
+            else if (linePerp(l, p.x, p.y) != null &&
+                     linePerp(l, p.x, p.y) < (T.lineKillPerp != null ? T.lineKillPerp : 63)) urgent = true;
+            // shapes with no readable ray: fall back to the old depth test
             else if (inBand > 0.55) urgent = true;
             if (!urgent) continue;
             laneUrgent = true;
@@ -13085,6 +13156,12 @@
                     // planMove directly never reaches that handler, so a
                     // post-startRun hell scene silently runs as a DAY scene.
                     latchHell: () => latchHellDuringPlay(),
+                    // v6.120.0: read the latch back. The day-spine retraction
+                    // tests are only meaningful if the "day" scene really is a
+                    // day scene, and the ONLY way to know is to ask the latch —
+                    // `global.hell` is the page flag, not the bot's state, and
+                    // the two disagree for exactly one startRun.
+                    hellLatched: () => hellDetected,
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),

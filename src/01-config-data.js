@@ -760,6 +760,13 @@
             lineWeight: 3.0,          // unarmed telegraph lanes
             lineArmedWeight: 8.0,     // live charges
             linePad: 14,
+            // v6.120.0: the game's OWN hit test for a charge lane, source-
+            // verified twice (the 547-run line-death audit that corrected 18 ->
+            // 63, and lineCost's comment). This is the radius that kills, with
+            // no padding — the telegraph escape needs the real number, because
+            // the padded/graded cost put its threshold at perp 40.8 and left
+            // the bot standing in the 40.8-63 band for the whole telegraph.
+            lineKillPerp: 63,
             // v6.111.0 LANE ESCAPE. `laneUrgent` has fired the dash on an
             // armed lane since 6.8x, but the dash takes its DIRECTION from
             // plan.dx/dy — the argmax of the danger field, in which the lane
@@ -1960,14 +1967,31 @@
     // never be picked before both of its halves:
     //   SIMPLE SYRUP after WATER + SUGAR;  BLACK VERMOUTH after DRY + SWEET.
     // `slot-lockout` asserts both, and asserts the new ranks as literals.
+    // ══ v6.120.0 THE 6.119.0 RE-RANK IS RETRACTED ═══════════════════════════
+    //
+    // It measured z = -2.49 ("worse") at n=40, and the funnel says where:
+    //     entrySurvival  0.40 -> 0.09      buildsReady  13 -> 0
+    //     supersPerRun   0.7  -> 0.4       capOuts       8 -> 0
+    // A FOUR-FOLD collapse in the share of hell entrants that survive 300 s.
+    // Of eleven entrants, one lived.
+    //
+    // 6.106.0 predicted exactly this and I overrode it on doctrine. Its
+    // measurement — replicated on two batches — is that SUPERS separate
+    // survivors from deaths and defense shows no separation. I read that as
+    // licensing "a super key first, and the user says which key", and moved
+    // TONIC from rank 1 to rank 11, behind six other ingredients. TONIC keys
+    // TWO super lines. The picks audit from a 6.119.0 run shows the result:
+    // ESPRESSO MARTINI taken as the first weapon, then GIN TONIC, then MOSCOW
+    // MULE — and MINT never picked at all. Promoting MINT did not buy SOUTH
+    // SIDE; demoting TONIC just defunded the entrance.
+    //
+    // The user's doctrine is not wrong about what is GOOD. It was my ordering
+    // that starved the early super lines, and the ordering was mine. Back to
+    // the 6.106.0 order, and the doctrine gets re-introduced one rank at a
+    // time against measurements rather than all at once.
     const DAY_ORDER = [
-        'MINT',                                  // 1  SOUTH SIDE — the hell boss killer
-        'OLIVE',                                 // 2  defense
-        'SUGAR', 'WATER', 'SIMPLE SYRUP',        // 3-5 regen/HP, halves before the craft
-        'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH',   // 6-8 halves before the craft
-        'CRANBERRY',                             // 9  pickup radius (tequila / time stop / flame cross)
-        'TOMATO JUICE',                          // 10 cooldown — "good to have"
-        'TONIC',                                 // 11 still keys two lines; no longer first
+        'TONIC', 'MINT', 'SUGAR', 'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH',
+        'BLACK VERMOUTH', 'WATER', 'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY',
         'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
     ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 4, SUGAR 3).
          // OLIVE is still the first thing after the three keys, and 6.105.0's

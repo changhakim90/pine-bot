@@ -1227,8 +1227,11 @@
             // constraint there, regen 0 was — and `!hellDetected` meant 57
             // minutes of hell could not buy a single WATER. That is the half
             // this ships.
+            // v6.120.0: hell-only again. The day spine shipped in the same
+            // version as the re-rank, so the two are confounded in a z=-2.49
+            // regression; both go back and the day side is re-tried alone.
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                gtR >= regenFromS) {
+                hellDetected && gtR >= regenFromS) {
                 const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
                 const haveR = regenRate();
                 // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
