@@ -95,7 +95,7 @@
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         harvStartS = null; harvRestUntilS = 0;   // v6.93.1: so is the harvest-approach clock
         trekStartS = null; trekRestUntilS = 0;   // v6.94.0: and the day-trek clock
-        parkYieldId = null; parkYieldAt = 0;     // v6.91.4
+        parkYieldId = null; parkYieldAt = 0; parkYieldSpentS = 0;     // v6.91.4 / v6.117.0
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         // v6.96.2 phase audit: a run that BEGINS in hell (the results-screen
         // hell entrance) entered at gt 0; otherwise the latch time is
@@ -551,9 +551,31 @@
             // converged on whichever vector happened to be playing while a
             // prompt was stuck. Now: latch on the prompt's identity, and only
             // COUNT the craft once the prompt is gone (proof the click worked).
+            // v6.118.0: is a craft OWED right now? Both halves of a CRAFT_PAIR
+            // at max is the game's own stated trigger, so this separates "the
+            // prompt never came" from "the prompt came and we missed it".
+            try {
+                for (const pair of CRAFT_PAIRS) {
+                    if ((ownedLevels[pair[0]] || 0) >= 6 && (ownedLevels[pair[1]] || 0) >= 6) {
+                        craftAuditNote('ready');
+                        const pk = pair.join('+');
+                        craftAudit.pairs[pk] = (craftAudit.pairs[pk] || 0) + 1;
+                        break;
+                    }
+                }
+            } catch (e) { }
             const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
             let target = (yes && visible(yes)) ? yes : null;
             let label = target ? (target.textContent || 'craft').trim() : '';
+            // v6.118.0: every visible button label while a craft is owed — the
+            // evidence that tells a changed label from an absent prompt.
+            try {
+                for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
+                    if (!visible(b)) continue;
+                    const t = (b.textContent || '').trim();
+                    if (/vermouth|craft|조합|만들기|make|combine|fuse/i.test(t)) craftAuditNote('seen', t);
+                }
+            } catch (e) { }
             if (!target) {
                 for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
                     const t = (b.textContent || '').trim();
@@ -571,6 +593,7 @@
                 // prompt gone: if we clicked one, THAT is when it counts
                 if (craftPending) {
                     craftsThisRun++;
+                    craftAuditNote('confirmed'); craftAuditSave();   // v6.118.0
                     log('craft confirmed: ' + craftPending + ' (total ' + craftsThisRun + ')');
                     craftPending = null;
                 }
@@ -579,6 +602,7 @@
             const sig = (target.id || '') + '|' + label.slice(0, 40);
             if (sig === craftPending) return true;   // already clicked THIS prompt — wait it out
             craftPending = sig;
+            craftAuditNote('clicked', label); craftAuditSave();   // v6.118.0
             clickEl(target);
             setStatus('craft: ' + label.slice(0, 24));
             return true;

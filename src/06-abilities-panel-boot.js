@@ -899,6 +899,15 @@
             // the two v6.111/112 instruments, so a row that is not moving says so
             L.push('LANES   in ' + n(g.laneIn) + '  divert ' + n(g.laneDiv) +
                 '        ULT  invAll ' + n(g.medianInvAll) + '  casts ' + n(g.medianCasts) + '  cdMul ' + n(g.medianCdMul));
+            // v6.118.0: the craft prompt, one line. The user reports BLACK
+            // VERMOUTH never triggering; this says which half of the chain.
+            const cr = r && r.craft;
+            if (cr && (cr.ready || cr.seen)) {
+                L.push('CRAFT   owed ' + n(cr.ready) + '  promptSeen ' + n(cr.seen) +
+                    '  clicked ' + n(cr.clicked) + '  confirmed ' + n(cr.confirmed) +
+                    (cr.ready > 100 && !cr.seen ? '   <-- OWED BUT NEVER PROMPTED' : '') +
+                    (cr.seen && !cr.clicked ? '   <-- PROMPTED BUT NO SELECTOR MATCHED' : ''));
+            }
             const bk = (r && r.boss && r.boss.kinds) || [];
             if (bk.length) {
                 L.push('BOSS    ' + bk.slice(0, 4).map(k =>
@@ -911,8 +920,18 @@
             const par = (r && r.learning && r.learning.params) || {};
             const edge = Object.keys(par).filter(k => par[k] && par[k].atEdge);
             if (edge.length) L.push('AT EDGE ' + edge.map(k => k.split('.').pop() + ':' + par[k].atEdge).join('  '));
+            // v6.117.0: `reopen` is `cem.lastReopen` — a DURABLE record of the
+            // last migration, not an event on this load. The old wording said
+            // "re-opened this load" and would have had the next reader chasing
+            // a phantom restart 3,400 runs after the fact. Print WHEN.
             const reop = r && r.learning && r.learning.reopen;
-            if (reop && reop.dims && reop.dims.length) L.push('REOPEN  ' + reop.dims.length + ' dim(s) re-opened this load');
+            if (reop && reop.dims && reop.dims.length) {
+                const now = (r && r.learning && r.learning.runs) || 0;
+                const ago = reop.runs != null ? (now - reop.runs) : null;
+                L.push('REOPEN  last box re-open: ' + reop.dims.length + ' dim(s) at run ' + n(reop.runs) +
+                    (ago != null ? '  (' + ago + ' runs ago)' : '') +
+                    (ago != null && ago > 200 ? '  — history, not this load' : ''));
+            }
         } catch (e) {
             L.push('(summary failed: ' + (e && e.message) + ')');
         }
@@ -1323,6 +1342,7 @@
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),
+                    regenRate: () => regenRate(),   // v6.118.0: the regen spine reads this
                     reportSummary, showReport,   // v6.113.0: the overlay report is the product now
                     endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
@@ -1664,6 +1684,26 @@
                     }))
                 };
             };
+            // v6.118.0 — the craft-prompt census. `ready` = ticks a craft was
+            // OWED (both halves maxed); `seen` = ticks a craft-ish button was
+            // on screen; `clicked` / `confirmed` = what we did and whether the
+            // prompt then went away. ready >> seen means the prompt never
+            // appears (the game's trigger, not ours); seen >> clicked means the
+            // selectors miss it and `labels` says what it actually reads;
+            // clicked >> confirmed means the click does not land.
+            window.pineBot.craftAudit = () => {
+                const a = craftAudit || {};
+                return {
+                    note: 'ready = planner ticks with both halves of a CRAFT_PAIR at max, i.e. a craft is owed. seen = ticks a craft-ish button was visible. clicked = prompts we clicked. confirmed = prompts that then disappeared (proof the click worked). READ ready vs seen FIRST: a large ready with seen 0 means the prompt never appears and the bug is upstream of this script; seen without clicked means the selectors missed it, and `labels` holds the real button text.',
+                    runs: a.runs || 0, ready: a.ready || 0, seen: a.seen || 0,
+                    clicked: a.clicked || 0, confirmed: a.confirmed || 0,
+                    labels: a.labels || {}, pairs: a.pairs || {}
+                };
+            };
+            window.pineBot.resetCraftAudit = () => {
+                craftAudit = { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} };
+                craftAuditSave(); return 'craft audit cleared';
+            };
             window.pineBot.resetBossCensus = () => {
                 bossCensus = { runs: [] };
                 try { localStorage.removeItem(BOSS_CENSUS_KEY); } catch (e) { }
@@ -2001,6 +2041,7 @@
                 hunt: safe(() => window.pineBot.huntAudit(), null),
                 mark: safe(() => window.pineBot.markAudit(), null),
                 pause: safe(() => window.pineBot.pauseAudit(), null),
+                craft: safe(() => window.pineBot.craftAudit(), null),   // v6.118.0
                 // the module array, not window.pineBot.pickAudit — that lives
                 // under pineBot.test and the optional-call guard would have
                 // silently produced `undefined`, which JSON.stringify DROPS.

@@ -2790,7 +2790,30 @@
                     // base-attack burn is never evidence of hopelessness and
                     // an abandoned body is an abandoned tip roll. Give-up is
                     // a HELL doctrine now.
-                    if (!dayPhaseNow && poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
+                    // ── v6.118.0 THE WAIVER NEVER EXPIRES AT ULT 6 ───────────
+                    // The manual digest of a live minute-76 run, 19 seconds:
+                    //   59 ult casts at ultLv 6, poD 59-63 (on station),
+                    //   poHp 225,622,870 -> 225,500,181
+                    // That is 122,689 HP off 225.6 MILLION — 0.05% — while the
+                    // bot stood on it casting three ults a second. Projected
+                    // kill time ~23,900 s against a hell budget of 18.
+                    //
+                    // Give-up could not fire, because `ultUpSoon` asks whether
+                    // the ult is within 12 s of ready, and at ult 6 with
+                    // cdMul 0.667 it always is. A waiver written for the day —
+                    // where the ult cycles round eventually and a slow base
+                    // burn proves nothing — became permanent at max ult, and
+                    // the one gate that could have released the bot was dead
+                    // for the whole run.
+                    //
+                    // So the waiver is bounded by the probe itself: past
+                    // poProbeHardS in-range seconds we have watched many ult
+                    // cycles land on this body, and the measurement stands
+                    // whatever the cooldown says. The ult being READY is not
+                    // evidence; the ult having FIRED and the body not dying is.
+                    const probeHard = M.poProbeHardS != null ? M.poProbeHardS : 30;
+                    const waived = ultUpSoon && poTrack.inRangeS < probeHard;
+                    if (!dayPhaseNow && poTrack.inRangeS >= M.poProbeS && poTtk > budget && !waived) {
                         poGiveUp.add(tgtPo.id);
                         log('passout', tgtPo.id, 'abandoned — ' +
                             (poTrack.dps > 0 ? Math.round(poTtk) + 's to kill at ' + Math.round(poTrack.dps) + ' dps'
@@ -3115,9 +3138,31 @@
         let parkYieldFrozen = false;
         if (frozStation) {
             const fid = frozStation.id != null ? frozStation.id : 'anon';
-            if (parkYieldId !== fid) { parkYieldId = fid; parkYieldAt = gtCorner; }
-            parkYieldFrozen = (gtCorner - parkYieldAt) <= (CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20);
-        } else { parkYieldId = null; parkYieldAt = 0; }
+            if (parkYieldId !== fid) {
+                // v6.117.0: bank the window that just ended before starting the
+                // next one, so the run budget counts what was actually spent
+                // rather than the number of episodes.
+                if (parkYieldId !== null) {
+                    parkYieldSpentS += Math.min(
+                        CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                        Math.max(0, gtCorner - parkYieldAt));
+                }
+                parkYieldId = fid; parkYieldAt = gtCorner;
+            }
+            const yMax = CONFIG.deepHell.parkYieldRunMaxS;
+            const spentNow = parkYieldSpentS + Math.min(
+                CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                Math.max(0, gtCorner - parkYieldAt));
+            parkYieldFrozen = (gtCorner - parkYieldAt) <= (CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20) &&
+                (yMax == null || spentNow <= yMax);
+        } else {
+            if (parkYieldId !== null) {
+                parkYieldSpentS += Math.min(
+                    CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                    Math.max(0, gtCorner - parkYieldAt));
+            }
+            parkYieldId = null; parkYieldAt = 0;
+        }
         // v6.91.1: park yields to a FROZEN boss, the same exception the corner
         // has carried since 6.89.8 — "a free kill is worth leaving the funnel
         // for at any depth". Park shipped in 6.90.0 without it and has been

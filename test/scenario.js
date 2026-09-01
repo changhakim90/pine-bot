@@ -1473,6 +1473,53 @@ if (which === 'po-feasibility') {
     const withUlt = burn(80000, 30, 4500, { ultReadyAt: 905 });   // gameTime 900, ready in 5s
     test('a body the ult is about to clear is NOT abandoned', () =>
         assert.strictEqual(withUlt.plan.poGaveUp, 0, 'gave up ' + withUlt.plan.poGaveUp));
+    // ── v6.118.0 THE WAIVER THAT NEVER EXPIRES ──────────────────────────
+    // A permanently-ready ult is the state at ultLv 6 (cdMul 0.667), and the
+    // user's manual digest caught what it costs: 59 casts in 19 s, poHp
+    // 225,622,870 -> 225,500,181 — 0.05% off a 225.6M body — while give-up
+    // sat disabled for the whole 76-minute run because `ultUpSoon` was
+    // permanently true. The ult being READY is not evidence; the ult having
+    // FIRED and the body not dying is. Past poProbeHardS in-range seconds the
+    // measurement stands whatever the cooldown says.
+    {
+        const longBurn = (extra) => {
+            pineBot.test.resetPoTracking();
+            global.player = Object.assign({ x: 300, y: 270, hp: 180, maxHp: 180,
+                speed: 1.9, r: 7.2 }, extra || {});
+            const po = { type: 'passout', x: 360, y: 270, r: 37, fallT: 0,
+                hp: 225622870, maxHp: 225622870, id: 11 };
+            global.enemies = [po];
+            global.gameTime = 900;
+            let pl;
+            // 1.5 game-seconds a tick: the probe clock is in GAME time, so
+            // 40 ticks buys 60 in-range seconds without 60 s of wall time.
+            for (let i = 0; i < 40; i++) {
+                pl = pineBot.test.planMove();
+                po.hp = Math.max(1, po.hp - 9437);   // the digest's measured rate
+                global.gameTime += 1.5;
+            }
+            return { plan: pl, po };
+        };
+        const forever = longBurn({ ultReadyAt: 0 });   // ready NOW, and always
+        test('a permanently-ready ult no longer shields an unkillable body forever', () =>
+            assert.strictEqual(forever.plan.poGaveUp, 1,
+                'gave up ' + forever.plan.poGaveUp + ' — the ult-ready waiver is still unbounded'));
+        test('...and the waiver still holds inside the probe window', () => {
+            pineBot.test.resetPoTracking();
+            global.player = { x: 300, y: 270, hp: 180, maxHp: 180, speed: 1.9, r: 7.2, ultReadyAt: 0 };
+            const po = { type: 'passout', x: 360, y: 270, r: 37, fallT: 0,
+                hp: 225622870, maxHp: 225622870, id: 12 };
+            global.enemies = [po];
+            global.gameTime = 900;
+            let pl;
+            // 12 game-seconds of in-range time: past poProbeS (6), well short
+            // of poProbeHardS (30). A ready ult must still buy the benefit of
+            // the doubt here — that is the 6.99.1 doctrine, unchanged.
+            for (let i = 0; i < 8; i++) { pl = pineBot.test.planMove(); global.gameTime += 1.5; }
+            assert.strictEqual(pl.poGaveUp, 0,
+                'abandoned inside the probe window — the ult waiver was removed, not bounded');
+        });
+    }
     // v6.100.0 SPEED INVARIANCE: freeze the GAME clock and the feasibility
     // window must not accumulate — the wall-clock probe abandoned bodies on
     // wall time (during pauses, and 100x too fast under the multiplier).
@@ -4187,7 +4234,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -7287,6 +7334,55 @@ if (which === 'break-even') {
                 'refused a build above the floor and below break-even — the 6.112.0 veto is back');
         });
     }
+    // ── v6.117.0 THE ARMOUR GATE, AND THE DISCRETE LADDER IT SAT INSIDE ─────
+    //
+    // The seat-miss census: `armor` is 20% of every non-seated hell tick, and
+    // `medianEntryDef` is 29.2 against a gate of 30. Armour comes in 5.832
+    // steps, so a gate at 30 meant "OLIVE 6 exactly" and excluded the median
+    // build by 0.84 points. Third threshold this session found sitting in a gap
+    // in a discrete ladder. These tests pin the gate to the ARITHMETIC — the
+    // point where a 22.4 contact hit floors at 1 — rather than to a number.
+    test('the armour gate sits at the contact floor, where every hit already does 1', () => {
+        const floor = C.mitigation.contactDmg - 1;
+        assert.ok(C.deepHell.parkDefense <= floor + 1e-9,
+            'parkDefense ' + C.deepHell.parkDefense + ' > ' + floor +
+            ' — demanding armour levels that change nothing about the seat');
+    });
+    test('...so at least three armour rungs can open it, not one', () => {
+        const rungs = [1, 2, 3, 4, 5, 6].map(l => l * 5.832);
+        const clear = rungs.filter(r => r >= C.deepHell.parkDefense);
+        assert.ok(clear.length >= 3,
+            'only ' + clear.length + ' of 6 armour levels clear parkDefense ' + C.deepHell.parkDefense);
+        // the median entry build, named as the literal the census reported
+        assert.ok(29.2 >= C.deepHell.parkDefense,
+            'medianEntryDef 29.2 still cannot open the seat');
+    });
+    test('...and the fallback level matches the stat gate', () => {
+        assert.ok(C.deepHell.parkOliveLv * 5.832 >= C.deepHell.parkDefense,
+            'parkOliveLv ' + C.deepHell.parkOliveLv + ' implies ' + (C.deepHell.parkOliveLv * 5.832) +
+            ' armour, below parkDefense ' + C.deepHell.parkDefense +
+            ' — an unreadable stat is judged harder than a readable one');
+    });
+    {
+        const armour = (def) => {
+            global.gameTime = 6000; global.hell = true; T.latchHell();
+            T.setOwned({ 'OLIVE': 6, 'SOUTH SIDE': 3 });
+            global.player = { x: 533, y: 533, r: 7.2, hp: 300, maxHp: 309, speed: 2.375,
+                defense: def, regenBonus: 2.218 };
+            global.enemies = []; global.dropMarks = []; global.roadLines = [];
+            global.eprojectiles = []; global.pickups = [];
+            return T.planMove();
+        };
+        // The two rungs the old gate refused, both of which already floor
+        // contact damage at 1 — identical to the cap on the seat.
+        test('OLIVE 5 (29.16, the median entry build) opens the seat', () =>
+            assert.strictEqual(armour(29.16).parkOn, true, 'refused the median build by 0.84 armour points'));
+        test('OLIVE 4 (23.33) opens it too — it floors contact just as hard', () =>
+            assert.strictEqual(armour(23.328).parkOn, true, 'refused a build that takes 1 damage per hit'));
+        test('...and armour that does NOT floor contact is still refused', () =>
+            assert.strictEqual(armour(17.496).parkOn, false,
+                'seated at 17.5 armour, where contact still does ' + (22.4 - 17.496).toFixed(1) + ' a hit'));
+    }
     test('the bar is reachable: SIMPLE SYRUP 4 clears it, WATER 6 does not', () => {
         global.player = Object.assign({}, global.player, { defense: 34.992 });
         const be = T.breakEven();
@@ -7410,6 +7506,23 @@ if (which === 'overlay-report') {
         assert.ok(typeof s === 'string' && s.length > 0, 'empty report produced no summary');
         assert.ok(s.indexOf('census empty') >= 0, 'no boss-census hint on an empty report:\n' + s);
         assert.ok(!/undefined|NaN|\[object/.test(s), 'raw undefined/NaN leaked into the summary:\n' + s);
+    });
+    // v6.117.0: `learning.reopen` is cem.lastReopen — a DURABLE record of the
+    // last migration, not an event on this load. The old line read "3 dim(s)
+    // re-opened this load" against a record 3,447 runs old, which is exactly
+    // the kind of phantom that costs a version. It must say WHEN.
+    test('the re-open line dates the migration instead of claiming it just happened', () => {
+        const s = T.reportSummary({ learning: { runs: 8865, reopen: { runs: 5418, dims: ['a', 'b', 'c'] } } });
+        assert.ok(/REOPEN/.test(s), 'no re-open line:\n' + s);
+        assert.ok(!/re-opened this load/.test(s), 'still claims the re-open happened on this load:\n' + s);
+        assert.ok(s.indexOf('5418') >= 0, 'the run it happened at is not printed:\n' + s);
+        assert.ok(s.indexOf('3447') >= 0, 'how long ago is not printed:\n' + s);
+        assert.ok(/history, not this load/.test(s), 'a 3447-run-old record is not flagged as history:\n' + s);
+    });
+    test('...and a re-open that really did just happen is NOT flagged as history', () => {
+        const s = T.reportSummary({ learning: { runs: 5420, reopen: { runs: 5418, dims: ['a'] } } });
+        assert.ok(/REOPEN/.test(s), s);
+        assert.ok(!/history/.test(s), 'a 2-run-old re-open was written off as history:\n' + s);
     });
     test('...and reports the pinned CEM dims, which is what explains a flat row', () => {
         const s = T.reportSummary({ learning: { params: {
@@ -7714,6 +7827,62 @@ if (which === 'park-miss') {
         assert.strictEqual(m.regen, 1, 'booked ' + JSON.stringify(m) + ' — precedence is not the planner\'s');
     });
 
+    // --- (3b) v6.117.0 THE YIELD RUN BUDGET. 6.91.4 bounded the frozen-boss
+    // yield to one 20 s window per EPISODE, keyed on the boss id — which bounds
+    // each episode and not the run. The pause audit says the field is frozen on
+    // 94.5% of hell ticks across 675 runs, so fresh ids keep arriving and the
+    // windows never stop: one 4585 s run spent 21,225 of 40,561 hell ticks on
+    // `yield` against 8,148 seated. The episode window stays; a run budget goes
+    // on top.
+    {
+        const froz = (id, gt) => {
+            global.frame = 1000;
+            global.gameTime = gt; global.hell = true; T.latchHell();
+            T.setOwned({ 'OLIVE': 6, 'SOUTH SIDE': 3, 'WHISKY SOUR': 4 });
+            global.player = { x: W - 7, y: H - 7, r: 7.2, hp: 300, maxHp: 309,
+                speed: 2.375, defense: 34.992, regenBonus: 2.218, invuln: 0 };
+            global.dropMarks = []; global.roadLines = []; global.eprojectiles = []; global.pickups = [];
+            global.enemies = [{ id: id, type: 'boss', boss: true, hp: 1e7, maxHp: 1e7,
+                r: 60, reach: 200, speed: 0.4, moving: true, x: 300, y: 300,
+                frozenUntil: 1000 + 216000 }];
+            return T.planMove();
+        };
+        test('the first frozen boss of a run still gets its burn window', () => {
+            T.startRun();
+            const p = froz('b1', 6000);
+            assert.strictEqual(p.parkYieldFrozen, true, 'the 6.91.1 free kill was lost');
+            assert.strictEqual(p.parkOn, false, 'park did not release for it');
+        });
+        test('...and once the RUN budget is spent, a fresh freeze no longer moves the bot', () => {
+            const WIN = C.deepHell.parkYieldS, MAX = C.deepHell.parkYieldRunMaxS;
+            assert.ok(MAX != null, 'parkYieldRunMaxS missing — the run is unbounded again');
+            T.startRun();
+            let gt = 6000;
+            // hold each boss id for a full window, then hand over to the next:
+            // one window banked per handover.
+            for (let i = 1; i <= Math.ceil(MAX / WIN) + 1; i++) {
+                froz('b' + i, gt); gt += WIN; froz('b' + i, gt); gt += 1;
+            }
+            const after = froz('bLAST', gt);
+            assert.strictEqual(after.parkYieldFrozen, false,
+                'still yielding after ' + MAX + ' s of windows — the budget does not bind');
+            assert.strictEqual(after.parkOn, true, 'park is still suppressed by a spent budget');
+        });
+        test('...and the exhausted budget books its ticks as seat time, not as yield', () => {
+            const WIN = C.deepHell.parkYieldS, MAX = C.deepHell.parkYieldRunMaxS;
+            T.startRun();
+            let gt = 6000;
+            for (let i = 1; i <= Math.ceil(MAX / WIN) + 1; i++) {
+                froz('b' + i, gt); gt += WIN; froz('b' + i, gt); gt += 1;
+            }
+            const before = T.phaseRow().parkT;
+            froz('bLAST', gt); froz('bLAST', gt + 1);
+            const r = T.phaseRow();
+            assert.ok(r.parkT > before,
+                'parkT ' + before + ' -> ' + r.parkT + ' — the released ticks did not become seat time');
+        });
+    }
+
     // --- (4) IT REACHES THE FUNNEL. The v6.111.0 instruments were written to
     // every phase row and never aggregated, so the report — the thing actually
     // read — could not show whether they had moved. Not again.
@@ -7741,6 +7910,82 @@ if (which === 'park-miss') {
         assert.ok(/held 17%/.test(seatLine), 'share not printed: ' + seatLine);
         assert.ok(/regen 80%\s+early 20%/.test(seatLine),
             'causes not printed largest-first: ' + seatLine);
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.118.0 THE REGEN SPINE — and the hell/day split that `slot-lockout` forced.
+//
+// USER, on a live minute-76 run: "the only issue is that it didn't pick up
+// water for hp regen and it will eventually die." The manual digest of that
+// run: def 35, ultLv 6, supers 5, FIFTEEN weapons at level 6, `passives: {}`,
+// regen 0. The regen card lost every contest for seventy-six minutes, for two
+// structural reasons — a 16-point bid against 70+ point weapon levels, and a
+// `!hellDetected` gate that closed the checkpoint at hell entry, so 57 minutes
+// of hell could not buy a single WATER.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'regen-spine') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 4600, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+    T.latchHell();
+    const sc = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).score;
+    const why = (n, t, lv) => T.scoreCard({ n, type: t, lv, maxlv: 6 }, 0, []).why || '';
+
+    // The digest's build, exactly: everything maxed, no regen at all.
+    const DIGEST = { 'GIN TONIC': 6, 'OLIVE': 6, 'BLOODY MARY': 6, 'TONIC': 6,
+        'SOUTH SIDE': 6, 'DRY VERMOUTH': 6, 'NEGRONI': 6, 'CRANBERRY': 6,
+        'TOMATO JUICE': 6, 'SUGAR': 6, 'MOJITO': 6, 'MINT': 6,
+        'SWEET VERMOUTH': 6, 'VODKA TONIC': 6, 'MOSCOW MULE': 6 };
+    T.setOwned(DIGEST);
+
+    test('the reproduction is faithful: this build has zero regen', () =>
+        assert.strictEqual(T.regenRate(), 0,
+            'the scene already has regen — it is not the run the user reported'));
+    test('WATER takes the spine in HELL, which is where the run had 57 minutes', () => {
+        assert.ok(/regen-spine/.test(why('WATER', 'passive', 0)),
+            'no spine on WATER at regen 0 in hell: ' + why('WATER', 'passive', 0));
+    });
+    test('...and it outscores the level-6 weapon re-picks it lost to for 76 minutes', () => {
+        const w = sc('WATER', 'passive', 0);
+        for (const k of ['MOSCOW MULE', 'BLOODY MARY', 'MOJITO']) {
+            assert.ok(w > sc(k, 'weapon', 5), 'WATER ' + w + ' still loses to ' + k + ' ' + sc(k, 'weapon', 5));
+        }
+    });
+    // The 6.112.0 mistake, guarded in its new costume: SIMPLE SYRUP is the
+    // WATER + SUGAR craft and must never be walked in front of its own halves
+    // by a premium meant for regen.
+    test('SIMPLE SYRUP does NOT take the spine while its halves are unmade', () => {
+        T.setOwned(Object.assign({}, DIGEST, { 'WATER': 0, 'SUGAR': 0 }));
+        assert.ok(!/regen-spine/.test(why('SIMPLE SYRUP', 'passive', 0)),
+            'syrup took the spine ahead of WATER/SUGAR: ' + why('SIMPLE SYRUP', 'passive', 0));
+        assert.ok(sc('SIMPLE SYRUP', 'passive', 0) < sc('WATER', 'passive', 0),
+            'syrup ' + sc('SIMPLE SYRUP', 'passive', 0) + ' >= water ' + sc('WATER', 'passive', 0));
+    });
+    test('...and DOES once both halves are maxed and the craft is real', () => {
+        T.setOwned(Object.assign({}, DIGEST, { 'WATER': 6, 'SUGAR': 6 }));
+        // WATER 6 = 1.704 HP/s, already over the floor, so nothing should bid
+        assert.ok(T.regenRate() >= C.deepHell.parkRegenRate,
+            'WATER 6 does not clear the floor — the scene is wrong');
+        assert.ok(!/regen-spine/.test(why('WATER', 'passive', 6)),
+            'the spine is still paying after the floor is met: ' + why('WATER', 'passive', 6));
+    });
+    // The floor is the SEAT's floor, so clearing the spine and opening the
+    // corner are the same event. That link is the whole point of the version.
+    test('the spine stops exactly where the park gate opens', () => {
+        T.setOwned(Object.assign({}, DIGEST, { 'WATER': 0, 'SUGAR': 0, 'SIMPLE SYRUP': 0 }));
+        const floor = C.deepHell.parkRegenRate;
+        let lv = 0;
+        while (lv < 6) {
+            T.setOwned(Object.assign({}, DIGEST, { 'WATER': lv, 'SUGAR': 0, 'SIMPLE SYRUP': 0 }));
+            const paying = /regen-spine/.test(why('WATER', 'passive', lv));
+            assert.strictEqual(paying, T.regenRate() < floor,
+                'at WATER ' + lv + ' (regen ' + T.regenRate().toFixed(3) + ') spine=' + paying +
+                ' but the park floor is ' + floor);
+            lv++;
+        }
     });
     done();
 }

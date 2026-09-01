@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.116.0
+// @version      6.118.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.116.0';
+    const SCRIPT_VERSION = '6.118.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -691,6 +691,11 @@
             poTtkBudgetS: 30,      // day: a passout worth standing on
             poTtkBudgetHellS: 18,  // hell: time is worth more
             poProbeS: 6,           // in-range seconds before judging
+            // v6.118.0: hard cap on the ult-ready waiver. Past this many
+            // in-range game-seconds the measured dps stands regardless of the
+            // ult cooldown — at ult 6 the ult is ALWAYS "up soon", which made
+            // the give-up gate unreachable for a whole 76-minute run.
+            poProbeHardS: 30,
             poEngageRange: 150,    // "in range" for the probe clock
             poFocusValue: 26,
             poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
@@ -937,8 +942,37 @@
             // at hell entry, because that is where it is running around in the
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
-            parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
-            parkDefense: 30,
+            parkOliveLv: 4,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
+            // ── v6.117.0 THE GATE SAT BETWEEN TWO RUNGS OF A DISCRETE LADDER ──
+            //
+            // The seat-miss census made this visible in one line: `armor` is 20%
+            // of every hell tick the bot is not seated, and `medianEntryDef` is
+            // 29.2 against a gate of 30. Armour is not continuous — it comes in
+            // ARMOR_PER_LEVEL = 5.832 steps:
+            //     5.8  11.7  17.5  23.3  29.2  35.0
+            // A gate at 30 therefore means "OLIVE 6, exactly", and it excluded
+            // the MEDIAN BUILD by 0.84 points. Third time this session a
+            // threshold has been set inside a gap in a discrete ladder
+            // (capStable.defMin 35 vs a 34.992 ceiling; contactBreakEven's
+            // unreadable-armour default of 0).
+            //
+            // And the arithmetic says the gate should not have been near 30 at
+            // all. Armour is FLAT SUBTRACTION with a floor of 1 against a 22.4
+            // contact hit, so every level at or above 21.4 takes exactly 1
+            // damage per hit. Rungs 4, 5 and 6 are IDENTICAL on the seat. The
+            // gate was demanding two levels that buy nothing.
+            //
+            // The rows price it. Runs denied the seat for their whole hell
+            // phase, booking 100% `armor`, while carrying regen ABOVE the 1.579
+            // break-even: def 23.3 / regen 1.71 (1818 ticks), def 23.3 / regen
+            // 2.22 (1635), def 23.3 / regen 1.71 (1015), def 23.3 / regen 1.14
+            // (6683 and 4118). Builds that could have sat there indefinitely,
+            // standing up instead.
+            //
+            // So the gate is the contact floor: contactDmg - 1. Named as the
+            // derivation rather than the number, and `break-even` asserts it
+            // stays at or below that point.
+            parkDefense: 21.4,
             // v6.95.2 THE ENTRY SEAT (user: "needs more consistency in
             // building up to this setup in day mode and early hell"). The
             // 195-minute recording shows the SEATED state winning; the 6.94.1
@@ -1124,6 +1158,28 @@
             cornerInset: 0,
             freezeEntryToS: 2400,   // v6.91.4: the window where a freeze is worth double
             parkYieldS: 20,         // v6.91.4: seconds park may be suspended per frozen-boss episode
+            // ── v6.117.0 THE PER-EPISODE BOUND DOES NOT BOUND ANYTHING ────────
+            //
+            // 6.91.4 wrote the reason this needed a limit, and it was right:
+            // WHISKY SOUR "just freezes the bosses always", so a permanent
+            // freeze would suspend park for the whole run. Its answer was one
+            // 20 s window per frozen-boss EPISODE, keyed on the boss id.
+            //
+            // That bounds each episode and not the run, and the pause audit
+            // says why it matters: over 675 runs and 6.78M hell ticks the field
+            // is frozen on 94.5% of them. The freeze is not an episode, it is
+            // the background — and every fresh boss id starts another window.
+            // The census caught the result in a single row: one 4585 s run
+            // spent 21,225 of its 40,561 hell ticks (52%) booking `yield`,
+            // against 8,148 seated. Across the batch `yield` is 20% of all
+            // misses, level with `armor`.
+            //
+            // A free kill is worth leaving the seat for a few times a run. It
+            // is not worth half of hell. So the episode window stays and a RUN
+            // budget goes on top: past this many total yielded seconds, a
+            // frozen boss is the background state again and park keeps the
+            // seat. Six windows.
+            parkYieldRunMaxS: 120,
             // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
             // the damage circle of the boss is also outside of the canvas, the
             // bot needs to hunt it down somehow before it wakes up and does huge
@@ -1228,6 +1284,19 @@
             // raising lv -> lv+1 is worth. 0-2 hold the old +200 so nothing
             // below lv3 changes; the tail is new.
             ultSpineByLv: [200, 200, 200, 150, 120, 90],
+            // v6.118.0 THE REGEN SPINE. Paid to WATER and SIMPLE SYRUP alike
+            // while regen sits below deepHell.parkRegenRate, scaled by how far
+            // short it is: 240 at zero regen, nothing once the floor is met.
+            //
+            // Sized against the things it has to beat and the thing it must
+            // NOT beat. The picks audit shows a day-order ingredient landing
+            // at 101 (`day-order10+101`) and a weapon level-up at 70-105, so
+            // 240 wins those outright — which is the user's own reading of the
+            // early game: "water instead of tonic could have been a better
+            // early pick". The ult spine pays 240-320 on top of `ultimate+320`
+            // for a total near 700, so the ult still leads. Order at zero
+            // regen: ult > regen > roster.
+            regenSpine: 240,
             // v6.111.0: the day retry gate. The game's own cooldown is the
             // real limiter (53-80 s), so a tighter retry only shaves the
             // latency between the cooldown ending and the bot noticing. At
@@ -2423,6 +2492,7 @@
     // v6.91.4: one park-suspension window per frozen-boss episode (see 05-movement)
     let parkYieldId = null;
     let parkYieldAt = 0;
+    let parkYieldSpentS = 0;   // v6.117.0: total seconds yielded this run
     // v6.93.1 harvest-approach clock (gameTime seconds; reset per run) — the
     // walk TO the passout pile is time-boxed exactly like the hunt, so an
     // unreachable pile cannot deadlock the planner.
@@ -2847,6 +2917,41 @@
     let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
     let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
+    // ── v6.118.0 THE CRAFT PROMPT, MEASURED RATHER THAN GUESSED ─────────────
+    //
+    // USER: "there's also a bug where black vermouth craft doesn't trigger."
+    // The manual digest is consistent with that — `sweetver: 6, dryver: 6` at
+    // minute 76 and no BLACK VERMOUTH — but consistent is not the same as
+    // proof, and this exact bug has now been "fixed" twice on a guess:
+    //   6.87.5 put takeCraftPrompt() in STATE_HANDLERS.playing()...
+    //   6.87.6 found handleScreens RETURNS before that dispatch, so it was
+    //          dead code, and moved it to the top of the playing branch.
+    // A third guess is not worth shipping. There are four distinct things that
+    // could be true and the report cannot currently tell them apart:
+    //   (a) the prompt never appears (the game's own trigger did not fire),
+    //   (b) it appears and no selector matches it (label/markup changed),
+    //   (c) it matches and the click does not land,
+    //   (d) it lands and the game refuses (no free slot).
+    // So: record what is actually seen. `ready` counts ticks where both craft
+    // parts are maxed and a craft is therefore owed; `seen` counts ticks a
+    // prompt was on screen; `labels` keeps what the buttons actually said —
+    // which is the one piece of evidence that separates (a) from (b).
+    const CRAFT_AUDIT_KEY = 'pineBotCraftAudit_v1';
+    let craftAudit = (() => {
+        try { return JSON.parse(localStorage.getItem(CRAFT_AUDIT_KEY)) ||
+            { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} }; }
+        catch (e) { return { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} }; }
+    })();
+    function craftAuditSave() {
+        try { localStorage.setItem(CRAFT_AUDIT_KEY, JSON.stringify(craftAudit)); } catch (e) { }
+    }
+    function craftAuditNote(kind, label) {
+        craftAudit[kind] = (craftAudit[kind] || 0) + 1;
+        if (label) {
+            const k = String(label).slice(0, 40);
+            craftAudit.labels[k] = (craftAudit.labels[k] || 0) + 1;
+        }
+    }
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max
     let hellDetected = false;
     let hellEnteredAt = 0;      // when this run crossed into hell (the entry surge is the killer)
@@ -5555,6 +5660,89 @@
             // the search settles it. That is the honest form of this change.
             const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
             const regenFromS = CONFIG.deepHell.regenFromS != null ? CONFIG.deepHell.regenFromS : 120;
+            // ── v6.118.0 THE REGEN CARD WAS A BID, AND BIDS DO NOT WIN ────────
+            //
+            // USER, on a live minute-76 run: "the only issue is that it didn't
+            // pick up water for hp regen and it will eventually die." The
+            // manual digest of that run settles it beyond argument:
+            //
+            //     final: def 35, ultLv 6, supers 5, regen 0
+            //     weapons: gintonic 6, olive 6, bloodymary 6, tonic 6,
+            //              southside 6, dryver 6, negroni 6, cranberry 6,
+            //              tomato 6, sugar 6, mojito 6, mint 6, sweetver 6,
+            //              vodkatonic 6, moscowmule 6
+            //     passives: {}
+            //
+            // FIFTEEN cards at level 6 and not one point of regen, at minute
+            // 76. This is not the picker preferring something marginally
+            // better — it is the regen card losing every single contest for
+            // seventy-six minutes.
+            //
+            // Two reasons, both structural rather than a matter of degree:
+            //
+            //  1. THE BID WAS 16 POINTS. A weapon level-up scores progress+70
+            //     and up. The project has now measured three times that a
+            //     preference competing inside the gain sum does not move the
+            //     bot (6.89.11's dormant pull, 6.107.0's drop anchor, the
+            //     6.111.0 lane exit — "127 px in 120 minutes"). The deficit
+            //     term that was supposed to carry it is `strategy.regenDeficit`,
+            //     which the search has driven to a LIVE VALUE OF 0.
+            //
+            //  2. `!hellDetected` CLOSED IT AT HELL ENTRY. A run that reaches
+            //     1200 s with zero regen can never fix it, no matter how many
+            //     of the next 75 minutes it survives. The run above had 57
+            //     minutes of hell and could not buy a single WATER.
+            //
+            // So regen stops being a bid and becomes a SPINE, the same shape as
+            // `ult-spine`: while regen is below the seat's own floor
+            // (deepHell.parkRegenRate), a regen card is a prerequisite and
+            // outscores the roster. It decays to nothing the moment the floor
+            // is met, so it cannot pour a whole run into WATER, and it pays
+            // BOTH cards identically — DAY_ORDER still decides between them,
+            // which is the 6.114.0 retraction and `slot-lockout` still holds it.
+            //
+            // And it runs in hell. That is the half that matters for a run
+            // already at minute 76 with nothing.
+            // SCOPED TO HELL, and `slot-lockout` is why. The first draft paid
+            // this spine in the day too, and the guard went red on both of its
+            // invariants at once:
+            //     {tonic:262, mint:278, sugar:273, dry:247, sweet:271, water:479}
+            //     sugar 273  syrup 469
+            // WATER at 479 outranks every super KEY, and SIMPLE SYRUP outranks
+            // SUGAR — its own craft ingredient, which is the exact 6.112.0
+            // mistake in a new costume. WATER already scores ~239 against a key
+            // band of 247-278, so in the day there is no room for a premium at
+            // all: anything above +8 breaks the super lines, and supersPerRun
+            // 0.4 against a supersMin of 3 says those are not spare capacity.
+            //
+            // The user's reading — "water instead of tonic could have been a
+            // better early pick" — is a real claim about the day, and it
+            // collides head-on with that ordering. It is a trade-off, not a
+            // bug, so it is not resolved here by fiat; the day keeps its
+            // existing bid and the question goes back to the user.
+            //
+            // What IS unambiguous is hell. The reported run had FIVE supers and
+            // fifteen cards at level 6 — the super lines were not the binding
+            // constraint there, regen 0 was — and `!hellDetected` meant 57
+            // minutes of hell could not buy a single WATER. That is the half
+            // this ships.
+            if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
+                hellDetected && gtR >= regenFromS) {
+                const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
+                const haveR = regenRate();
+                // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
+                // spine once both halves are maxed and the craft is actually
+                // available, or the premium walks it in front of its own
+                // ingredients again.
+                const syrupBlocked = name === 'SIMPLE SYRUP' &&
+                    !((ownedLevels['WATER'] || 0) >= 6 && (ownedLevels['SUGAR'] || 0) >= 6);
+                if (haveR < floorR && floorR > 0 && !syrupBlocked) {
+                    const spine = (CONFIG.abilities && CONFIG.abilities.regenSpine != null)
+                        ? CONFIG.abilities.regenSpine : 240;
+                    const short = Math.max(0, Math.min(1, (floorR - haveR) / floorR));
+                    add(Math.round(spine * short), 'regen-spine(' + Math.round(short * 100) + '%short)');
+                }
+            }
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
                 !hellDetected && gtR >= regenFromS) {
                 // null = armour unreadable; fall back to the old flat bar
@@ -6534,7 +6722,7 @@
         huntStartS = null; huntRestUntilS = 0;   // v6.91.0: the hunt budget is per-run
         harvStartS = null; harvRestUntilS = 0;   // v6.93.1: so is the harvest-approach clock
         trekStartS = null; trekRestUntilS = 0;   // v6.94.0: and the day-trek clock
-        parkYieldId = null; parkYieldAt = 0;     // v6.91.4
+        parkYieldId = null; parkYieldAt = 0; parkYieldSpentS = 0;     // v6.91.4 / v6.117.0
         parkFirstS = null; parkOnTicks = 0; parkedTicks = 0; entrySample = null;   // v6.91.8
         // v6.96.2 phase audit: a run that BEGINS in hell (the results-screen
         // hell entrance) entered at gt 0; otherwise the latch time is
@@ -6990,9 +7178,31 @@
             // converged on whichever vector happened to be playing while a
             // prompt was stuck. Now: latch on the prompt's identity, and only
             // COUNT the craft once the prompt is gone (proof the click worked).
+            // v6.118.0: is a craft OWED right now? Both halves of a CRAFT_PAIR
+            // at max is the game's own stated trigger, so this separates "the
+            // prompt never came" from "the prompt came and we missed it".
+            try {
+                for (const pair of CRAFT_PAIRS) {
+                    if ((ownedLevels[pair[0]] || 0) >= 6 && (ownedLevels[pair[1]] || 0) >= 6) {
+                        craftAuditNote('ready');
+                        const pk = pair.join('+');
+                        craftAudit.pairs[pk] = (craftAudit.pairs[pk] || 0) + 1;
+                        break;
+                    }
+                }
+            } catch (e) { }
             const yes = document.querySelector('#craftBtn, .craft-yes, .craft-ok');
             let target = (yes && visible(yes)) ? yes : null;
             let label = target ? (target.textContent || 'craft').trim() : '';
+            // v6.118.0: every visible button label while a craft is owed — the
+            // evidence that tells a changed label from an absent prompt.
+            try {
+                for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
+                    if (!visible(b)) continue;
+                    const t = (b.textContent || '').trim();
+                    if (/vermouth|craft|조합|만들기|make|combine|fuse/i.test(t)) craftAuditNote('seen', t);
+                }
+            } catch (e) { }
             if (!target) {
                 for (const b of [...document.querySelectorAll('button, [onclick], .btn')]) {
                     const t = (b.textContent || '').trim();
@@ -7010,6 +7220,7 @@
                 // prompt gone: if we clicked one, THAT is when it counts
                 if (craftPending) {
                     craftsThisRun++;
+                    craftAuditNote('confirmed'); craftAuditSave();   // v6.118.0
                     log('craft confirmed: ' + craftPending + ' (total ' + craftsThisRun + ')');
                     craftPending = null;
                 }
@@ -7018,6 +7229,7 @@
             const sig = (target.id || '') + '|' + label.slice(0, 40);
             if (sig === craftPending) return true;   // already clicked THIS prompt — wait it out
             craftPending = sig;
+            craftAuditNote('clicked', label); craftAuditSave();   // v6.118.0
             clickEl(target);
             setStatus('craft: ' + label.slice(0, 24));
             return true;
@@ -10377,7 +10589,30 @@
                     // base-attack burn is never evidence of hopelessness and
                     // an abandoned body is an abandoned tip roll. Give-up is
                     // a HELL doctrine now.
-                    if (!dayPhaseNow && poTrack.inRangeS >= M.poProbeS && poTtk > budget && !ultUpSoon) {
+                    // ── v6.118.0 THE WAIVER NEVER EXPIRES AT ULT 6 ───────────
+                    // The manual digest of a live minute-76 run, 19 seconds:
+                    //   59 ult casts at ultLv 6, poD 59-63 (on station),
+                    //   poHp 225,622,870 -> 225,500,181
+                    // That is 122,689 HP off 225.6 MILLION — 0.05% — while the
+                    // bot stood on it casting three ults a second. Projected
+                    // kill time ~23,900 s against a hell budget of 18.
+                    //
+                    // Give-up could not fire, because `ultUpSoon` asks whether
+                    // the ult is within 12 s of ready, and at ult 6 with
+                    // cdMul 0.667 it always is. A waiver written for the day —
+                    // where the ult cycles round eventually and a slow base
+                    // burn proves nothing — became permanent at max ult, and
+                    // the one gate that could have released the bot was dead
+                    // for the whole run.
+                    //
+                    // So the waiver is bounded by the probe itself: past
+                    // poProbeHardS in-range seconds we have watched many ult
+                    // cycles land on this body, and the measurement stands
+                    // whatever the cooldown says. The ult being READY is not
+                    // evidence; the ult having FIRED and the body not dying is.
+                    const probeHard = M.poProbeHardS != null ? M.poProbeHardS : 30;
+                    const waived = ultUpSoon && poTrack.inRangeS < probeHard;
+                    if (!dayPhaseNow && poTrack.inRangeS >= M.poProbeS && poTtk > budget && !waived) {
                         poGiveUp.add(tgtPo.id);
                         log('passout', tgtPo.id, 'abandoned — ' +
                             (poTrack.dps > 0 ? Math.round(poTtk) + 's to kill at ' + Math.round(poTrack.dps) + ' dps'
@@ -10702,9 +10937,31 @@
         let parkYieldFrozen = false;
         if (frozStation) {
             const fid = frozStation.id != null ? frozStation.id : 'anon';
-            if (parkYieldId !== fid) { parkYieldId = fid; parkYieldAt = gtCorner; }
-            parkYieldFrozen = (gtCorner - parkYieldAt) <= (CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20);
-        } else { parkYieldId = null; parkYieldAt = 0; }
+            if (parkYieldId !== fid) {
+                // v6.117.0: bank the window that just ended before starting the
+                // next one, so the run budget counts what was actually spent
+                // rather than the number of episodes.
+                if (parkYieldId !== null) {
+                    parkYieldSpentS += Math.min(
+                        CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                        Math.max(0, gtCorner - parkYieldAt));
+                }
+                parkYieldId = fid; parkYieldAt = gtCorner;
+            }
+            const yMax = CONFIG.deepHell.parkYieldRunMaxS;
+            const spentNow = parkYieldSpentS + Math.min(
+                CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                Math.max(0, gtCorner - parkYieldAt));
+            parkYieldFrozen = (gtCorner - parkYieldAt) <= (CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20) &&
+                (yMax == null || spentNow <= yMax);
+        } else {
+            if (parkYieldId !== null) {
+                parkYieldSpentS += Math.min(
+                    CONFIG.deepHell.parkYieldS != null ? CONFIG.deepHell.parkYieldS : 20,
+                    Math.max(0, gtCorner - parkYieldAt));
+            }
+            parkYieldId = null; parkYieldAt = 0;
+        }
         // v6.91.1: park yields to a FROZEN boss, the same exception the corner
         // has carried since 6.89.8 — "a free kill is worth leaving the funnel
         // for at any depth". Park shipped in 6.90.0 without it and has been
@@ -12300,6 +12557,15 @@
             // the two v6.111/112 instruments, so a row that is not moving says so
             L.push('LANES   in ' + n(g.laneIn) + '  divert ' + n(g.laneDiv) +
                 '        ULT  invAll ' + n(g.medianInvAll) + '  casts ' + n(g.medianCasts) + '  cdMul ' + n(g.medianCdMul));
+            // v6.118.0: the craft prompt, one line. The user reports BLACK
+            // VERMOUTH never triggering; this says which half of the chain.
+            const cr = r && r.craft;
+            if (cr && (cr.ready || cr.seen)) {
+                L.push('CRAFT   owed ' + n(cr.ready) + '  promptSeen ' + n(cr.seen) +
+                    '  clicked ' + n(cr.clicked) + '  confirmed ' + n(cr.confirmed) +
+                    (cr.ready > 100 && !cr.seen ? '   <-- OWED BUT NEVER PROMPTED' : '') +
+                    (cr.seen && !cr.clicked ? '   <-- PROMPTED BUT NO SELECTOR MATCHED' : ''));
+            }
             const bk = (r && r.boss && r.boss.kinds) || [];
             if (bk.length) {
                 L.push('BOSS    ' + bk.slice(0, 4).map(k =>
@@ -12312,8 +12578,18 @@
             const par = (r && r.learning && r.learning.params) || {};
             const edge = Object.keys(par).filter(k => par[k] && par[k].atEdge);
             if (edge.length) L.push('AT EDGE ' + edge.map(k => k.split('.').pop() + ':' + par[k].atEdge).join('  '));
+            // v6.117.0: `reopen` is `cem.lastReopen` — a DURABLE record of the
+            // last migration, not an event on this load. The old wording said
+            // "re-opened this load" and would have had the next reader chasing
+            // a phantom restart 3,400 runs after the fact. Print WHEN.
             const reop = r && r.learning && r.learning.reopen;
-            if (reop && reop.dims && reop.dims.length) L.push('REOPEN  ' + reop.dims.length + ' dim(s) re-opened this load');
+            if (reop && reop.dims && reop.dims.length) {
+                const now = (r && r.learning && r.learning.runs) || 0;
+                const ago = reop.runs != null ? (now - reop.runs) : null;
+                L.push('REOPEN  last box re-open: ' + reop.dims.length + ' dim(s) at run ' + n(reop.runs) +
+                    (ago != null ? '  (' + ago + ' runs ago)' : '') +
+                    (ago != null && ago > 200 ? '  — history, not this load' : ''));
+            }
         } catch (e) {
             L.push('(summary failed: ' + (e && e.message) + ')');
         }
@@ -12724,6 +13000,7 @@
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),
+                    regenRate: () => regenRate(),   // v6.118.0: the regen spine reads this
                     reportSummary, showReport,   // v6.113.0: the overlay report is the product now
                     endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
@@ -13065,6 +13342,26 @@
                     }))
                 };
             };
+            // v6.118.0 — the craft-prompt census. `ready` = ticks a craft was
+            // OWED (both halves maxed); `seen` = ticks a craft-ish button was
+            // on screen; `clicked` / `confirmed` = what we did and whether the
+            // prompt then went away. ready >> seen means the prompt never
+            // appears (the game's trigger, not ours); seen >> clicked means the
+            // selectors miss it and `labels` says what it actually reads;
+            // clicked >> confirmed means the click does not land.
+            window.pineBot.craftAudit = () => {
+                const a = craftAudit || {};
+                return {
+                    note: 'ready = planner ticks with both halves of a CRAFT_PAIR at max, i.e. a craft is owed. seen = ticks a craft-ish button was visible. clicked = prompts we clicked. confirmed = prompts that then disappeared (proof the click worked). READ ready vs seen FIRST: a large ready with seen 0 means the prompt never appears and the bug is upstream of this script; seen without clicked means the selectors missed it, and `labels` holds the real button text.',
+                    runs: a.runs || 0, ready: a.ready || 0, seen: a.seen || 0,
+                    clicked: a.clicked || 0, confirmed: a.confirmed || 0,
+                    labels: a.labels || {}, pairs: a.pairs || {}
+                };
+            };
+            window.pineBot.resetCraftAudit = () => {
+                craftAudit = { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} };
+                craftAuditSave(); return 'craft audit cleared';
+            };
             window.pineBot.resetBossCensus = () => {
                 bossCensus = { runs: [] };
                 try { localStorage.removeItem(BOSS_CENSUS_KEY); } catch (e) { }
@@ -13402,6 +13699,7 @@
                 hunt: safe(() => window.pineBot.huntAudit(), null),
                 mark: safe(() => window.pineBot.markAudit(), null),
                 pause: safe(() => window.pineBot.pauseAudit(), null),
+                craft: safe(() => window.pineBot.craftAudit(), null),   // v6.118.0
                 // the module array, not window.pineBot.pickAudit — that lives
                 // under pineBot.test and the optional-call guard would have
                 // silently produced `undefined`, which JSON.stringify DROPS.

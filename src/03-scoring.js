@@ -1141,6 +1141,89 @@
             // the search settles it. That is the honest form of this change.
             const REGEN_PER_LV = { 'SIMPLE SYRUP': 0.512, 'WATER': 0.284 };
             const regenFromS = CONFIG.deepHell.regenFromS != null ? CONFIG.deepHell.regenFromS : 120;
+            // ── v6.118.0 THE REGEN CARD WAS A BID, AND BIDS DO NOT WIN ────────
+            //
+            // USER, on a live minute-76 run: "the only issue is that it didn't
+            // pick up water for hp regen and it will eventually die." The
+            // manual digest of that run settles it beyond argument:
+            //
+            //     final: def 35, ultLv 6, supers 5, regen 0
+            //     weapons: gintonic 6, olive 6, bloodymary 6, tonic 6,
+            //              southside 6, dryver 6, negroni 6, cranberry 6,
+            //              tomato 6, sugar 6, mojito 6, mint 6, sweetver 6,
+            //              vodkatonic 6, moscowmule 6
+            //     passives: {}
+            //
+            // FIFTEEN cards at level 6 and not one point of regen, at minute
+            // 76. This is not the picker preferring something marginally
+            // better — it is the regen card losing every single contest for
+            // seventy-six minutes.
+            //
+            // Two reasons, both structural rather than a matter of degree:
+            //
+            //  1. THE BID WAS 16 POINTS. A weapon level-up scores progress+70
+            //     and up. The project has now measured three times that a
+            //     preference competing inside the gain sum does not move the
+            //     bot (6.89.11's dormant pull, 6.107.0's drop anchor, the
+            //     6.111.0 lane exit — "127 px in 120 minutes"). The deficit
+            //     term that was supposed to carry it is `strategy.regenDeficit`,
+            //     which the search has driven to a LIVE VALUE OF 0.
+            //
+            //  2. `!hellDetected` CLOSED IT AT HELL ENTRY. A run that reaches
+            //     1200 s with zero regen can never fix it, no matter how many
+            //     of the next 75 minutes it survives. The run above had 57
+            //     minutes of hell and could not buy a single WATER.
+            //
+            // So regen stops being a bid and becomes a SPINE, the same shape as
+            // `ult-spine`: while regen is below the seat's own floor
+            // (deepHell.parkRegenRate), a regen card is a prerequisite and
+            // outscores the roster. It decays to nothing the moment the floor
+            // is met, so it cannot pour a whole run into WATER, and it pays
+            // BOTH cards identically — DAY_ORDER still decides between them,
+            // which is the 6.114.0 retraction and `slot-lockout` still holds it.
+            //
+            // And it runs in hell. That is the half that matters for a run
+            // already at minute 76 with nothing.
+            // SCOPED TO HELL, and `slot-lockout` is why. The first draft paid
+            // this spine in the day too, and the guard went red on both of its
+            // invariants at once:
+            //     {tonic:262, mint:278, sugar:273, dry:247, sweet:271, water:479}
+            //     sugar 273  syrup 469
+            // WATER at 479 outranks every super KEY, and SIMPLE SYRUP outranks
+            // SUGAR — its own craft ingredient, which is the exact 6.112.0
+            // mistake in a new costume. WATER already scores ~239 against a key
+            // band of 247-278, so in the day there is no room for a premium at
+            // all: anything above +8 breaks the super lines, and supersPerRun
+            // 0.4 against a supersMin of 3 says those are not spare capacity.
+            //
+            // The user's reading — "water instead of tonic could have been a
+            // better early pick" — is a real claim about the day, and it
+            // collides head-on with that ordering. It is a trade-off, not a
+            // bug, so it is not resolved here by fiat; the day keeps its
+            // existing bid and the question goes back to the user.
+            //
+            // What IS unambiguous is hell. The reported run had FIVE supers and
+            // fifteen cards at level 6 — the super lines were not the binding
+            // constraint there, regen 0 was — and `!hellDetected` meant 57
+            // minutes of hell could not buy a single WATER. That is the half
+            // this ships.
+            if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
+                hellDetected && gtR >= regenFromS) {
+                const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
+                const haveR = regenRate();
+                // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
+                // spine once both halves are maxed and the craft is actually
+                // available, or the premium walks it in front of its own
+                // ingredients again.
+                const syrupBlocked = name === 'SIMPLE SYRUP' &&
+                    !((ownedLevels['WATER'] || 0) >= 6 && (ownedLevels['SUGAR'] || 0) >= 6);
+                if (haveR < floorR && floorR > 0 && !syrupBlocked) {
+                    const spine = (CONFIG.abilities && CONFIG.abilities.regenSpine != null)
+                        ? CONFIG.abilities.regenSpine : 240;
+                    const short = Math.max(0, Math.min(1, (floorR - haveR) / floorR));
+                    add(Math.round(spine * short), 'regen-spine(' + Math.round(short * 100) + '%short)');
+                }
+            }
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
                 !hellDetected && gtR >= regenFromS) {
                 // null = armour unreadable; fall back to the old flat bar

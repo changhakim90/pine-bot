@@ -689,6 +689,11 @@
             poTtkBudgetS: 30,      // day: a passout worth standing on
             poTtkBudgetHellS: 18,  // hell: time is worth more
             poProbeS: 6,           // in-range seconds before judging
+            // v6.118.0: hard cap on the ult-ready waiver. Past this many
+            // in-range game-seconds the measured dps stands regardless of the
+            // ult cooldown — at ult 6 the ult is ALWAYS "up soon", which made
+            // the give-up gate unreachable for a whole 76-minute run.
+            poProbeHardS: 30,
             poEngageRange: 150,    // "in range" for the probe clock
             poFocusValue: 26,
             poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
@@ -935,8 +940,37 @@
             // at hell entry, because that is where it is running around in the
             // open with a surge on it instead of seated.
             parkFromS: 1200,        // hell entry. Armor is already at cap by ~12 min.
-            parkOliveLv: 6,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
-            parkDefense: 30,
+            parkOliveLv: 4,         // fallback only (see armorLevel): defense = 5.832 x OLIVE
+            // ── v6.117.0 THE GATE SAT BETWEEN TWO RUNGS OF A DISCRETE LADDER ──
+            //
+            // The seat-miss census made this visible in one line: `armor` is 20%
+            // of every hell tick the bot is not seated, and `medianEntryDef` is
+            // 29.2 against a gate of 30. Armour is not continuous — it comes in
+            // ARMOR_PER_LEVEL = 5.832 steps:
+            //     5.8  11.7  17.5  23.3  29.2  35.0
+            // A gate at 30 therefore means "OLIVE 6, exactly", and it excluded
+            // the MEDIAN BUILD by 0.84 points. Third time this session a
+            // threshold has been set inside a gap in a discrete ladder
+            // (capStable.defMin 35 vs a 34.992 ceiling; contactBreakEven's
+            // unreadable-armour default of 0).
+            //
+            // And the arithmetic says the gate should not have been near 30 at
+            // all. Armour is FLAT SUBTRACTION with a floor of 1 against a 22.4
+            // contact hit, so every level at or above 21.4 takes exactly 1
+            // damage per hit. Rungs 4, 5 and 6 are IDENTICAL on the seat. The
+            // gate was demanding two levels that buy nothing.
+            //
+            // The rows price it. Runs denied the seat for their whole hell
+            // phase, booking 100% `armor`, while carrying regen ABOVE the 1.579
+            // break-even: def 23.3 / regen 1.71 (1818 ticks), def 23.3 / regen
+            // 2.22 (1635), def 23.3 / regen 1.71 (1015), def 23.3 / regen 1.14
+            // (6683 and 4118). Builds that could have sat there indefinitely,
+            // standing up instead.
+            //
+            // So the gate is the contact floor: contactDmg - 1. Named as the
+            // derivation rather than the number, and `break-even` asserts it
+            // stays at or below that point.
+            parkDefense: 21.4,
             // v6.95.2 THE ENTRY SEAT (user: "needs more consistency in
             // building up to this setup in day mode and early hell"). The
             // 195-minute recording shows the SEATED state winning; the 6.94.1
@@ -1122,6 +1156,28 @@
             cornerInset: 0,
             freezeEntryToS: 2400,   // v6.91.4: the window where a freeze is worth double
             parkYieldS: 20,         // v6.91.4: seconds park may be suspended per frozen-boss episode
+            // ── v6.117.0 THE PER-EPISODE BOUND DOES NOT BOUND ANYTHING ────────
+            //
+            // 6.91.4 wrote the reason this needed a limit, and it was right:
+            // WHISKY SOUR "just freezes the bosses always", so a permanent
+            // freeze would suspend park for the whole run. Its answer was one
+            // 20 s window per frozen-boss EPISODE, keyed on the boss id.
+            //
+            // That bounds each episode and not the run, and the pause audit
+            // says why it matters: over 675 runs and 6.78M hell ticks the field
+            // is frozen on 94.5% of them. The freeze is not an episode, it is
+            // the background — and every fresh boss id starts another window.
+            // The census caught the result in a single row: one 4585 s run
+            // spent 21,225 of its 40,561 hell ticks (52%) booking `yield`,
+            // against 8,148 seated. Across the batch `yield` is 20% of all
+            // misses, level with `armor`.
+            //
+            // A free kill is worth leaving the seat for a few times a run. It
+            // is not worth half of hell. So the episode window stays and a RUN
+            // budget goes on top: past this many total yielded seconds, a
+            // frozen boss is the background state again and park keeps the
+            // seat. Six windows.
+            parkYieldRunMaxS: 120,
             // v6.91.0 DORMANT-BOSS HUNT (user: "when some boss is off-canvas and
             // the damage circle of the boss is also outside of the canvas, the
             // bot needs to hunt it down somehow before it wakes up and does huge
@@ -1226,6 +1282,19 @@
             // raising lv -> lv+1 is worth. 0-2 hold the old +200 so nothing
             // below lv3 changes; the tail is new.
             ultSpineByLv: [200, 200, 200, 150, 120, 90],
+            // v6.118.0 THE REGEN SPINE. Paid to WATER and SIMPLE SYRUP alike
+            // while regen sits below deepHell.parkRegenRate, scaled by how far
+            // short it is: 240 at zero regen, nothing once the floor is met.
+            //
+            // Sized against the things it has to beat and the thing it must
+            // NOT beat. The picks audit shows a day-order ingredient landing
+            // at 101 (`day-order10+101`) and a weapon level-up at 70-105, so
+            // 240 wins those outright — which is the user's own reading of the
+            // early game: "water instead of tonic could have been a better
+            // early pick". The ult spine pays 240-320 on top of `ultimate+320`
+            // for a total near 700, so the ult still leads. Order at zero
+            // regen: ult > regen > roster.
+            regenSpine: 240,
             // v6.111.0: the day retry gate. The game's own cooldown is the
             // real limiter (53-80 s), so a tighter retry only shaves the
             // latency between the cooldown ending and the bot noticing. At
@@ -2421,6 +2490,7 @@
     // v6.91.4: one park-suspension window per frozen-boss episode (see 05-movement)
     let parkYieldId = null;
     let parkYieldAt = 0;
+    let parkYieldSpentS = 0;   // v6.117.0: total seconds yielded this run
     // v6.93.1 harvest-approach clock (gameTime seconds; reset per run) — the
     // walk TO the passout pile is time-boxed exactly like the hunt, so an
     // unreachable pile cannot deadlock the planner.
@@ -2845,6 +2915,41 @@
     let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
     let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
+    // ── v6.118.0 THE CRAFT PROMPT, MEASURED RATHER THAN GUESSED ─────────────
+    //
+    // USER: "there's also a bug where black vermouth craft doesn't trigger."
+    // The manual digest is consistent with that — `sweetver: 6, dryver: 6` at
+    // minute 76 and no BLACK VERMOUTH — but consistent is not the same as
+    // proof, and this exact bug has now been "fixed" twice on a guess:
+    //   6.87.5 put takeCraftPrompt() in STATE_HANDLERS.playing()...
+    //   6.87.6 found handleScreens RETURNS before that dispatch, so it was
+    //          dead code, and moved it to the top of the playing branch.
+    // A third guess is not worth shipping. There are four distinct things that
+    // could be true and the report cannot currently tell them apart:
+    //   (a) the prompt never appears (the game's own trigger did not fire),
+    //   (b) it appears and no selector matches it (label/markup changed),
+    //   (c) it matches and the click does not land,
+    //   (d) it lands and the game refuses (no free slot).
+    // So: record what is actually seen. `ready` counts ticks where both craft
+    // parts are maxed and a craft is therefore owed; `seen` counts ticks a
+    // prompt was on screen; `labels` keeps what the buttons actually said —
+    // which is the one piece of evidence that separates (a) from (b).
+    const CRAFT_AUDIT_KEY = 'pineBotCraftAudit_v1';
+    let craftAudit = (() => {
+        try { return JSON.parse(localStorage.getItem(CRAFT_AUDIT_KEY)) ||
+            { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} }; }
+        catch (e) { return { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} }; }
+    })();
+    function craftAuditSave() {
+        try { localStorage.setItem(CRAFT_AUDIT_KEY, JSON.stringify(craftAudit)); } catch (e) { }
+    }
+    function craftAuditNote(kind, label) {
+        craftAudit[kind] = (craftAudit[kind] || 0) + 1;
+        if (label) {
+            const k = String(label).slice(0, 40);
+            craftAudit.labels[k] = (craftAudit.labels[k] || 0) + 1;
+        }
+    }
     let lastRerollSig = null;   // one GINGER BEER re-roll per weak pool, max
     let hellDetected = false;
     let hellEnteredAt = 0;      // when this run crossed into hell (the entry surge is the killer)
