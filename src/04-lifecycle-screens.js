@@ -118,6 +118,34 @@
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
         deepBreaks = {}; deepHolds = [];   // v6.115.0
         parkMiss = {};   // v6.116.0: the seat-miss census is per-run
+        // ── v6.122.0 THREE PER-RUN LATCHES THAT startRun NEVER CLEARED ─────
+        // `seenTypesThisRun` is read by endRun as "fold THIS RUN's first
+        // sightings into the shared intel", but it was never reset, so after
+        // run 1 it held the SESSION's first sightings and every later run
+        // re-credited the same stale times into learn.spawnIntel — whose EMA
+        // then converged on them while `n` kept climbing. A table reporting
+        // "measured, n=40" held one observation replayed forty times, and it
+        // drives bossSchedule() -> upcomingBossUnlock() -> the spawn-prep
+        // bonuses. A 60-second first run anchored the whole session.
+        seenTypesThisRun = {};
+        // v6.122.0: and the craft audit's own `runs` counter was initialised
+        // to 0 and never incremented by anything, so `runs: 0` in every report
+        // was meaningless rather than informative. Every other audit bumps it
+        // at a run boundary; this one now does too.
+        try { craftAudit.runs = (craftAudit.runs || 0) + 1; craftAuditSave(); } catch (e) { }
+        // `craftPending` latched a clicked-but-unconfirmed prompt across the
+        // run boundary, so the NEXT run booked a phantom `confirmed` craft on
+        // its first tick — inflating craftsThisRun, milestones.craft in the
+        // reward that feeds cem.batch and the hall of fame, and the very
+        // audit counter that exists to detect a click that does not land.
+        craftPending = null;
+        craftStateBooked = false;   // v6.122.0: one craft per entry into STATE 'craft'
+        // `lastRerollSig` is "one re-roll per weak pool, max" — per POOL, but
+        // it leaked across runs, so a signature that spent its re-roll in run
+        // N was silently refused one in run N+1. Pool signatures repeat
+        // readily above LV 60, where the file notes the same trio recurs
+        // within a few levels.
+        lastRerollSig = null;
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -917,21 +945,32 @@
             return true;
         },
         craft() {
-            // Secret crafts are always an upgrade — accept, and pick the best option.
+            // ── v6.122.0 THE AUDIT C1 DEFECT WAS FIXED IN ONE PLACE ONLY ────
+            // takeCraftPrompt was rewritten to count a craft only once the
+            // prompt DISAPPEARS, and it records why: "ten seconds booked 38,
+            // and `milestones.craft * 38 = 1.90` is larger than the entire
+            // time+downs+sales contribution to the reward ... the optimiser
+            // converged on whichever vector happened to be playing while a
+            // prompt was stuck." This handler kept the original shape —
+            // increment BEFORE the call, discard callGame's {ok}, no dedupe —
+            // while handleScreens dispatches every 260 ms for as long as the
+            // state holds. Same defect, same cost, other call site.
+            //
+            // Now: only count when the game actually accepted the call, and
+            // never more than once per entry into the state.
             const choices = safe(() => window._craftPool, null) || safe(() => window._cpool, null);
+            const book = (r) => { if (r && r.ok !== false && !craftStateBooked) { craftStateBooked = true; craftsThisRun++; } return true; };
             if (Array.isArray(choices) && choices.length && hasGame('pickCraftChoice')) {
                 const best = choices.map(scoreCard).sort((a, b) => b.score - a.score)[0];
                 if (best) {
                     runPicks.push(best.name);
                     runPickCounts[best.name] = (runPickCounts[best.name] || 0) + 1;
                     ownedLevels[best.name] = Math.max(ownedLevels[best.name] || 0, 1);
-                    craftsThisRun++;
-                    callGame('pickCraftChoice', best.index);
-                    return true;
+                    return book(callGame('pickCraftChoice', best.index));
                 }
             }
-            if (hasGame('confirmCraft')) { craftsThisRun++; callGame('confirmCraft'); return true; }
-            if (hasGame('pickCraftChoice')) { craftsThisRun++; callGame('pickCraftChoice', 0); return true; }
+            if (hasGame('confirmCraft')) return book(callGame('confirmCraft'));
+            if (hasGame('pickCraftChoice')) return book(callGame('pickCraftChoice', 0));
             return takeCraftPrompt();
         },
         notice() {

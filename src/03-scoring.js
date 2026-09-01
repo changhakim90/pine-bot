@@ -258,6 +258,16 @@
 
         switch (type) {
             case 'rainbowup': {
+                // ── v6.122.0 RESOLVE THE POLICY BEFORE **EVERY** BREAK ─────
+                // 6.88.0's AUDIT D2 moved this write above the banRainbowGun
+                // break and left it below the hell break. The sole consumer is
+                // `stallMode = rainbowChoice === 'skip' && hellDetected &&
+                // !zoner` — so the only write to rainbowChoice in the codebase
+                // was unreachable in exactly the state the read requires, and
+                // the stall doctrine has been permanently OFF. Verified: a
+                // hell run leaves runLog[].rbp undefined and
+                // learn.rainbowPolicy empty; a day run records 'skip'.
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 // HARD LOCK (user): no Rainbow Gun in hell mode, ever —
                 // regardless of slots, supers, or the learned policy.
                 if (hellDetected) { add(-500, 'no-gun-in-hell'); break; }
@@ -1390,6 +1400,32 @@
         // buys half the super plan. The boost is day-weighted because that is
         // when the lines are being assembled; in hell it reverts to its normal
         // plan value.
+        //
+        // ── v6.121.0 THE RANK NEVER BOUND, AND THE PICKS AUDIT PROVED IT ────
+        //
+        // 6.120.0 pinned an OPEN finding in `slot-lockout`: TONIC is DAY_ORDER
+        // rank 1 and is scored FIFTH. Measured at gt 500, level 0:
+        //   OLIVE 373 > MINT 278 > SUGAR 273 > SWEET VERMOUTH 271 > TONIC 262
+        // The rank ladder pays 11 points a step; SWEET VERMOUTH stacks 92 points
+        // of premium on its rank (craft-half 34, survival-kit 30, essential-hp
+        // 14, minguk-core 10, tank-mitigation 4) against this term's 32. 55
+        // points of rank lead lose to a 60-point premium gap.
+        //
+        // The 6.120.0 batch's OWN picks audit is the confirmation, not a model:
+        // DRY VERMOUTH taken at gt 375 (309), SWEET VERMOUTH at gt 414 (345),
+        // MINT at gt 424 — and TONIC not taken at all through gt 524. Both
+        // vermouths bought before the rank-1 card, in a real run.
+        //
+        // 32 -> 70 puts TONIC at ~300: above SWEET 271, SUGAR 273 and MINT 278,
+        // still well below OLIVE 373. OLIVE leading is left alone deliberately —
+        // it is armour, it is the user's own doctrine ("olives are essential for
+        // defense"), and medianEntryDef is now 35, at the cap.
+        //
+        // BE HONEST ABOUT WHAT THIS IS. 6.106.0 promoted TONIC to rank 1 and
+        // measured well, but the rank never actually bound, so every result
+        // since has been produced by the EFFECTIVE order with TONIC fifth. This
+        // is therefore a genuine experiment on something never in force — not a
+        // repair of a regression. It ships ALONE for exactly that reason.
         if (!atCap && name === 'TONIC') {
             const gtTon = typeof G.gameTime === 'number' ? G.gameTime : 0;
             add((!hellDetected && gtTon < 1200) ? 32 : 12, 'tonic-two-lines');

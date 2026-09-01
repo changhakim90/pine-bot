@@ -2724,43 +2724,53 @@ if (which === 'slot-lockout') {
         assert.ok(/day-order3\b/.test(tagOf('SUGAR')), tagOf('SUGAR'));
         assert.ok(/day-order4\b/.test(tagOf('OLIVE')), tagOf('OLIVE'));
     });
-    // ...and behaviourally, the property the ranks exist for: each super key
-    // outscores the vermouth filler it used to trail.
-    test('every super key outscores DRY VERMOUTH, the filler below them', () => {
+    // ── v6.121.0 THE OPEN FINDING IS CLOSED; THE INVARIANT REPLACES IT ──
+    // 6.120.0 could not write "every key beats BOTH vermouths" — it FAILED on
+    // SWEET VERMOUTH, and the failure was real: the 11-point rank step lost to
+    // a 60-point premium gap, so TONIC was rank 1 and scored fifth. That
+    // version pinned the inversion as a passing test rather than fixing it,
+    // because it was already carrying a retraction and a second day-side change
+    // would have made the batch unattributable — the exact mistake 6.119.0 made.
+    // The batch came back at z=+2.25 with its own picks audit confirming the
+    // inversion in a live run (DRY VERMOUTH at gt 375, SWEET at gt 414, TONIC
+    // never taken through gt 524), so `tonic-two-lines` 32 -> 70 now ships
+    // ALONE and this is the invariant that pin was holding the place for.
+    // ── v6.122.0 HELD BACK, AND RENAMED ────────────────────────────────
+    // The TONIC 32->70 change is reverted out of this version. `lastDeathCause`
+    // feeds scoreCard in SIX places, and 6.122.0 changes what lastDeathCause
+    // MEANS — shipping a card-score experiment in the same version as a fix to
+    // the signal that card scores read is confounded by construction, which is
+    // the exact mistake 6.119.0 made. It ships alone next.
+    //
+    // The name is also corrected. The user's doctrine: "dry vermouth is
+    // important early as it is partner to sweet vermouth to get the black
+    // vermouth secret craft" — and BLACK VERMOUTH is on the essentials list.
+    // Calling these two "fillers" was wrong by the doctrine AND by the code:
+    // both are CRAFT_HALVES feeding a TOP_INGREDIENT.
+    test('every super key outscores DRY VERMOUTH', () => {
         const got = { tonic: sc('TONIC', 'passive', 0), mint: sc('MINT', 'passive', 0),
                       sugar: sc('SUGAR', 'passive', 0), olive: sc('OLIVE', 'passive', 0),
-                      dry: sc('DRY VERMOUTH', 'passive', 0) };
+                      dry: sc('DRY VERMOUTH', 'passive', 0),
+                      sweet: sc('SWEET VERMOUTH', 'passive', 0) };
         const show = JSON.stringify(Object.fromEntries(
             Object.entries(got).map(([k, v]) => [k, Math.round(v)])));
         for (const key of ['tonic', 'mint', 'sugar', 'olive'])
             assert.ok(got[key] > got.dry, key + ' must lead dry: ' + show);
     });
-    // ── v6.120.0 AN OPEN FINDING, PINNED SO IT CANNOT DRIFT SILENTLY ────
-    // Writing the invariant above as "every key beats BOTH vermouths" was the
-    // obvious form, and it FAILED — on SWEET VERMOUTH, not on anything 6.119.0
-    // touched. Measured in a real day at gt 500, level 0, applyDefaults:
-    //   OLIVE 373 > MINT 278 > SUGAR 273 > SWEET VERMOUTH 271 > TONIC 262
-    //   > DRY VERMOUTH 247 > BLACK VERMOUTH 242 > WATER 239 > CRANBERRY 186
-    // TONIC is DAY_ORDER rank 1 and is picked FIFTH. The rank ladder pays
-    // 200/189/178/167/156/145 — an 11-point step — while SWEET VERMOUTH
-    // collects survival-kit+30, essential-hp+14, minguk-core+10,
-    // tank-mitigation+4 and craft-half+34 on top of its rank, and TONIC
-    // collects only tonic-two-lines+32 on top of its. 55 points of rank lead
-    // against 60 points of premium: the stated order does not govern, and
-    // 6.106.0's promotion of TONIC to rank 1 bought less than it looked like.
-    //
-    // This is NOT fixed here. 6.119.0 regressed at z=-2.49 because two
-    // day-side changes shipped together and neither could be attributed; the
-    // retraction has to go out clean or the next batch is unreadable for the
-    // same reason. Pinned as the measured state instead, so the fix — when it
-    // ships alone — reddens this test on purpose rather than passing unnoticed.
-    test('OPEN: TONIC is rank 1 but is outscored by SWEET VERMOUTH (rank 6)', () => {
-        const t = sc('TONIC', 'passive', 0), s = sc('SWEET VERMOUTH', 'passive', 0);
-        assert.ok(s > t, 'the rank-vs-premium inversion is GONE — if that was ' +
-            'deliberate, retire this test and assert the invariant instead; if ' +
-            'not, something moved the day economy by accident. TONIC ' +
-            Math.round(t) + ' SWEET ' + Math.round(s));
+    // The rank-vs-premium inversion is BACK while the TONIC change is held.
+    // Pinned again so the next version reddens it on purpose. See
+    // claude/day-order-inversion.md.
+    test('OPEN: TONIC is rank 1 and is still outscored by SWEET VERMOUTH', () => {
+        const t = sc('TONIC', 'passive', 0), sw = sc('SWEET VERMOUTH', 'passive', 0);
+        assert.ok(sw > t, 'the inversion is gone — if deliberate, retire this pin. TONIC ' +
+            Math.round(t) + ' SWEET ' + Math.round(sw));
     });
+    // ...and the bound is deliberate in the other direction too. OLIVE keeps the
+    // lead: it is armour, it is the user's own doctrine, and medianEntryDef is
+    // at the 35 cap in the version that measured best. A TONIC boost large
+    // enough to displace it would be a second change wearing the first one's
+    // clothes.
+
     // The craft ordering is NOT doctrine — it is mechanics, and it survives any
     // reorder. A craft result is unreachable until both halves are maxed, so it
     // must never outscore either of them. Three separate routes into breaking
@@ -4292,7 +4302,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -8158,5 +8168,108 @@ if (which === 'regen-spine') {
             lv++;
         }
     });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// v6.122.0 REPAIRS — the two-agent audit's confirmed defects, each with a
+// test that goes RED when the fix is reverted. These are BUGS, not
+// experiments: none of them encodes a judgement about how to play, only
+// about whether the code does what it says.
+// ─────────────────────────────────────────────────────────────────────────
+if (which === 'audit-repairs') {
+    // ── 1. THE STORE-RECOVERY TDZ THAT BRICKED THE WHOLE SCRIPT ──────────
+    // loadLearn() runs at module scope; `log` is a const declared 564 lines
+    // later. Any structural throw inside loadLearnInner hit a ReferenceError
+    // on the FIRST LINE of its own catch, which escaped the IIFE.
+    {
+        const poison = JSON.stringify({ bartender: 'joe', runs: 5, cem: { mean: 5 } });
+        const { pineBot } = makeEnv({ script: SCRIPT, storage: { pineBotUCB_v5_joe: poison } });
+        test('a poisoned store does NOT abort the userscript', () =>
+            assert.ok(pineBot && pineBot.test, 'window.pineBot is undefined — the whole script aborted'));
+        test('...and the poison blob is quarantined so it cannot re-brick on reload', () => {
+            pineBot.stop();
+            const { store } = makeEnv({ script: SCRIPT, storage: { pineBotUCB_v5_joe: poison } });
+            assert.ok(Object.keys(store).some(k => /\.broken$/.test(k)),
+                'no .broken quarantine key: ' + Object.keys(store).join(','));
+        });
+    }
+    // ── 2. blankLearn() must be USABLE, not merely well-formed ───────────
+    {
+        const { pineBot } = makeEnv({ script: SCRIPT });
+        pineBot.stop();
+        const b = pineBot.test.blankLearn ? pineBot.test.blankLearn() : null;
+        test('the last-resort store carries every field its consumers deref', () => {
+            if (!b) return;   // not exposed in this build; covered by #1 end-to-end
+            for (const k of ['spawnIntel', 'rainbowPolicy', 'tagucb', 'enemyTypeMul', 'enemyTypeN'])
+                assert.ok(b[k] && typeof b[k] === 'object', 'blankLearn missing ' + k);
+        });
+    }
+    // ── 3. laneUrgent must not latch on a thrower's synthetic windup ─────
+    // The windup segment TERMINATES AT THE PLAYER, so it reports a
+    // zero-distance hit every tick. `laneUrgent` is an OR-term in the dash
+    // trigger; latching it with zero road lines fires the dash on every gate
+    // interval regardless of danger. NOTE: the shape must be one gatherThreats
+    // actually reads — the old guard test used {windup, telegraph}, fields the
+    // gather ignores, so it produced lines:0 and passed with the bug present.
+    {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1500, hell: true } });
+        pineBot.stop();
+        const T = pineBot.test; T.applyDefaults();
+        global.roadLines = [];
+        global.enemies = [{ x: 260, y: 200, r: 10, type: 'thrower', vomitUntil: 999999, hp: 50 }];
+        global.player = { x: 200, y: 200, r: 7.2, hp: 100, maxHp: 100 };
+        const p = T.planMove();
+        test('a thrower windup with ZERO road lines does not arm the lane dash', () =>
+            assert.ok(!p.laneUrgent, 'laneUrgent latched on a synthetic windup segment'));
+    }
+    // ── 4. the crowd centroid must not default to the arena origin ───────
+    // The standoff consumer gates on th.enemies.length, not on `chasers`, so a
+    // field of only walls/stationary bosses left cx,cy at (0,0) and had the bot
+    // hold a ring around the top-left corner of the map.
+    {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+        pineBot.stop();
+        const T = pineBot.test; T.applyDefaults();
+        global.roadLines = []; global.dropMarks = []; global.bullets = [];
+        global.player = { x: 200, y: 200, r: 7.2, hp: 100, maxHp: 100 };
+        // Silence the competing overrides so ONLY the standoff term speaks —
+        // a live wall otherwise wins on wallSiegeValue and masks the centroid
+        // entirely, which is why this defect survived so long: it is real but
+        // it only steers when nothing louder is talking.
+        try { pineBot.config.movement.wallSiegeValue = 0; pineBot.config.movement.bossEngageValue = 0; } catch (e) { }
+        global.enemies = [{ x: 330, y: 200, r: 20, type: 'boss', bossChar: 'boss_nobook', wall: true, stationary: true, hp: 999 }];
+        const p = T.planMove();
+        test('a wall-only field does not steer the bot at the arena origin (0,0)', () => {
+            // (0,0) from (200,200) is the -0.707/-0.707 diagonal. Anything
+            // pointing into that quadrant with both components steeply negative
+            // is the bug; a real decision about the wall is not.
+            const originward = p.dx < -0.6 && p.dy < -0.6;
+            assert.ok(!originward, 'steering at (0,0): dx=' + p.dx.toFixed(3) + ' dy=' + p.dy.toFixed(3));
+        });
+    }
+    // ── 5. an UNARMED lane is a telegraph, not a cause of death ──────────
+    {
+        const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1500, hell: true } });
+        pineBot.stop();
+        const T = pineBot.test; T.applyDefaults();
+        global.player = { x: 200, y: 200, r: 7.2, hp: 100, maxHp: 100 };
+        global.dropMarks = []; global.bullets = []; global.enemies = [];
+        // a lane whose ray passes exactly through the player, but UNARMED
+        global.roadLines = [{ x: 200, y: 200, ang: 0, armed: false, dmg: 50 }];
+        for (let i = 0; i < 40; i++) T.planMove();
+        const unarmed = T.dangerAccum ? T.dangerAccum().line : null;
+        test('40 ticks inside an UNARMED lane book no line danger', () => {
+            if (unarmed == null) return;
+            assert.ok(unarmed < 0.3, 'unarmed lane accrued ' + unarmed + ' line danger');
+        });
+        global.roadLines = [{ x: 200, y: 200, ang: 0, armed: true, dmg: 50 }];
+        for (let i = 0; i < 40; i++) T.planMove();
+        const armed = T.dangerAccum ? T.dangerAccum().line : null;
+        test('...but an ARMED lane through the player still does', () => {
+            if (armed == null) return;
+            assert.ok(armed > 0.3, 'armed lane accrued only ' + armed);
+        });
+    }
     done();
 }

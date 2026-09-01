@@ -63,9 +63,31 @@
         // NO PART of the bot loaded, permanently, until localStorage was cleared
         // by hand. With @grant none the script shares storage with the game
         // page, so this was reachable by anything with same-origin write access.
+        //
+        // ── v6.122.0 THE HANDLER ITSELF THREW, AND IT BRICKED THE SCRIPT ──
+        //
+        // The line below used to call `log(...)`. `log` is a `const` declared
+        // 564 lines later in 01-config-data.js, and `loadLearn()` runs at
+        // MODULE SCOPE (`let learn = loadLearn();`). So every structural throw
+        // inside loadLearnInner hit a temporal-dead-zone ReferenceError on the
+        // FIRST LINE OF ITS OWN RECOVERY — which propagated out of the IIFE and
+        // did exactly what the comment above says the 6.88.0 fix prevented:
+        // no panel, no window.pineBot, no bot, permanently.
+        //
+        // Worse, it threw BEFORE the `.broken` copy and the removeItem on the
+        // next line, so the poison blob survived every reload and the recovery
+        // could never run. The file even predicted this at line ~296 — "(The
+        // pre-existing `log` in the catch above has the same latent fault; it
+        // has simply never fired.)" — and left it. It fires. Reproduced three
+        // ways through test/fake-env: a numeric `cem.mean`, a numeric
+        // `shared.snapshots`, a string `shared.versions`; each aborted the
+        // whole script with "Cannot access 'log' before initialization".
+        //
+        // console is always available at module scope; `log` is not. This
+        // handler must never depend on anything declared after it.
         try { return loadLearnInner(); }
         catch (e) {
-            log('STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken');
+            try { console.log('[PineBot] STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken'); } catch (e3) { }
             try { localStorage.setItem(learnKey() + '.broken', localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
             try { return loadLearnInner(); } catch (e2) { return blankLearn(); }
         }
@@ -74,7 +96,18 @@
         return {
             bartender: activeChar || 'minguk', items: {}, totalPicks: 0, history: [], runs: 0,
             builds: {}, hof: [], genHistory: [], runLog: [], rosters: {}, versions: {}, snapshots: [],
-            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {}
+            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {},
+            // v6.122.0: the last-resort store has to be USABLE, not merely
+            // well-formed. These five were missing, and every one of them is
+            // dereferenced outside a guard by code that runs on the next tick:
+            //   finishRun     -> learn.spawnIntel[k], learn.rainbowPolicy[...]
+            //   scoreCard     -> learn.tagucb
+            //   gatherThreats -> learn.enemyTypeMul / enemyTypeN
+            // So the designated recovery path handed back an object that threw
+            // again a moment later. It was masked only because the TDZ bug
+            // above killed the script before anything could reach it.
+            spawnIntel: {}, rainbowPolicy: {}, tagucb: {},
+            enemyTypeMul: {}, enemyTypeN: {}, lastVersion: null
         };
     }
     function loadLearnInner() {
@@ -485,7 +518,12 @@
     }
     function versionComparison() {
         const rows = versionRows();
-        const withData = rows.filter(r => isFinite(r.bestTimeS));
+        // v6.122.0: Number.isFinite, not the global. versionRows switched
+        // away for exactly this reason and these three were missed — global
+        // isFinite(null) is TRUE, so a legacy row with p60 === null won
+        // `bestDeepRunRate` over a 200-run row whose p60 was a measured 0,
+        // while `howToRead` calls that field the floored, trustworthy one.
+        const withData = rows.filter(r => Number.isFinite(r.bestTimeS));
         const bestByTime = withData.slice().sort((a, b) => b.bestTimeS - a.bestTimeS)[0] || null;
         // v6.91.7 `bestAverage` HAD NO SAMPLE FLOOR, and the mean is the noisiest
         // of the three headline fields. Live case: 6.91.2 at n=4 was promoted as
@@ -500,9 +538,9 @@
         // constant now, so there is one threshold rather than a hardcoded 20
         // beside an unguarded sort.
         const floorN = CONFIG.learning.minMeaningfulRuns;
-        const bestByMean = withData.filter(r => isFinite(r.meanTimeS) && r.runs >= floorN)
+        const bestByMean = withData.filter(r => Number.isFinite(r.meanTimeS) && r.runs >= floorN)
             .sort((a, b) => b.meanTimeS - a.meanTimeS)[0] || null;
-        const bestByP60 = withData.filter(r => isFinite(r.p60) && r.runs >= floorN)
+        const bestByP60 = withData.filter(r => Number.isFinite(r.p60) && r.runs >= floorN)
             .sort((a, b) => b.p60 - a.p60)[0] || null;
         const epochs = new Set(rows.map(r => r.rewardEpoch).filter(e => e != null));
         return {
@@ -982,9 +1020,17 @@
             const mag = L.deathNudge * (1 + 2 * Math.max(0, share - 0.4));
             for (const k of pool) {
                 const spec = TUNABLE[k];
-                c.mean[k] = Math.min(spec.max, c.mean[k] + (spec.max - spec.min) * mag);
+                // v6.122.0: clamp BOTH ends. The old one-sided Math.min had
+                // no Math.max(spec.min, ...) — harmless while mag is 0 and
+                // non-negative, and the wrong shape the moment this is
+                // re-enabled with a decaying or negative magnitude.
+                c.mean[k] = Math.max(spec.min, Math.min(spec.max, c.mean[k] + (spec.max - spec.min) * mag));
             }
-            log('CEM: defensive nudge against death by', dom, '(share', Math.round(share * 100) + '%, mag', mag.toFixed(3) + ')');
+            // v6.122.0: only claim it if it happened. deathNudge is 0, so
+            // every generation where one cause took >=40% of the deaths
+            // printed a line saying the learner had corrected against its
+            // dominant killer, while nothing moved at all.
+            if (mag > 0) log('CEM: defensive nudge against death by', dom, '(share', Math.round(share * 100) + '%, mag', mag.toFixed(3) + ')');
         }
         c.batch = [];
         c.gen++;
@@ -995,7 +1041,13 @@
         proj: ['threat.projWeight', 'threat.projLookaheadMs', 'movement.smoothing'],
         contact: ['threat.enemyWeight', 'movement.standoff', 'movement.standoffPull', 'threat.enemyRange', 'movement.panicHp'],
         mark: ['threat.markWeight', 'movement.lookaheadMs'],
-        line: ['threat.lineWeight', 'movement.lookaheadMs'],
+        // v6.122.0: v6.111.0 split the lane weight into TELEGRAPH
+        // (lineWeight) and LIVE CHARGE (lineArmedWeight) so each could be
+        // priced on its own evidence — and this pool was never updated, so
+        // the gradient shield (step *= 0.25 when one hazard dominates a
+        // batch's deaths) protected only the telegraph. The weight on the
+        // thing that actually kills was left at full erosion rate.
+        line: ['threat.lineWeight', 'threat.lineArmedWeight', 'movement.lookaheadMs'],
         rival: ['movement.escapePull', 'movement.lookaheadMs', 'movement.panicHp']
     };
 

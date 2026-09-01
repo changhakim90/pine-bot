@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.120.0
+// @version      6.122.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.120.0';
+    const SCRIPT_VERSION = '6.122.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -678,7 +678,6 @@
             // best target up with the stream.
             flameAimValue: 95,   // measured: below ~90 the aim term loses to ordinary station/loot pull
             flameAimRange: 420,
-            poHugPad: 8,
             // v6.86.2 FEASIBILITY GATE. A drunk-wave passout carries
             // DIFF().hp * 8*(1+(estBoss-1)*0.7)*(1+gt/60*0.22) * 2 HP:
             // ~1.4k at 5 min, 7k at 10, 27k at 15, 77k at 20, 500k at 30.
@@ -697,8 +696,6 @@
             // the give-up gate unreachable for a whole 76-minute run.
             poProbeHardS: 30,
             poEngageRange: 150,    // "in range" for the probe clock
-            poFocusValue: 26,
-            poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
@@ -780,7 +777,6 @@
             // PERPENDICULAR to the ray. `laneEscape` makes that a movement
             // override, like park and hunt, rather than one more term
             // competing inside the sum it is supposed to overrule.
-            laneEscapePad: 8,         // clear the band by this much before releasing
             laneEscapeArmS: 1.6       // seconds of telegraph left that still counts as "go now"
         },
 
@@ -1020,7 +1016,6 @@
             // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
             // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
             runCapS: 9000,
-            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances (unused from 6.101.0 — see capStandS)
             // v6.101.0 THE CAP LADDER (user: "the bot is not dying even with
             // the kill protocol"). Measured proof the 6.96.2 patrol failed:
             // 6.100.0 booked runs at 25,141 s and 22,800 s against runCapS
@@ -1162,6 +1157,23 @@
             // live player radius, which is what the code used) and 64.03 at 12
             // (the fallback) — against a 70 px mark reach. Anything above ~10
             // puts the seat inside every mark that can spawn.
+            // ── v6.122.0 FIVE DEAD CONFIG KEYS REMOVED ─────────────────────
+            // Each appeared exactly once in the whole repo — at its own
+            // definition. None is a CEM dimension, so nothing read them:
+            //   movement.poHugPad        (the hug was retracted in 6.86.4)
+            //   movement.poFocusValue    (the station uses passoutValue)
+            //   movement.poBlockPenalty  (the code hardcodes 55 on the body
+            //                             and 60 for a path crossing it — and
+            //                             game-source-facts.md cites this key
+            //                             as the shipped implementation of
+            //                             'passouts are obstacles'. It is not.)
+            //   deepHell.laneEscapePad   (shipped with the 6.111.0 lane escape
+            //                             as 'clear the band by this much
+            //                             before releasing' — there is no
+            //                             release hysteresis in the override)
+            //   deepHell.capLegS         (self-documented unused from 6.101.0)
+            // A config key that is read by nothing is a claim about behaviour
+            // that is not true, and this file is read as documentation.
             cornerInset: 0,
             freezeEntryToS: 2400,   // v6.91.4: the window where a freeze is worth double
             parkYieldS: 20,         // v6.91.4: seconds park may be suspended per frozen-boss episode
@@ -1402,7 +1414,25 @@
         // named here instead of living as literals in three comments. See
         // contactBreakEven(); mitigation-model.md carries the derivations.
         mitigation: {
-            invulnFrames: 38,   // hurtPlayer sets player.invuln = 38 (on the PLAYER, not per attacker)
+            // ── v6.122.0 THE 33-vs-38 DISCREPANCY IS STILL OPEN ────────────
+            // An audit proposed changing this to 33 on the strength of
+            // `game-source-facts.md` ("the invuln window is 33 frames, not
+            // 38"). NOT TAKEN. The project's own record contradicts itself and
+            // says so explicitly: `mitigation-model.md` reads the source as
+            // `hurtPlayer` setting `invuln = 38` and lists, under Open
+            // Questions, "3. The 33 vs 38 frame invuln discrepancy
+            // (`hurtPlayer` writes 38)."
+            //
+            // 38 is a DIRECT SOURCE READ. 33 was INFERRED from a measured hit
+            // rate, which a hit landing on the frame invuln expires would
+            // bias downward. A direct read outranks an inference, and neither
+            // outranks an actual re-read of `hurtPlayer` — which is what
+            // settles this and has not been done.
+            //
+            // Cost of being wrong: contactBreakEven() reports 1.579 HP/s
+            // instead of 1.818, a 15% understatement of the seat's drain.
+            // Inert as a gate today (parkRegenBreakEven: 0).
+            invulnFrames: 38,   // hurtPlayer sets player.invuln on the PLAYER, not per attacker
             contactDmg: 22.4    // flat common-mob contact, before armour subtraction
         },
         phaseAudit: {
@@ -2983,7 +3013,9 @@
     const CHROME_CTRL = /^(save|settings|options|close|recipes?|mobs?|staff|items|drinks|book|index|music|sfx|sound|mute|pause|resume|quit|exit|menu|credits|help|language|한국어|english)\b|^[⚙📖⏸⏯🔇🔊🔈✕✖×☰❓]/i;
     let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
-    let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
+    let craftPending = null;
+    let craftStateBooked = false;   // v6.122.0: dedupe for STATE_HANDLERS.craft
+    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     // ── v6.118.0 THE CRAFT PROMPT, MEASURED RATHER THAN GUESSED ─────────────
     //
     // USER: "there's also a bug where black vermouth craft doesn't trigger."
@@ -3012,8 +3044,18 @@
     function craftAuditSave() {
         try { localStorage.setItem(CRAFT_AUDIT_KEY, JSON.stringify(craftAudit)); } catch (e) { }
     }
+    // v6.122.0: `ready` and `seen` were incremented in memory and NEVER
+    // saved — craftAuditSave() was called only after `clicked` and
+    // `confirmed`. So unless a craft was actually clicked, every reload wiped
+    // them and the audit reported `ready: 0, seen: 0` forever. That is why
+    // "does the BLACK VERMOUTH pair ever reach 6/6?" has been unanswerable
+    // for four versions. Throttled to once a second: takeCraftPrompt runs
+    // every 260 ms and a localStorage write per tick is not free.
+    let craftAuditSavedAt = 0;
     function craftAuditNote(kind, label) {
         craftAudit[kind] = (craftAudit[kind] || 0) + 1;
+        const nowCA = Date.now();
+        if (nowCA - craftAuditSavedAt > 1000) { craftAuditSavedAt = nowCA; craftAuditSave(); }
         if (label) {
             const k = String(label).slice(0, 40);
             craftAudit.labels[k] = (craftAudit.labels[k] || 0) + 1;
@@ -3344,9 +3386,31 @@
         // NO PART of the bot loaded, permanently, until localStorage was cleared
         // by hand. With @grant none the script shares storage with the game
         // page, so this was reachable by anything with same-origin write access.
+        //
+        // ── v6.122.0 THE HANDLER ITSELF THREW, AND IT BRICKED THE SCRIPT ──
+        //
+        // The line below used to call `log(...)`. `log` is a `const` declared
+        // 564 lines later in 01-config-data.js, and `loadLearn()` runs at
+        // MODULE SCOPE (`let learn = loadLearn();`). So every structural throw
+        // inside loadLearnInner hit a temporal-dead-zone ReferenceError on the
+        // FIRST LINE OF ITS OWN RECOVERY — which propagated out of the IIFE and
+        // did exactly what the comment above says the 6.88.0 fix prevented:
+        // no panel, no window.pineBot, no bot, permanently.
+        //
+        // Worse, it threw BEFORE the `.broken` copy and the removeItem on the
+        // next line, so the poison blob survived every reload and the recovery
+        // could never run. The file even predicted this at line ~296 — "(The
+        // pre-existing `log` in the catch above has the same latent fault; it
+        // has simply never fired.)" — and left it. It fires. Reproduced three
+        // ways through test/fake-env: a numeric `cem.mean`, a numeric
+        // `shared.snapshots`, a string `shared.versions`; each aborted the
+        // whole script with "Cannot access 'log' before initialization".
+        //
+        // console is always available at module scope; `log` is not. This
+        // handler must never depend on anything declared after it.
         try { return loadLearnInner(); }
         catch (e) {
-            log('STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken');
+            try { console.log('[PineBot] STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken'); } catch (e3) { }
             try { localStorage.setItem(learnKey() + '.broken', localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
             try { return loadLearnInner(); } catch (e2) { return blankLearn(); }
         }
@@ -3355,7 +3419,18 @@
         return {
             bartender: activeChar || 'minguk', items: {}, totalPicks: 0, history: [], runs: 0,
             builds: {}, hof: [], genHistory: [], runLog: [], rosters: {}, versions: {}, snapshots: [],
-            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {}
+            rewardEpoch: REWARD_EPOCH, cem: null, linucb: {},
+            // v6.122.0: the last-resort store has to be USABLE, not merely
+            // well-formed. These five were missing, and every one of them is
+            // dereferenced outside a guard by code that runs on the next tick:
+            //   finishRun     -> learn.spawnIntel[k], learn.rainbowPolicy[...]
+            //   scoreCard     -> learn.tagucb
+            //   gatherThreats -> learn.enemyTypeMul / enemyTypeN
+            // So the designated recovery path handed back an object that threw
+            // again a moment later. It was masked only because the TDZ bug
+            // above killed the script before anything could reach it.
+            spawnIntel: {}, rainbowPolicy: {}, tagucb: {},
+            enemyTypeMul: {}, enemyTypeN: {}, lastVersion: null
         };
     }
     function loadLearnInner() {
@@ -3766,7 +3841,12 @@
     }
     function versionComparison() {
         const rows = versionRows();
-        const withData = rows.filter(r => isFinite(r.bestTimeS));
+        // v6.122.0: Number.isFinite, not the global. versionRows switched
+        // away for exactly this reason and these three were missed — global
+        // isFinite(null) is TRUE, so a legacy row with p60 === null won
+        // `bestDeepRunRate` over a 200-run row whose p60 was a measured 0,
+        // while `howToRead` calls that field the floored, trustworthy one.
+        const withData = rows.filter(r => Number.isFinite(r.bestTimeS));
         const bestByTime = withData.slice().sort((a, b) => b.bestTimeS - a.bestTimeS)[0] || null;
         // v6.91.7 `bestAverage` HAD NO SAMPLE FLOOR, and the mean is the noisiest
         // of the three headline fields. Live case: 6.91.2 at n=4 was promoted as
@@ -3781,9 +3861,9 @@
         // constant now, so there is one threshold rather than a hardcoded 20
         // beside an unguarded sort.
         const floorN = CONFIG.learning.minMeaningfulRuns;
-        const bestByMean = withData.filter(r => isFinite(r.meanTimeS) && r.runs >= floorN)
+        const bestByMean = withData.filter(r => Number.isFinite(r.meanTimeS) && r.runs >= floorN)
             .sort((a, b) => b.meanTimeS - a.meanTimeS)[0] || null;
-        const bestByP60 = withData.filter(r => isFinite(r.p60) && r.runs >= floorN)
+        const bestByP60 = withData.filter(r => Number.isFinite(r.p60) && r.runs >= floorN)
             .sort((a, b) => b.p60 - a.p60)[0] || null;
         const epochs = new Set(rows.map(r => r.rewardEpoch).filter(e => e != null));
         return {
@@ -4263,9 +4343,17 @@
             const mag = L.deathNudge * (1 + 2 * Math.max(0, share - 0.4));
             for (const k of pool) {
                 const spec = TUNABLE[k];
-                c.mean[k] = Math.min(spec.max, c.mean[k] + (spec.max - spec.min) * mag);
+                // v6.122.0: clamp BOTH ends. The old one-sided Math.min had
+                // no Math.max(spec.min, ...) — harmless while mag is 0 and
+                // non-negative, and the wrong shape the moment this is
+                // re-enabled with a decaying or negative magnitude.
+                c.mean[k] = Math.max(spec.min, Math.min(spec.max, c.mean[k] + (spec.max - spec.min) * mag));
             }
-            log('CEM: defensive nudge against death by', dom, '(share', Math.round(share * 100) + '%, mag', mag.toFixed(3) + ')');
+            // v6.122.0: only claim it if it happened. deathNudge is 0, so
+            // every generation where one cause took >=40% of the deaths
+            // printed a line saying the learner had corrected against its
+            // dominant killer, while nothing moved at all.
+            if (mag > 0) log('CEM: defensive nudge against death by', dom, '(share', Math.round(share * 100) + '%, mag', mag.toFixed(3) + ')');
         }
         c.batch = [];
         c.gen++;
@@ -4276,7 +4364,13 @@
         proj: ['threat.projWeight', 'threat.projLookaheadMs', 'movement.smoothing'],
         contact: ['threat.enemyWeight', 'movement.standoff', 'movement.standoffPull', 'threat.enemyRange', 'movement.panicHp'],
         mark: ['threat.markWeight', 'movement.lookaheadMs'],
-        line: ['threat.lineWeight', 'movement.lookaheadMs'],
+        // v6.122.0: v6.111.0 split the lane weight into TELEGRAPH
+        // (lineWeight) and LIVE CHARGE (lineArmedWeight) so each could be
+        // priced on its own evidence — and this pool was never updated, so
+        // the gradient shield (step *= 0.25 when one hazard dominates a
+        // batch's deaths) protected only the telegraph. The weight on the
+        // thing that actually kills was left at full erosion rate.
+        line: ['threat.lineWeight', 'threat.lineArmedWeight', 'movement.lookaheadMs'],
         rival: ['movement.escapePull', 'movement.lookaheadMs', 'movement.panicHp']
     };
 
@@ -4844,6 +4938,16 @@
 
         switch (type) {
             case 'rainbowup': {
+                // ── v6.122.0 RESOLVE THE POLICY BEFORE **EVERY** BREAK ─────
+                // 6.88.0's AUDIT D2 moved this write above the banRainbowGun
+                // break and left it below the hell break. The sole consumer is
+                // `stallMode = rainbowChoice === 'skip' && hellDetected &&
+                // !zoner` — so the only write to rainbowChoice in the codebase
+                // was unreachable in exactly the state the read requires, and
+                // the stall doctrine has been permanently OFF. Verified: a
+                // hell run leaves runLog[].rbp undefined and
+                // learn.rainbowPolicy empty; a day run records 'skip'.
+                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
                 // HARD LOCK (user): no Rainbow Gun in hell mode, ever —
                 // regardless of slots, supers, or the learned policy.
                 if (hellDetected) { add(-500, 'no-gun-in-hell'); break; }
@@ -5976,6 +6080,32 @@
         // buys half the super plan. The boost is day-weighted because that is
         // when the lines are being assembled; in hell it reverts to its normal
         // plan value.
+        //
+        // ── v6.121.0 THE RANK NEVER BOUND, AND THE PICKS AUDIT PROVED IT ────
+        //
+        // 6.120.0 pinned an OPEN finding in `slot-lockout`: TONIC is DAY_ORDER
+        // rank 1 and is scored FIFTH. Measured at gt 500, level 0:
+        //   OLIVE 373 > MINT 278 > SUGAR 273 > SWEET VERMOUTH 271 > TONIC 262
+        // The rank ladder pays 11 points a step; SWEET VERMOUTH stacks 92 points
+        // of premium on its rank (craft-half 34, survival-kit 30, essential-hp
+        // 14, minguk-core 10, tank-mitigation 4) against this term's 32. 55
+        // points of rank lead lose to a 60-point premium gap.
+        //
+        // The 6.120.0 batch's OWN picks audit is the confirmation, not a model:
+        // DRY VERMOUTH taken at gt 375 (309), SWEET VERMOUTH at gt 414 (345),
+        // MINT at gt 424 — and TONIC not taken at all through gt 524. Both
+        // vermouths bought before the rank-1 card, in a real run.
+        //
+        // 32 -> 70 puts TONIC at ~300: above SWEET 271, SUGAR 273 and MINT 278,
+        // still well below OLIVE 373. OLIVE leading is left alone deliberately —
+        // it is armour, it is the user's own doctrine ("olives are essential for
+        // defense"), and medianEntryDef is now 35, at the cap.
+        //
+        // BE HONEST ABOUT WHAT THIS IS. 6.106.0 promoted TONIC to rank 1 and
+        // measured well, but the rank never actually bound, so every result
+        // since has been produced by the EFFECTIVE order with TONIC fifth. This
+        // is therefore a genuine experiment on something never in force — not a
+        // repair of a regression. It ships ALONE for exactly that reason.
         if (!atCap && name === 'TONIC') {
             const gtTon = typeof G.gameTime === 'number' ? G.gameTime : 0;
             add((!hellDetected && gtTon < 1200) ? 32 : 12, 'tonic-two-lines');
@@ -6860,6 +6990,34 @@
         deepStillTicks = 0; deepInvTicks = 0; deepHpSum = 0;
         deepBreaks = {}; deepHolds = [];   // v6.115.0
         parkMiss = {};   // v6.116.0: the seat-miss census is per-run
+        // ── v6.122.0 THREE PER-RUN LATCHES THAT startRun NEVER CLEARED ─────
+        // `seenTypesThisRun` is read by endRun as "fold THIS RUN's first
+        // sightings into the shared intel", but it was never reset, so after
+        // run 1 it held the SESSION's first sightings and every later run
+        // re-credited the same stale times into learn.spawnIntel — whose EMA
+        // then converged on them while `n` kept climbing. A table reporting
+        // "measured, n=40" held one observation replayed forty times, and it
+        // drives bossSchedule() -> upcomingBossUnlock() -> the spawn-prep
+        // bonuses. A 60-second first run anchored the whole session.
+        seenTypesThisRun = {};
+        // v6.122.0: and the craft audit's own `runs` counter was initialised
+        // to 0 and never incremented by anything, so `runs: 0` in every report
+        // was meaningless rather than informative. Every other audit bumps it
+        // at a run boundary; this one now does too.
+        try { craftAudit.runs = (craftAudit.runs || 0) + 1; craftAuditSave(); } catch (e) { }
+        // `craftPending` latched a clicked-but-unconfirmed prompt across the
+        // run boundary, so the NEXT run booked a phantom `confirmed` craft on
+        // its first tick — inflating craftsThisRun, milestones.craft in the
+        // reward that feeds cem.batch and the hall of fame, and the very
+        // audit counter that exists to detect a click that does not land.
+        craftPending = null;
+        craftStateBooked = false;   // v6.122.0: one craft per entry into STATE 'craft'
+        // `lastRerollSig` is "one re-roll per weak pool, max" — per POOL, but
+        // it leaked across runs, so a signature that spent its re-roll in run
+        // N was silently refused one in run N+1. Pool signatures repeat
+        // readily above LV 60, where the file notes the same trio recurs
+        // within a few levels.
+        lastRerollSig = null;
         bossSeen = {};   // v6.112.0: the census is per-run; ids repeat across runs
         runHellTicks = 0; runPauseTicks = 0;     // v6.91.4: pause uptime is per-run
         enemyMix = { swarm: 0, ranged: 0, bomber: 0, boss: 0, total: 0 };
@@ -7659,21 +7817,32 @@
             return true;
         },
         craft() {
-            // Secret crafts are always an upgrade — accept, and pick the best option.
+            // ── v6.122.0 THE AUDIT C1 DEFECT WAS FIXED IN ONE PLACE ONLY ────
+            // takeCraftPrompt was rewritten to count a craft only once the
+            // prompt DISAPPEARS, and it records why: "ten seconds booked 38,
+            // and `milestones.craft * 38 = 1.90` is larger than the entire
+            // time+downs+sales contribution to the reward ... the optimiser
+            // converged on whichever vector happened to be playing while a
+            // prompt was stuck." This handler kept the original shape —
+            // increment BEFORE the call, discard callGame's {ok}, no dedupe —
+            // while handleScreens dispatches every 260 ms for as long as the
+            // state holds. Same defect, same cost, other call site.
+            //
+            // Now: only count when the game actually accepted the call, and
+            // never more than once per entry into the state.
             const choices = safe(() => window._craftPool, null) || safe(() => window._cpool, null);
+            const book = (r) => { if (r && r.ok !== false && !craftStateBooked) { craftStateBooked = true; craftsThisRun++; } return true; };
             if (Array.isArray(choices) && choices.length && hasGame('pickCraftChoice')) {
                 const best = choices.map(scoreCard).sort((a, b) => b.score - a.score)[0];
                 if (best) {
                     runPicks.push(best.name);
                     runPickCounts[best.name] = (runPickCounts[best.name] || 0) + 1;
                     ownedLevels[best.name] = Math.max(ownedLevels[best.name] || 0, 1);
-                    craftsThisRun++;
-                    callGame('pickCraftChoice', best.index);
-                    return true;
+                    return book(callGame('pickCraftChoice', best.index));
                 }
             }
-            if (hasGame('confirmCraft')) { craftsThisRun++; callGame('confirmCraft'); return true; }
-            if (hasGame('pickCraftChoice')) { craftsThisRun++; callGame('pickCraftChoice', 0); return true; }
+            if (hasGame('confirmCraft')) return book(callGame('confirmCraft'));
+            if (hasGame('pickCraftChoice')) return book(callGame('pickCraftChoice', 0));
             return takeCraftPrompt();
         },
         notice() {
@@ -8919,7 +9088,36 @@
         for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + contactReach) { dangerAccum.contact += 0.25; break; }
         for (const q of th.projectiles) if (Math.hypot(q.x - p.x, q.y - p.y) < q.r * 2.5) { dangerAccum.proj += 0.25; break; }
         for (const m of th.marks) if (Math.hypot(m.x - p.x, m.y - p.y) < m.r) { dangerAccum.mark += 0.25; break; }
-        for (const l of th.lines) if (lineCost(l, p.x, p.y)) { dangerAccum.line += 0.25; break; }
+        // ── v6.122.0 PROXIMITY TO AN UNARMED LANE WAS BOOKING A DEATH ──────
+        // The other three classes require a REAL overlap — inside the body,
+        // inside the mark, inside the shot. This one accepted any non-zero
+        // `lineCost`, and lineCost is GRADED across the whole 63+pad planning
+        // band and does not look at `armed`. So merely standing near a ray
+        // that might never fire fed the accumulator that argmaxes into
+        // `lastDeathCause`.
+        //
+        // 6.120.0 walked straight into it: the telegraph fix made the bot
+        // notice and flee unarmed lanes, laneIn went 36 -> 112 per run, and
+        // `line` jumped to 31-35% of death verdicts — against 2% of HP lost
+        // and 1% as sole cause. Over 2,423 runs there are 1,278 sole lane hits
+        // total, 0.53 per run; a third of runs cannot be ending on one.
+        //
+        // The HP-loss classifier twenty lines below already gets this right by
+        // requiring `l.armed === true`, which is why `sole.line` stayed flat
+        // while the verdict count doubled. Two classifiers, one hazard,
+        // opposite answers — and the wrong one decided the verdict.
+        //
+        // This is NOT cosmetic: lastDeathCause feeds scoreCard in six places
+        // and the CEM's directed-defense nudge, and the CEM had already
+        // responded by pushing threat.lineArmedWeight 4.62 -> 8.12.
+        for (const l of th.lines) {
+            if (l.armed !== true) continue;                       // a telegraph is not a cause of death
+            const perp = linePerp(l, p.x, p.y);
+            const kill = (T.lineKillPerp != null ? T.lineKillPerp : 63);
+            // no readable ray (legacy box/segment shapes): fall back to the
+            // old any-cost test rather than losing the class entirely.
+            if (perp == null ? lineCost(l, p.x, p.y) : perp < kill) { dangerAccum.line += 0.25; break; }
+        }
         if (lastHpSample != null && hp < lastHpSample - 0.5) {
             const loss = lastHpSample - hp;
             // v6.89.11 A MARK IS GONE BY THE TIME ITS DAMAGE IS SEEN.
@@ -9141,9 +9339,21 @@
         // rectangle) is not part of the crowd. It is hundreds of px outside the
         // field, so leaving it in would drag the centroid off the map and bend
         // the whole kite circle toward a body nothing can reach.
-        let cx = 0, cy = 0, chasers = 0;
+        // v6.122.0: SEED FROM THE PLAYER, NOT FROM (0,0). The consumer at the
+        // standoff term gates on `th.enemies.length`, not on `chasers`, so a
+        // field containing ONLY walls / stationary bosses / dormant bosses —
+        // an ordinary day state, and exactly the `wallFocus` state this file
+        // calls "THE kill target" — left cx,cy at the arena ORIGIN and had the
+        // bot hold a 150 px ring around the top-left corner of the map.
+        // Reproduced with wallSiegeValue silenced: one NO BOOKING wall at
+        // (330,200) with the player at (200,200) steered dx=-0.707 dy=-0.707,
+        // straight at (0,0); adding a single live mob restored a real bearing.
+        // Seeding from p makes the zero-chaser case a no-op (err 0 either way)
+        // instead of a phantom attractor.
+        let cx = p.x, cy = p.y, chasers = 0;
         for (const e of th.enemies) {
             if (e.wall || e.dormant || (e.boss && e.stationary)) continue;
+            if (chasers === 0) { cx = 0; cy = 0; }
             cx += e.x; cy += e.y; chasers++;
         }
         if (chasers) { cx /= chasers; cy /= chasers; }
@@ -9379,8 +9589,20 @@
             // shapes with no readable ray: fall back to the old depth test
             else if (inBand > 0.55) urgent = true;
             if (!urgent) continue;
-            laneUrgent = true;
+            // ── v6.122.0 THE `ang` GUARD WAS ONE LINE TOO LATE ──────────────
+            // `laneUrgent` used to be set BEFORE this filter, so a thrower's
+            // windup — a synthetic segment {x1:e.x, y1:e.y, x2:p.x, y2:p.y}
+            // that TERMINATES AT THE PLAYER (gather, ~line 383) — reported a
+            // zero-distance hit every tick, tripped `inBand > 0.55`, and
+            // latched laneUrgent with roadLines EMPTY. `plan.laneUrgent` is an
+            // OR-term in the dash trigger, so any thrower winding up inside
+            // enemyRange fired the dash on every gate interval regardless of
+            // danger. That is the 6.89.13 regression exactly; `lineHere` was
+            // given this filter at the time and `laneUrgent` was not.
+            // Reproduced: a thrower + vomitUntil with roadLines=[] yielded
+            // laneUrgent=true, laneIn=0, lineHere=false.
             if (typeof l.ang !== 'number' || typeof l.x !== 'number' || typeof l.y !== 'number') continue;
+            laneUrgent = true;
             const s = (p.y - l.y) * Math.cos(l.ang) - (p.x - l.x) * Math.sin(l.ang);
             const sgn = s >= 0 ? 1 : -1;
             // weight by how deep in the band we are: the lane we are centred
@@ -13165,7 +13387,11 @@
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),
-                    regenRate: () => regenRate(),   // v6.118.0: the regen spine reads this
+                    regenRate: () => regenRate(),
+                    // v6.122.0: read the death-cause accumulator back. The
+                    // `line` class was booking proximity to UNARMED lanes as
+                    // a death, and nothing could see it from outside.
+                    dangerAccum: () => Object.assign({}, dangerAccum),   // v6.118.0: the regen spine reads this
                     reportSummary, showReport,   // v6.113.0: the overlay report is the product now
                     endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
@@ -13200,7 +13426,14 @@
                     setEnemyN: obj => { learn.enemyTypeN = obj; },
                     // v6.107.0 drop-anchor / ring hooks
                     setKillRate: v => { killRate = v; },
-                    tunable: () => TUNABLE,
+                    // v6.122.0: REMOVED — this was a SECOND `tunable` key in
+                    // the same object literal, and the later key wins, so the
+                    // deep copy 70 lines above was silently replaced by a
+                    // reference to the LIVE search box. Any consumer that
+                    // mutated it rewrote the real bounds that sampleParams,
+                    // refitCem, sanitizeCem and the box-reopen migration all
+                    // clamp against. tunablePrior() kept its copy; these two
+                    // halves of the same idiom had drifted apart.
                     setCemMean: (k, v) => { learn.cem.mean[k] = v; },
                     bossRing: () => bossRingRef.v,
                     // v6.107.0 tag-bandit hooks
@@ -13843,15 +14076,20 @@
             // stat the page has stopped exposing) must degrade that key to
             // null, never take the whole report down with it — the failure
             // mode that would send the user straight back to the console.
-            window.pineBot.report = () => ({
+            // v6.122.0: the embedded summary was built from a FIVE-KEY
+            // subset, while reportSummary also reads `r.income.buckets` and
+            // `r.craft`. The pasted JSON therefore lost the two lines the code
+            // flags hardest — bucket-0 HP net ("the single most diagnostic
+            // number in the report", and "it was buried") and the CRAFT
+            // census, the one that says which half of the BLACK VERMOUTH
+            // chain is broken. showReport passes the whole object, so the
+            // ON-SCREEN block was complete and the COPIED text was not, which
+            // is the worse way round: the 📋 button is the product.
+            // Build the body once, then summarise THAT.
+            window.pineBot.report = () => { const r = reportBody(); r.summary = safe(() => reportSummary(r), null); return r; };
+            const reportBody = () => ({
                 note: 'paste this whole object to Claude — it contains every audit. compare = version table; funnel = phase aggregation (READ deepHeldRate, not deepRate); phases = raw per-run rows; damage = HP-loss attribution; boss = spawn timetable + size growth + predicted ringAt; learning = CEM dims/tags/enemy types (atEdge = the BOX is wrong, converged = no exploration left); park/income/hunt/mark/pause/picks = the per-subsystem audits; cap = live kill-protocol state.',
-                summary: reportSummary({
-                    compare: safe(() => versionComparison(), null),
-                    funnel: safe(() => window.pineBot.phaseAudit(), null),
-                    damage: safe(() => window.pineBot.damageAudit(), null),
-                    boss: safe(() => window.pineBot.bossCensus(), null),
-                    learning: safe(() => window.pineBot.learning(), null)
-                }),
+                summary: null,
                 compare: safe(() => versionComparison(), null),
                 funnel: safe(() => window.pineBot.phaseAudit(), null),
                 phases: safe(() => (phaseAudit.rows || []).slice(), null),

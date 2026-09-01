@@ -1348,7 +1348,11 @@
                     // v6.112.0: the mitigation arithmetic and the run boundary
                     // the boss census books on.
                     breakEven: () => contactBreakEven(),
-                    regenRate: () => regenRate(),   // v6.118.0: the regen spine reads this
+                    regenRate: () => regenRate(),
+                    // v6.122.0: read the death-cause accumulator back. The
+                    // `line` class was booking proximity to UNARMED lanes as
+                    // a death, and nothing could see it from outside.
+                    dangerAccum: () => Object.assign({}, dangerAccum),   // v6.118.0: the regen spine reads this
                     reportSummary, showReport,   // v6.113.0: the overlay report is the product now
                     endRun: () => finishRun(),
                     startDemo: () => { demoToggle(); }, phaseRows: () => (phaseAudit.rows || []).slice(),
@@ -1383,7 +1387,14 @@
                     setEnemyN: obj => { learn.enemyTypeN = obj; },
                     // v6.107.0 drop-anchor / ring hooks
                     setKillRate: v => { killRate = v; },
-                    tunable: () => TUNABLE,
+                    // v6.122.0: REMOVED — this was a SECOND `tunable` key in
+                    // the same object literal, and the later key wins, so the
+                    // deep copy 70 lines above was silently replaced by a
+                    // reference to the LIVE search box. Any consumer that
+                    // mutated it rewrote the real bounds that sampleParams,
+                    // refitCem, sanitizeCem and the box-reopen migration all
+                    // clamp against. tunablePrior() kept its copy; these two
+                    // halves of the same idiom had drifted apart.
                     setCemMean: (k, v) => { learn.cem.mean[k] = v; },
                     bossRing: () => bossRingRef.v,
                     // v6.107.0 tag-bandit hooks
@@ -2026,15 +2037,20 @@
             // stat the page has stopped exposing) must degrade that key to
             // null, never take the whole report down with it — the failure
             // mode that would send the user straight back to the console.
-            window.pineBot.report = () => ({
+            // v6.122.0: the embedded summary was built from a FIVE-KEY
+            // subset, while reportSummary also reads `r.income.buckets` and
+            // `r.craft`. The pasted JSON therefore lost the two lines the code
+            // flags hardest — bucket-0 HP net ("the single most diagnostic
+            // number in the report", and "it was buried") and the CRAFT
+            // census, the one that says which half of the BLACK VERMOUTH
+            // chain is broken. showReport passes the whole object, so the
+            // ON-SCREEN block was complete and the COPIED text was not, which
+            // is the worse way round: the 📋 button is the product.
+            // Build the body once, then summarise THAT.
+            window.pineBot.report = () => { const r = reportBody(); r.summary = safe(() => reportSummary(r), null); return r; };
+            const reportBody = () => ({
                 note: 'paste this whole object to Claude — it contains every audit. compare = version table; funnel = phase aggregation (READ deepHeldRate, not deepRate); phases = raw per-run rows; damage = HP-loss attribution; boss = spawn timetable + size growth + predicted ringAt; learning = CEM dims/tags/enemy types (atEdge = the BOX is wrong, converged = no exploration left); park/income/hunt/mark/pause/picks = the per-subsystem audits; cap = live kill-protocol state.',
-                summary: reportSummary({
-                    compare: safe(() => versionComparison(), null),
-                    funnel: safe(() => window.pineBot.phaseAudit(), null),
-                    damage: safe(() => window.pineBot.damageAudit(), null),
-                    boss: safe(() => window.pineBot.bossCensus(), null),
-                    learning: safe(() => window.pineBot.learning(), null)
-                }),
+                summary: null,
                 compare: safe(() => versionComparison(), null),
                 funnel: safe(() => window.pineBot.phaseAudit(), null),
                 phases: safe(() => (phaseAudit.rows || []).slice(), null),

@@ -676,7 +676,6 @@
             // best target up with the stream.
             flameAimValue: 95,   // measured: below ~90 the aim term loses to ordinary station/loot pull
             flameAimRange: 420,
-            poHugPad: 8,
             // v6.86.2 FEASIBILITY GATE. A drunk-wave passout carries
             // DIFF().hp * 8*(1+(estBoss-1)*0.7)*(1+gt/60*0.22) * 2 HP:
             // ~1.4k at 5 min, 7k at 10, 27k at 15, 77k at 20, 500k at 30.
@@ -695,8 +694,6 @@
             // the give-up gate unreachable for a whole 76-minute run.
             poProbeHardS: 30,
             poEngageRange: 150,    // "in range" for the probe clock
-            poFocusValue: 26,
-            poBlockPenalty: 18,    // its body is impassable (the game pushes you out) — not painful, just in the way
             passoutValue: 34,     // passed-out customers = gold + XP (user: weigh the loot HEAVILY)
             wallSiegeValue: 26,   // NO BOOKING walls = big gold/XP piles (user: weigh the loot HEAVILY)
             bossEngageValue: 24,  // boss kills = big loot (user: weigh the loot HEAVILY)
@@ -778,7 +775,6 @@
             // PERPENDICULAR to the ray. `laneEscape` makes that a movement
             // override, like park and hunt, rather than one more term
             // competing inside the sum it is supposed to overrule.
-            laneEscapePad: 8,         // clear the band by this much before releasing
             laneEscapeArmS: 1.6       // seconds of telegraph left that still counts as "go now"
         },
 
@@ -1018,7 +1014,6 @@
             // ROW-READING: runs at ~9,0xx s on 6.99.3+ are CAPPED
             // (right-censored); the ~12,0xx censoring applies to 6.96.0-6.99.2.
             runCapS: 9000,
-            capLegS: 8,            // v6.96.2: seconds per patrol leg before the circuit advances (unused from 6.101.0 — see capStandS)
             // v6.101.0 THE CAP LADDER (user: "the bot is not dying even with
             // the kill protocol"). Measured proof the 6.96.2 patrol failed:
             // 6.100.0 booked runs at 25,141 s and 22,800 s against runCapS
@@ -1160,6 +1155,23 @@
             // live player radius, which is what the code used) and 64.03 at 12
             // (the fallback) — against a 70 px mark reach. Anything above ~10
             // puts the seat inside every mark that can spawn.
+            // ── v6.122.0 FIVE DEAD CONFIG KEYS REMOVED ─────────────────────
+            // Each appeared exactly once in the whole repo — at its own
+            // definition. None is a CEM dimension, so nothing read them:
+            //   movement.poHugPad        (the hug was retracted in 6.86.4)
+            //   movement.poFocusValue    (the station uses passoutValue)
+            //   movement.poBlockPenalty  (the code hardcodes 55 on the body
+            //                             and 60 for a path crossing it — and
+            //                             game-source-facts.md cites this key
+            //                             as the shipped implementation of
+            //                             'passouts are obstacles'. It is not.)
+            //   deepHell.laneEscapePad   (shipped with the 6.111.0 lane escape
+            //                             as 'clear the band by this much
+            //                             before releasing' — there is no
+            //                             release hysteresis in the override)
+            //   deepHell.capLegS         (self-documented unused from 6.101.0)
+            // A config key that is read by nothing is a claim about behaviour
+            // that is not true, and this file is read as documentation.
             cornerInset: 0,
             freezeEntryToS: 2400,   // v6.91.4: the window where a freeze is worth double
             parkYieldS: 20,         // v6.91.4: seconds park may be suspended per frozen-boss episode
@@ -1400,7 +1412,25 @@
         // named here instead of living as literals in three comments. See
         // contactBreakEven(); mitigation-model.md carries the derivations.
         mitigation: {
-            invulnFrames: 38,   // hurtPlayer sets player.invuln = 38 (on the PLAYER, not per attacker)
+            // ── v6.122.0 THE 33-vs-38 DISCREPANCY IS STILL OPEN ────────────
+            // An audit proposed changing this to 33 on the strength of
+            // `game-source-facts.md` ("the invuln window is 33 frames, not
+            // 38"). NOT TAKEN. The project's own record contradicts itself and
+            // says so explicitly: `mitigation-model.md` reads the source as
+            // `hurtPlayer` setting `invuln = 38` and lists, under Open
+            // Questions, "3. The 33 vs 38 frame invuln discrepancy
+            // (`hurtPlayer` writes 38)."
+            //
+            // 38 is a DIRECT SOURCE READ. 33 was INFERRED from a measured hit
+            // rate, which a hit landing on the frame invuln expires would
+            // bias downward. A direct read outranks an inference, and neither
+            // outranks an actual re-read of `hurtPlayer` — which is what
+            // settles this and has not been done.
+            //
+            // Cost of being wrong: contactBreakEven() reports 1.579 HP/s
+            // instead of 1.818, a 15% understatement of the seat's drain.
+            // Inert as a gate today (parkRegenBreakEven: 0).
+            invulnFrames: 38,   // hurtPlayer sets player.invuln on the PLAYER, not per attacker
             contactDmg: 22.4    // flat common-mob contact, before armour subtraction
         },
         phaseAudit: {
@@ -2981,7 +3011,9 @@
     const CHROME_CTRL = /^(save|settings|options|close|recipes?|mobs?|staff|items|drinks|book|index|music|sfx|sound|mute|pause|resume|quit|exit|menu|credits|help|language|한국어|english)\b|^[⚙📖⏸⏯🔇🔊🔈✕✖×☰❓]/i;
     let levelupStuckAt = 0;     // v6.88.1 L3: level-up watchdog, owned by the levelup handler
     let saveWarned = false;     // v6.88.0 AUDIT R1: surface a quota failure once, not never
-    let craftPending = null;    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
+    let craftPending = null;
+    let craftStateBooked = false;   // v6.122.0: dedupe for STATE_HANDLERS.craft
+    // v6.88.0 AUDIT C1: signature of the fusion prompt we have already clicked
     // ── v6.118.0 THE CRAFT PROMPT, MEASURED RATHER THAN GUESSED ─────────────
     //
     // USER: "there's also a bug where black vermouth craft doesn't trigger."
@@ -3010,8 +3042,18 @@
     function craftAuditSave() {
         try { localStorage.setItem(CRAFT_AUDIT_KEY, JSON.stringify(craftAudit)); } catch (e) { }
     }
+    // v6.122.0: `ready` and `seen` were incremented in memory and NEVER
+    // saved — craftAuditSave() was called only after `clicked` and
+    // `confirmed`. So unless a craft was actually clicked, every reload wiped
+    // them and the audit reported `ready: 0, seen: 0` forever. That is why
+    // "does the BLACK VERMOUTH pair ever reach 6/6?" has been unanswerable
+    // for four versions. Throttled to once a second: takeCraftPrompt runs
+    // every 260 ms and a localStorage write per tick is not free.
+    let craftAuditSavedAt = 0;
     function craftAuditNote(kind, label) {
         craftAudit[kind] = (craftAudit[kind] || 0) + 1;
+        const nowCA = Date.now();
+        if (nowCA - craftAuditSavedAt > 1000) { craftAuditSavedAt = nowCA; craftAuditSave(); }
         if (label) {
             const k = String(label).slice(0, 40);
             craftAudit.labels[k] = (craftAudit.labels[k] || 0) + 1;

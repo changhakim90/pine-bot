@@ -1005,7 +1005,36 @@
         for (const e of th.enemies) if (Math.hypot(e.x - p.x, e.y - p.y) < e.r + contactReach) { dangerAccum.contact += 0.25; break; }
         for (const q of th.projectiles) if (Math.hypot(q.x - p.x, q.y - p.y) < q.r * 2.5) { dangerAccum.proj += 0.25; break; }
         for (const m of th.marks) if (Math.hypot(m.x - p.x, m.y - p.y) < m.r) { dangerAccum.mark += 0.25; break; }
-        for (const l of th.lines) if (lineCost(l, p.x, p.y)) { dangerAccum.line += 0.25; break; }
+        // ── v6.122.0 PROXIMITY TO AN UNARMED LANE WAS BOOKING A DEATH ──────
+        // The other three classes require a REAL overlap — inside the body,
+        // inside the mark, inside the shot. This one accepted any non-zero
+        // `lineCost`, and lineCost is GRADED across the whole 63+pad planning
+        // band and does not look at `armed`. So merely standing near a ray
+        // that might never fire fed the accumulator that argmaxes into
+        // `lastDeathCause`.
+        //
+        // 6.120.0 walked straight into it: the telegraph fix made the bot
+        // notice and flee unarmed lanes, laneIn went 36 -> 112 per run, and
+        // `line` jumped to 31-35% of death verdicts — against 2% of HP lost
+        // and 1% as sole cause. Over 2,423 runs there are 1,278 sole lane hits
+        // total, 0.53 per run; a third of runs cannot be ending on one.
+        //
+        // The HP-loss classifier twenty lines below already gets this right by
+        // requiring `l.armed === true`, which is why `sole.line` stayed flat
+        // while the verdict count doubled. Two classifiers, one hazard,
+        // opposite answers — and the wrong one decided the verdict.
+        //
+        // This is NOT cosmetic: lastDeathCause feeds scoreCard in six places
+        // and the CEM's directed-defense nudge, and the CEM had already
+        // responded by pushing threat.lineArmedWeight 4.62 -> 8.12.
+        for (const l of th.lines) {
+            if (l.armed !== true) continue;                       // a telegraph is not a cause of death
+            const perp = linePerp(l, p.x, p.y);
+            const kill = (T.lineKillPerp != null ? T.lineKillPerp : 63);
+            // no readable ray (legacy box/segment shapes): fall back to the
+            // old any-cost test rather than losing the class entirely.
+            if (perp == null ? lineCost(l, p.x, p.y) : perp < kill) { dangerAccum.line += 0.25; break; }
+        }
         if (lastHpSample != null && hp < lastHpSample - 0.5) {
             const loss = lastHpSample - hp;
             // v6.89.11 A MARK IS GONE BY THE TIME ITS DAMAGE IS SEEN.
@@ -1227,9 +1256,21 @@
         // rectangle) is not part of the crowd. It is hundreds of px outside the
         // field, so leaving it in would drag the centroid off the map and bend
         // the whole kite circle toward a body nothing can reach.
-        let cx = 0, cy = 0, chasers = 0;
+        // v6.122.0: SEED FROM THE PLAYER, NOT FROM (0,0). The consumer at the
+        // standoff term gates on `th.enemies.length`, not on `chasers`, so a
+        // field containing ONLY walls / stationary bosses / dormant bosses —
+        // an ordinary day state, and exactly the `wallFocus` state this file
+        // calls "THE kill target" — left cx,cy at the arena ORIGIN and had the
+        // bot hold a 150 px ring around the top-left corner of the map.
+        // Reproduced with wallSiegeValue silenced: one NO BOOKING wall at
+        // (330,200) with the player at (200,200) steered dx=-0.707 dy=-0.707,
+        // straight at (0,0); adding a single live mob restored a real bearing.
+        // Seeding from p makes the zero-chaser case a no-op (err 0 either way)
+        // instead of a phantom attractor.
+        let cx = p.x, cy = p.y, chasers = 0;
         for (const e of th.enemies) {
             if (e.wall || e.dormant || (e.boss && e.stationary)) continue;
+            if (chasers === 0) { cx = 0; cy = 0; }
             cx += e.x; cy += e.y; chasers++;
         }
         if (chasers) { cx /= chasers; cy /= chasers; }
@@ -1465,8 +1506,20 @@
             // shapes with no readable ray: fall back to the old depth test
             else if (inBand > 0.55) urgent = true;
             if (!urgent) continue;
-            laneUrgent = true;
+            // ── v6.122.0 THE `ang` GUARD WAS ONE LINE TOO LATE ──────────────
+            // `laneUrgent` used to be set BEFORE this filter, so a thrower's
+            // windup — a synthetic segment {x1:e.x, y1:e.y, x2:p.x, y2:p.y}
+            // that TERMINATES AT THE PLAYER (gather, ~line 383) — reported a
+            // zero-distance hit every tick, tripped `inBand > 0.55`, and
+            // latched laneUrgent with roadLines EMPTY. `plan.laneUrgent` is an
+            // OR-term in the dash trigger, so any thrower winding up inside
+            // enemyRange fired the dash on every gate interval regardless of
+            // danger. That is the 6.89.13 regression exactly; `lineHere` was
+            // given this filter at the time and `laneUrgent` was not.
+            // Reproduced: a thrower + vomitUntil with roadLines=[] yielded
+            // laneUrgent=true, laneIn=0, lineHere=false.
             if (typeof l.ang !== 'number' || typeof l.x !== 'number' || typeof l.y !== 'number') continue;
+            laneUrgent = true;
             const s = (p.y - l.y) * Math.cos(l.ang) - (p.x - l.x) * Math.sin(l.ang);
             const sgn = s >= 0 ? 1 : -1;
             // weight by how deep in the band we are: the lane we are centred
