@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.118.0
+// @version      6.119.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.118.0';
+    const SCRIPT_VERSION = '6.119.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -1924,11 +1924,54 @@
     // v6.88.6 note in 03-scoring: raising it to 200 made the order
     // lexicographic and dropped supersPerRun 1.9 -> 1.1. The cocktail block
     // below is byte-identical and keeps indices 11..17.
+    // ══ v6.119.0 THE DAY ORDER IS NOW THE USER'S PRIORITY LIST ══════════════
+    //
+    // USER, stated as doctrine:
+    //   * "black vermouth and simple syrup and olives and negroni are essential
+    //      for defense and increased HP"
+    //   * "mint is essential for super cocktail for southside, the best boss
+    //      killer during hell mode"
+    //   * "cranberry is essential for the wide radius of pick up of items like
+    //      random tequila shots, time pause, and flame cross that appear when
+    //      you kill mobs"
+    //   * "tomato juice is a good to have for its cutting of cooldown"
+    //   * (separately) "water instead of tonic could have been a better early pick"
+    //
+    // TONIC is not on that list. It was rank 1.
+    //
+    // This is a DELIBERATE revision of the 6.106.0 ordering, and that version's
+    // evidence deserves stating rather than quietly overwriting. It measured,
+    // and replicated, that SUPERS separate survivors from deaths (65% of hell
+    // deaths had zero supers against 0% of deep survivors; defense showed NO
+    // separation) and moved the super keys to the front on that basis. TONIC
+    // keys TWO lines, so it led.
+    //
+    // What that measurement actually licenses is "a super key first" — not
+    // "TONIC first". MINT is a super key too, and three things now say it is
+    // the one that matters:
+    //   1. The user's own play: SOUTH SIDE is the hell boss killer.
+    //   2. 6.118.0's top five runs are SOUTH SIDE, SOUTH SIDE, SOUTH SIDE,
+    //      SOUTH SIDE, SOUTH SIDE — every one of them.
+    //   3. supersPerRun ROSE to 0.8 (from 0.4/0.5) in the same batch that put
+    //      a 240-point regen spine into hell, so funding regen has not so far
+    //      cost the super lines anything measurable.
+    // So MINT leads and TONIC is demoted to the back of the ingredients. The
+    // two tonic lines are still reachable; they are no longer bought FIRST.
+    //
+    // Craft ordering is preserved and is not negotiable — a craft result can
+    // never be picked before both of its halves:
+    //   SIMPLE SYRUP after WATER + SUGAR;  BLACK VERMOUTH after DRY + SWEET.
+    // `slot-lockout` asserts both, and asserts the new ranks as literals.
     const DAY_ORDER = [
-        'TONIC', 'MINT', 'SUGAR', 'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH',
-        'BLACK VERMOUTH', 'WATER', 'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY',
+        'MINT',                                  // 1  SOUTH SIDE — the hell boss killer
+        'OLIVE',                                 // 2  defense
+        'SUGAR', 'WATER', 'SIMPLE SYRUP',        // 3-5 regen/HP, halves before the craft
+        'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH',   // 6-8 halves before the craft
+        'CRANBERRY',                             // 9  pickup radius (tequila / time stop / flame cross)
+        'TOMATO JUICE',                          // 10 cooldown — "good to have"
+        'TONIC',                                 // 11 still keys two lines; no longer first
         'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
-    ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 8, SUGAR 3).
+    ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 4, SUGAR 3).
          // OLIVE is still the first thing after the three keys, and 6.105.0's
          // entry-armour checkpoint (+18 from 750s, +40 from 1050s) is unchanged,
          // so armour is still bought before the entrance — it is just no longer
@@ -5703,9 +5746,29 @@
             //
             // And it runs in hell. That is the half that matters for a run
             // already at minute 76 with nothing.
-            // SCOPED TO HELL, and `slot-lockout` is why. The first draft paid
-            // this spine in the day too, and the guard went red on both of its
-            // invariants at once:
+            // ── v6.119.0 THE SPINE RUNS IN THE DAY TOO ────────────────────────
+            //
+            // 6.118.0 scoped it to hell because `slot-lockout` said WATER at 479
+            // outranked every super key. That guard has now been revised to the
+            // user's own doctrine (see DAY_ORDER in 01) — TONIC is demoted, MINT
+            // leads — so the collision it was protecting no longer exists in the
+            // form it was written for.
+            //
+            // And the hell-only scoping does not work, which the first batch
+            // shows plainly. `regen` is now the LARGEST seat-miss bucket at 33%
+            // (armour fell 20% -> 2% and yield 24% -> 6%, so this is what was
+            // underneath), while entrySurvival is 0.40: SIXTY PERCENT of hell
+            // entrants die within 300 s of the entrance. A spine that only opens
+            // at hell entry has a couple of hundred seconds and one or two
+            // level-ups to fix an economy the whole day was needed to build.
+            // The rows say it did not: def 35 / regen 0 for 15,073 ticks,
+            // def 23.3 / regen 0 for 1,414, def 35 / regen 0.57 for 4,084.
+            //
+            // So it opens at regenFromS (120 s) in both phases. The syrup guard
+            // below still keeps the craft behind its halves.
+            //
+            // The historical note, kept because it is the reason this was ever
+            // hell-only: the first draft reddened both guard invariants at once:
             //     {tonic:262, mint:278, sugar:273, dry:247, sweet:271, water:479}
             //     sugar 273  syrup 469
             // WATER at 479 outranks every super KEY, and SIMPLE SYRUP outranks
@@ -5727,7 +5790,7 @@
             // minutes of hell could not buy a single WATER. That is the half
             // this ships.
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                hellDetected && gtR >= regenFromS) {
+                gtR >= regenFromS) {
                 const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
                 const haveR = regenRate();
                 // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
@@ -5844,7 +5907,32 @@
         // mark-escape margin. The two crafts are pure upside — applyCraft keeps
         // the materials at full level with their stats still applying and only
         // frees the slot count.
-        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name)) {
+        // ── v6.119.0 A CRAFT RESULT DOES NOT COLLECT THIS UNTIL IT IS REAL ──
+        //
+        // Both craft RESULTS (BLACK VERMOUTH, SIMPLE SYRUP) are on this list and
+        // none of their four halves are, so the result collected +38 that its own
+        // ingredients did not. The old day order hid that behind six ranks of
+        // separation (SUGAR 3 vs SIMPLE SYRUP 9 = 66 points at the 11-per-rank
+        // step, comfortably over the 38). The 6.119.0 re-rank puts them two
+        // ranks apart — 22 against 38 — and `slot-lockout` caught it instantly:
+        //
+        //     sugar 273   syrup 273
+        //
+        // A TIE with its own ingredient, which is the 6.112.0 mistake yet again,
+        // and the third distinct route into it. Rather than re-tune the ranks
+        // until the arithmetic happens to work, remove the cause: a craft result
+        // is not a "top ingredient" while it cannot be crafted. The bonus
+        // arrives with the craft, and the halves lead until then — which is what
+        // the comment above already claims ("a craft is only reachable if both
+        // materials reach Lv6"). This holds under ANY future reorder.
+        const craftUnmade = (() => {
+            for (const c of EVOLUTIONS) {
+                if (c.result !== name) continue;
+                return c.parts.some(p => (ownedLevels[p] || 0) < 6);
+            }
+            return false;
+        })();
+        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name) && !craftUnmade) {
             add(38 + (hellDetected ? 14 : 0), 'top-ingredient');
         }
         // ...and the four halves that BECOME those crafts inherit the priority,

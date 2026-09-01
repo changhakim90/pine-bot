@@ -1922,11 +1922,54 @@
     // v6.88.6 note in 03-scoring: raising it to 200 made the order
     // lexicographic and dropped supersPerRun 1.9 -> 1.1. The cocktail block
     // below is byte-identical and keeps indices 11..17.
+    // ══ v6.119.0 THE DAY ORDER IS NOW THE USER'S PRIORITY LIST ══════════════
+    //
+    // USER, stated as doctrine:
+    //   * "black vermouth and simple syrup and olives and negroni are essential
+    //      for defense and increased HP"
+    //   * "mint is essential for super cocktail for southside, the best boss
+    //      killer during hell mode"
+    //   * "cranberry is essential for the wide radius of pick up of items like
+    //      random tequila shots, time pause, and flame cross that appear when
+    //      you kill mobs"
+    //   * "tomato juice is a good to have for its cutting of cooldown"
+    //   * (separately) "water instead of tonic could have been a better early pick"
+    //
+    // TONIC is not on that list. It was rank 1.
+    //
+    // This is a DELIBERATE revision of the 6.106.0 ordering, and that version's
+    // evidence deserves stating rather than quietly overwriting. It measured,
+    // and replicated, that SUPERS separate survivors from deaths (65% of hell
+    // deaths had zero supers against 0% of deep survivors; defense showed NO
+    // separation) and moved the super keys to the front on that basis. TONIC
+    // keys TWO lines, so it led.
+    //
+    // What that measurement actually licenses is "a super key first" — not
+    // "TONIC first". MINT is a super key too, and three things now say it is
+    // the one that matters:
+    //   1. The user's own play: SOUTH SIDE is the hell boss killer.
+    //   2. 6.118.0's top five runs are SOUTH SIDE, SOUTH SIDE, SOUTH SIDE,
+    //      SOUTH SIDE, SOUTH SIDE — every one of them.
+    //   3. supersPerRun ROSE to 0.8 (from 0.4/0.5) in the same batch that put
+    //      a 240-point regen spine into hell, so funding regen has not so far
+    //      cost the super lines anything measurable.
+    // So MINT leads and TONIC is demoted to the back of the ingredients. The
+    // two tonic lines are still reachable; they are no longer bought FIRST.
+    //
+    // Craft ordering is preserved and is not negotiable — a craft result can
+    // never be picked before both of its halves:
+    //   SIMPLE SYRUP after WATER + SUGAR;  BLACK VERMOUTH after DRY + SWEET.
+    // `slot-lockout` asserts both, and asserts the new ranks as literals.
     const DAY_ORDER = [
-        'TONIC', 'MINT', 'SUGAR', 'OLIVE', 'DRY VERMOUTH', 'SWEET VERMOUTH',
-        'BLACK VERMOUTH', 'WATER', 'SIMPLE SYRUP', 'TOMATO JUICE', 'CRANBERRY',
+        'MINT',                                  // 1  SOUTH SIDE — the hell boss killer
+        'OLIVE',                                 // 2  defense
+        'SUGAR', 'WATER', 'SIMPLE SYRUP',        // 3-5 regen/HP, halves before the craft
+        'DRY VERMOUTH', 'SWEET VERMOUTH', 'BLACK VERMOUTH',   // 6-8 halves before the craft
+        'CRANBERRY',                             // 9  pickup radius (tequila / time stop / flame cross)
+        'TOMATO JUICE',                          // 10 cooldown — "good to have"
+        'TONIC',                                 // 11 still keys two lines; no longer first
         'SOUTH SIDE', 'MOJITO', 'VODKA TONIC', 'GIN TONIC', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'
-    ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 8, SUGAR 3).
+    ];   // SIMPLE SYRUP still sits after BOTH its halves (WATER 4, SUGAR 3).
          // OLIVE is still the first thing after the three keys, and 6.105.0's
          // entry-armour checkpoint (+18 from 750s, +40 from 1050s) is unchanged,
          // so armour is still bought before the entrance — it is just no longer

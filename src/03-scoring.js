@@ -1184,9 +1184,29 @@
             //
             // And it runs in hell. That is the half that matters for a run
             // already at minute 76 with nothing.
-            // SCOPED TO HELL, and `slot-lockout` is why. The first draft paid
-            // this spine in the day too, and the guard went red on both of its
-            // invariants at once:
+            // ── v6.119.0 THE SPINE RUNS IN THE DAY TOO ────────────────────────
+            //
+            // 6.118.0 scoped it to hell because `slot-lockout` said WATER at 479
+            // outranked every super key. That guard has now been revised to the
+            // user's own doctrine (see DAY_ORDER in 01) — TONIC is demoted, MINT
+            // leads — so the collision it was protecting no longer exists in the
+            // form it was written for.
+            //
+            // And the hell-only scoping does not work, which the first batch
+            // shows plainly. `regen` is now the LARGEST seat-miss bucket at 33%
+            // (armour fell 20% -> 2% and yield 24% -> 6%, so this is what was
+            // underneath), while entrySurvival is 0.40: SIXTY PERCENT of hell
+            // entrants die within 300 s of the entrance. A spine that only opens
+            // at hell entry has a couple of hundred seconds and one or two
+            // level-ups to fix an economy the whole day was needed to build.
+            // The rows say it did not: def 35 / regen 0 for 15,073 ticks,
+            // def 23.3 / regen 0 for 1,414, def 35 / regen 0.57 for 4,084.
+            //
+            // So it opens at regenFromS (120 s) in both phases. The syrup guard
+            // below still keeps the craft behind its halves.
+            //
+            // The historical note, kept because it is the reason this was ever
+            // hell-only: the first draft reddened both guard invariants at once:
             //     {tonic:262, mint:278, sugar:273, dry:247, sweet:271, water:479}
             //     sugar 273  syrup 469
             // WATER at 479 outranks every super KEY, and SIMPLE SYRUP outranks
@@ -1208,7 +1228,7 @@
             // minutes of hell could not buy a single WATER. That is the half
             // this ships.
             if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null &&
-                hellDetected && gtR >= regenFromS) {
+                gtR >= regenFromS) {
                 const floorR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
                 const haveR = regenRate();
                 // SIMPLE SYRUP is the WATER + SUGAR craft: it may only take the
@@ -1325,7 +1345,32 @@
         // mark-escape margin. The two crafts are pure upside — applyCraft keeps
         // the materials at full level with their stats still applying and only
         // frees the slot count.
-        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name)) {
+        // ── v6.119.0 A CRAFT RESULT DOES NOT COLLECT THIS UNTIL IT IS REAL ──
+        //
+        // Both craft RESULTS (BLACK VERMOUTH, SIMPLE SYRUP) are on this list and
+        // none of their four halves are, so the result collected +38 that its own
+        // ingredients did not. The old day order hid that behind six ranks of
+        // separation (SUGAR 3 vs SIMPLE SYRUP 9 = 66 points at the 11-per-rank
+        // step, comfortably over the 38). The 6.119.0 re-rank puts them two
+        // ranks apart — 22 against 38 — and `slot-lockout` caught it instantly:
+        //
+        //     sugar 273   syrup 273
+        //
+        // A TIE with its own ingredient, which is the 6.112.0 mistake yet again,
+        // and the third distinct route into it. Rather than re-tune the ranks
+        // until the arithmetic happens to work, remove the cause: a craft result
+        // is not a "top ingredient" while it cannot be crafted. The bonus
+        // arrives with the craft, and the halves lead until then — which is what
+        // the comment above already claims ("a craft is only reachable if both
+        // materials reach Lv6"). This holds under ANY future reorder.
+        const craftUnmade = (() => {
+            for (const c of EVOLUTIONS) {
+                if (c.result !== name) continue;
+                return c.parts.some(p => (ownedLevels[p] || 0) < 6);
+            }
+            return false;
+        })();
+        if (!atCap && type === 'passive' && TOP_INGREDIENTS.includes(name) && !craftUnmade) {
             add(38 + (hellDetected ? 14 : 0), 'top-ingredient');
         }
         // ...and the four halves that BECOME those crafts inherit the priority,

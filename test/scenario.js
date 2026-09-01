@@ -2702,25 +2702,59 @@ if (which === 'slot-lockout') {
     // (the super-line and craft-half terms both move these cards).
     // \b matters: /day-order1\b/ must NOT match `day-order11`.
     const tagOf = n => T.scoreCard({ n, type: 'passive', lv: 0, maxlv: 6 }, 0, []).why || '';
-    test('TONIC is rank 1 in the day order (two super lines)', () =>
-        assert.ok(/day-order1\b/.test(tagOf('TONIC')), tagOf('TONIC')));
-    test('MINT is rank 2 (SOUTH SIDE key)', () =>
-        assert.ok(/day-order2\b/.test(tagOf('MINT')), tagOf('MINT')));
-    test('SUGAR is rank 3 (MOJITO key)', () =>
-        assert.ok(/day-order3\b/.test(tagOf('SUGAR')), tagOf('SUGAR')));
-    test('OLIVE follows the three keys at rank 4, ahead of every craft half', () =>
-        assert.ok(/day-order4\b/.test(tagOf('OLIVE')), tagOf('OLIVE')));
-    // ...and behaviourally, in a real day, each key outscores the craft half
-    // it used to sit behind. This is the consequence the ranks exist for.
-    test('each super key outscores the vermouth/filler it used to trail', () => {
+    // ── v6.119.0 THE RANKS ARE NOW THE USER'S DOCTRINE ──────────────────
+    // These assertions were rewritten deliberately, not repaired. They used to
+    // pin TONIC at rank 1 on 6.106.0's evidence that supers separate survivors
+    // from deaths. That evidence licensed "a super key first", and the user has
+    // now said which key: "mint is essential for super cocktail for southside,
+    // the best boss killer during hell mode" — and every one of 6.118.0's top
+    // five runs is a SOUTH SIDE build. TONIC is not on the user's essentials
+    // list at all and moves to the back of the ingredients.
+    test('MINT is rank 1 — SOUTH SIDE, the hell boss killer', () =>
+        assert.ok(/day-order1\b/.test(tagOf('MINT')), tagOf('MINT')));
+    test('OLIVE is rank 2 — defense', () =>
+        assert.ok(/day-order2\b/.test(tagOf('OLIVE')), tagOf('OLIVE')));
+    test('the regen chain is 3-4-5, halves before the craft', () => {
+        assert.ok(/day-order3\b/.test(tagOf('SUGAR')), tagOf('SUGAR'));
+        assert.ok(/day-order4\b/.test(tagOf('WATER')), tagOf('WATER'));
+        assert.ok(/day-order5\b/.test(tagOf('SIMPLE SYRUP')), tagOf('SIMPLE SYRUP'));
+    });
+    test('CRANBERRY is rank 9 — the pickup radius the user named essential', () =>
+        assert.ok(/day-order9\b/.test(tagOf('CRANBERRY')), tagOf('CRANBERRY')));
+    test('TONIC is demoted to rank 11, behind every essential', () =>
+        assert.ok(/day-order11\b/.test(tagOf('TONIC')), tagOf('TONIC')));
+    // ...and behaviourally, the consequence the re-rank exists for.
+    test('the user\'s essentials all outscore TONIC in a real day', () => {
         const got = { tonic: sc('TONIC', 'passive', 0), mint: sc('MINT', 'passive', 0),
-                      sugar: sc('SUGAR', 'passive', 0), dry: sc('DRY VERMOUTH', 'passive', 0),
-                      sweet: sc('SWEET VERMOUTH', 'passive', 0), water: sc('WATER', 'passive', 0) };
+                      olive: sc('OLIVE', 'passive', 0), water: sc('WATER', 'passive', 0),
+                      cranberry: sc('CRANBERRY', 'passive', 0) };
         const show = JSON.stringify(Object.fromEntries(
             Object.entries(got).map(([k, v]) => [k, Math.round(v)])));
-        assert.ok(got.tonic > got.dry, show);
-        assert.ok(got.mint > got.sweet, show);
-        assert.ok(got.sugar > got.water, show);
+        assert.ok(got.mint > got.tonic, 'MINT must lead: ' + show);
+        assert.ok(got.olive > got.tonic, 'OLIVE must lead: ' + show);
+        // the user's own words: "water instead of tonic could have been a
+        // better early pick". This is that sentence, as an assertion.
+        assert.ok(got.water > got.tonic, 'WATER must beat TONIC: ' + show);
+        assert.ok(got.cranberry > got.tonic, 'CRANBERRY must lead: ' + show);
+    });
+    // The craft ordering is NOT doctrine — it is mechanics, and it survives any
+    // reorder. A craft result is unreachable until both halves are maxed, so it
+    // must never outscore either of them. Three separate routes into breaking
+    // this have now been found (6.112.0's HP/s split, 6.118.0's regen spine,
+    // 6.119.0's re-rank shrinking the gap under the +38 top-ingredient bonus),
+    // so it is asserted for BOTH crafts, not just the one that broke.
+    test('BLACK VERMOUTH ranks after BOTH of its halves', () => {
+        const bv = sc('BLACK VERMOUTH', 'passive', 0);
+        assert.ok(sc('DRY VERMOUTH', 'passive', 0) > bv,
+            'dry ' + Math.round(sc('DRY VERMOUTH', 'passive', 0)) + ' vermouth ' + Math.round(bv));
+        assert.ok(sc('SWEET VERMOUTH', 'passive', 0) > bv,
+            'sweet ' + Math.round(sc('SWEET VERMOUTH', 'passive', 0)) + ' vermouth ' + Math.round(bv));
+    });
+    test('...and a craft result collects no top-ingredient bonus while unmade', () => {
+        assert.ok(!/top-ingredient/.test(tagOf('SIMPLE SYRUP')), tagOf('SIMPLE SYRUP'));
+        assert.ok(!/top-ingredient/.test(tagOf('BLACK VERMOUTH')), tagOf('BLACK VERMOUTH'));
+        // ...but a genuine top ingredient still does
+        assert.ok(/top-ingredient/.test(tagOf('OLIVE')), tagOf('OLIVE'));
     });
     // SIMPLE SYRUP is a craft of WATER + SUGAR and must not be reachable
     // before both halves are — an invariant that survives any future reorder.
@@ -7972,6 +8006,57 @@ if (which === 'regen-spine') {
         assert.ok(!/regen-spine/.test(why('WATER', 'passive', 6)),
             'the spine is still paying after the floor is met: ' + why('WATER', 'passive', 6));
     });
+    // ── v6.119.0 THE SPINE RUNS IN THE DAY, WHICH IS WHERE THE RUN IS WON ──
+    // 6.118.0 scoped it to hell and the first batch showed why that fails:
+    // `regen` became the LARGEST seat-miss bucket at 33%, while entrySurvival
+    // 0.40 means 60% of hell entrants die within 300 s of the entrance. A spine
+    // that only opens at hell entry gets a couple of hundred seconds to fix an
+    // economy the whole day was needed to build.
+    {
+        // NOTE: T.setOwned MERGES into ownedLevels, it does not replace. The
+        // first draft of these tests inherited WATER 6 from the test above and
+        // read "no spine" as a bug in the build rather than in the fixture.
+        // hellDetected is a LATCH — clearing global.hell does not clear it, and
+        // the first draft of these tests passed with the spine scoped back to
+        // hell for exactly that reason (a "day" scene that was still latched
+        // hell). startRun() re-reads it from pendingHellEntry, which is the
+        // only thing that actually un-latches.
+        const day = (gt, over) => {
+            global.hell = false; global.gameTime = gt; T.startRun(); global.gameTime = gt;
+            T.setOwned(Object.assign({ 'MINT': 2, 'OLIVE': 2, 'WATER': 0,
+                'SUGAR': 0, 'SIMPLE SYRUP': 0 }, over || {}));
+            return null;
+        };
+        const dscore = (n) => { const r = T.scoreCard({ n: n, type: 'passive', lv: 0, maxlv: 6 }, 0, []); return r; };
+        test('WATER takes the spine in the DAY, past regenFromS', () => {
+            pineBot.stop(); day(600);
+            const w = dscore('WATER');
+            assert.ok(/regen-spine/.test(w.why || ''),
+                'no spine on WATER in the day at regen 0: ' + (w.why || ''));
+        });
+        test("...and it beats TONIC, which is the user's own sentence", () => {
+            day(600);
+            const w = dscore('WATER').score, t = dscore('TONIC').score;
+            assert.ok(w > t, 'WATER ' + Math.round(w) + ' does not beat TONIC ' + Math.round(t));
+        });
+        test('...and stops the moment the floor is met, in the day too', () => {
+            day(600, { 'WATER': 6 });
+            assert.ok(T.regenRate() >= C.deepHell.parkRegenRate, 'scene wrong: regen ' + T.regenRate());
+            assert.ok(!/regen-spine/.test(dscore('WATER').why || ''),
+                'still paying above the floor: ' + dscore('WATER').why);
+        });
+        test('...and not before regenFromS — the opening weapon still lands first', () => {
+            day(30);
+            assert.ok(!/regen-spine/.test(dscore('WATER').why || ''),
+                'spine paying at gt 30, before regenFromS: ' + dscore('WATER').why);
+        });
+        test("...and the floor test above is restored for what follows", () => {
+            global.gameTime = 4600; global.hell = true; T.latchHell();
+            T.setOwned(Object.assign({}, DIGEST, { 'WATER': 0, 'SUGAR': 0, 'SIMPLE SYRUP': 0 }));
+            assert.strictEqual(T.regenRate(), 0, 'scene not restored');
+        });
+    }
+
     // The floor is the SEAT's floor, so clearing the spine and opening the
     // corner are the same event. That link is the whole point of the version.
     test('the spine stops exactly where the park gate opens', () => {
