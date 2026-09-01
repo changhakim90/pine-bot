@@ -4302,7 +4302,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -8166,6 +8166,184 @@ if (which === 'regen-spine') {
                 'at WATER ' + lv + ' (regen ' + T.regenRate().toFixed(3) + ') spine=' + paying +
                 ' but the park floor is ' + floor);
             lv++;
+        }
+    });
+    done();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v6.123.0 THE ENTRY-REGEN CHECKPOINT — the regen leg of the park gate.
+//
+// `parkArmor` needs defense >= 30 AND regen >= deepHell.parkRegenRate. The
+// armour leg got a CHECKPOINT in 6.99.2/6.105.0 and it worked: parkMiss.armor
+// is 1.6-2.2%. The regen leg never got one, and at 6.122.0 n=79 parkMiss.regen
+// is 45.3% of all seat-miss ticks (472,405 of 1,043,391).
+//
+// parkAudit separates the two groups on regen and on nothing else:
+//     SEATED        medianEntryDef 35   medianEntryRegen 2.0
+//     NEVER PARKED  medianEntryDef 35   medianEntryRegen 0
+// and runs that enter under the bar park for ZERO seconds however long they
+// live (t=6257 def 35 regen 0 parkT 0 {regen:151657}). It is a threshold.
+//
+// The existing day term cannot close it because the CEM owns it: the dim
+// `strategy.regenDeficit` fell 17.82 -> 20.05 -> 11.36 across gens 737/740/741
+// in a box floored at 0, and the same state paid +59 at n=61 and +24 at n=70.
+// So this is a GATE outside CEM control, and the third test below is the one
+// that matters — it forces the dim to zero and demands the fix still fire.
+// ─────────────────────────────────────────────────────────────────────────────
+if (which === 'park-regen') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1100, hell: false } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+
+    // hellDetected is a LATCH: clearing global.hell does not clear it, and
+    // startRun() is the only thing that re-reads it. startRun() ALSO re-applies
+    // the CEM params, so any dim override has to be written AFTER it — the
+    // first draft of these tests set regenDeficit to 0 before startRun and
+    // silently measured the tuned value instead of zero.
+    const scene = (gt, waterLv, k) => {
+        global.hell = false; global.gameTime = gt; T.startRun(); global.gameTime = gt;
+        if (k != null) C.strategy.regenDeficit = k;
+        global.player.defense = 6 * 5.832;              // 34.992, the armour ceiling
+        global.player.regenBonus = 0.284 * waterLv;
+        T.setOwned({ 'WATER': waterLv, 'SUGAR': 0, 'SIMPLE SYRUP': 0, 'MINT': 2,
+            'OLIVE': 6, 'DRY VERMOUTH': 0, 'SWEET VERMOUTH': 0, 'TONIC': 0,
+            'NEGRONI': 0, 'GIN TONIC': 3 });
+    };
+    const card = (n, t, lv) => T.scoreCard({ n: n, type: t, lv: lv, maxlv: 6 }, 0, []);
+    const sc = (n, t, lv) => card(n, t, lv).score;
+    const why = (n, t, lv) => card(n, t, lv).why || '';
+    // The roster the never-parked run actually chose over WATER, priced in the
+    // same scene rather than assumed.
+    const ROSTER = [['MINT', 'passive', 2], ['SUGAR', 'passive', 0], ['TONIC', 'passive', 0],
+        ['DRY VERMOUTH', 'passive', 0], ['NEGRONI', 'weapon', 0], ['GIN TONIC', 'weapon', 3]];
+
+    test('the scene is the never-parked run: day, armour capped, regen under the bar', () => {
+        scene(1100, 2, null);
+        assert.ok(!T.hellLatched(), 'startRun did not un-latch — this is a hell scene');
+        assert.ok(Math.abs(T.regenRate() - 0.568) < 1e-9,
+            'regen is ' + T.regenRate() + ', not the 0.568 of WATER level 2');
+        assert.ok(T.regenRate() < C.deepHell.parkRegenRate,
+            'the scene already clears the park bar — it cannot test the miss');
+        assert.ok((global.player.defense || 0) >= 34.9,
+            'armour is not at the cap, so a failure here would be ambiguous');
+    });
+
+    // TOOTH 1 — the sign flip. This is the whole claim of the version.
+    test('at entry prep the regen card OUTRANKS the roster that beat it', () => {
+        scene(1100, 2, null);
+        const w = sc('WATER', 'passive', 2);
+        for (const r of ROSTER) {
+            assert.ok(w > sc(r[0], r[1], r[2]),
+                'WATER ' + Math.round(w) + ' still loses to ' + r[0] + ' ' + Math.round(sc(r[0], r[1], r[2])) +
+                ' — the seat miss is unchanged: ' + why('WATER', 'passive', 2));
+        }
+    });
+
+    // TOOTH 2 — the bar is READ, never hardcoded, and the stat is MEASURED.
+    // Two separate ways the same class of bug has bitten this project: the
+    // capStable defMin 35-vs-34.992 rounding, and the entry-armor `< 30` bar
+    // that only worked by the coincidence of OLIVE 5 vs OLIVE 6.
+    test('the gate follows deepHell.parkRegenRate wherever it is moved', () => {
+        scene(1100, 2, null);
+        assert.ok(/park-regen/.test(why('WATER', 'passive', 2)), 'silent under the shipped bar');
+        const keep = C.deepHell.parkRegenRate;
+        C.deepHell.parkRegenRate = 0.4;                  // now BELOW 0.568
+        assert.ok(!/park-regen/.test(why('WATER', 'passive', 2)),
+            'the checkpoint ignored the moved bar — it is hardcoded: ' + why('WATER', 'passive', 2));
+        C.deepHell.parkRegenRate = 3.0;                  // far above it
+        assert.ok(/park-regen/.test(why('WATER', 'passive', 2)), 'the checkpoint did not follow the bar up');
+        C.deepHell.parkRegenRate = keep;
+    });
+    test('it gates on MEASURED regen, not on ownedLevels', () => {
+        scene(1100, 0, null);
+        // levels say zero, the live stat says the bar is already cleared
+        global.player.regenBonus = 2.0;
+        assert.ok(!/park-regen/.test(why('WATER', 'passive', 0)),
+            'the checkpoint read the card ladder instead of player.regenBonus: ' + why('WATER', 'passive', 0));
+    });
+
+    // TOOTH 3 — THE DECISIVE ONE. `strategy.regenDeficit` is a CEM dim in a box
+    // floored at zero and the search is walking it there. If this test passes
+    // against the unfixed source, the fix is not a fix.
+    test('CEM-PROOF: with strategy.regenDeficit forced to 0 it still leads', () => {
+        scene(1100, 2, 0);
+        assert.strictEqual(C.strategy.regenDeficit, 0, 'the dim override did not stick');
+        const w = card('WATER', 'passive', 2);
+        assert.ok(/\bentry-regen-water\(\d+%short\)\+16\b/.test(w.why),
+            'the old bid is not actually at its floor in this scene: ' + w.why);
+        for (const r of ROSTER) {
+            assert.ok(w.score > sc(r[0], r[1], r[2]),
+                'with the dim at 0, WATER ' + Math.round(w.score) + ' loses to ' + r[0] + ' ' +
+                Math.round(sc(r[0], r[1], r[2])) + ' — the checkpoint is still leaning on the CEM: ' + w.why);
+        }
+    });
+
+    // TOOTH 4 — it RELEASES. A premium that keeps paying after the thing it
+    // buys is bought is the TIME STOP failure mode (flat +265 while pauseAudit
+    // reports 94.4% of the field already frozen).
+    test('the checkpoint stops exactly where the park gate opens', () => {
+        for (let lv = 0; lv <= 6; lv++) {
+            scene(1100, lv, 0);
+            const paying = /park-regen/.test(why('WATER', 'passive', lv));
+            const under = T.regenRate() < C.deepHell.parkRegenRate;
+            assert.strictEqual(paying, under && lv < 6,
+                'at WATER ' + lv + ' (regen ' + T.regenRate().toFixed(3) + ') paying=' + paying +
+                ' but the park bar is ' + C.deepHell.parkRegenRate);
+        }
+    });
+    test('...and 1.0 is REACHABLE on both ladders, so the bar is not another defMin 35', () => {
+        const bar = C.deepHell.parkRegenRate;
+        assert.ok(bar <= 0.284 * 6, 'bar ' + bar + ' is above WATER 6 = ' + (0.284 * 6).toFixed(3));
+        assert.ok(bar <= 0.512 * 6, 'bar ' + bar + ' is above SIMPLE SYRUP 6 = ' + (0.512 * 6).toFixed(3));
+    });
+
+    // THE TIERS. The leading tier gets ~150 s before hell latches at 1200 and
+    // has to buy TWO levels in it; the early tier keeps the ladder moving from
+    // 750 without buying the first pick out from under MINT.
+    test('the early tier nudges but does NOT lead the day order', () => {
+        scene(800, 2, 0);
+        const w = card('WATER', 'passive', 2);
+        assert.ok(/park-regen-early/.test(w.why), 'the early tier is silent at 800: ' + w.why);
+        assert.ok(w.score > sc('DRY VERMOUTH', 'passive', 0) && w.score > sc('NEGRONI', 'weapon', 0),
+            'the early tier does not even clear the mid-roster: ' + Math.round(w.score));
+        assert.ok(w.score < sc('MINT', 'passive', 2),
+            'the early tier outranks MINT ' + Math.round(sc('MINT', 'passive', 2)) + ' at ' +
+            Math.round(w.score) + ' — it is overturning the user doctrine, not nudging');
+    });
+    test('...and below entryRegenFromS neither tier fires', () => {
+        scene(700, 2, 0);
+        assert.ok(!/park-regen/.test(why('WATER', 'passive', 2)), why('WATER', 'passive', 2));
+    });
+
+    // SCOPE. The hell side already has `regen-spine`; this must not double-pay
+    // there, and it must not walk SIMPLE SYRUP in front of its own halves —
+    // the 6.112.0/6.114.0 mistake, guarded again in its new costume.
+    test('it is DAY-only: in hell the spine carries regen, not the checkpoint', () => {
+        scene(1100, 2, 0);
+        global.hell = true; T.latchHell();
+        const w = why('WATER', 'passive', 2);
+        assert.ok(!/park-regen/.test(w), 'the checkpoint double-pays in hell: ' + w);
+        assert.ok(/regen-spine/.test(w), 'the hell spine is gone — this is a deletion, not a scoping: ' + w);
+    });
+    test('SIMPLE SYRUP does not take the checkpoint ahead of WATER and SUGAR', () => {
+        scene(1100, 2, 0);
+        assert.ok(!/park-regen/.test(why('SIMPLE SYRUP', 'passive', 0)),
+            'syrup jumped its own ingredients: ' + why('SIMPLE SYRUP', 'passive', 0));
+        T.setOwned({ 'WATER': 6, 'SUGAR': 6 });
+        global.player.regenBonus = 0.5;                  // still under the bar, halves now made
+        assert.ok(/park-regen/.test(why('SIMPLE SYRUP', 'passive', 0)),
+            'syrup is blocked even with both halves maxed: ' + why('SIMPLE SYRUP', 'passive', 0));
+    });
+
+    // The gate is a GATE. If either weight ever becomes a TUNABLE dimension the
+    // CEM will walk it to zero exactly as it did the bid, and this whole
+    // version silently reverts.
+    test('neither weight is a CEM dimension', () => {
+        const dims = Object.keys(T.tunable ? T.tunable() : {});
+        for (const k of ['abilities.entryRegen', 'abilities.entryRegenEarly', 'movement.entryRegenFromS']) {
+            assert.ok(!dims.includes(k), k + ' is in the TUNABLE box — the search will suppress it');
         }
     });
     done();

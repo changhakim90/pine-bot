@@ -612,6 +612,40 @@
             // costs no farming tempo; that distinction is exactly what the
             // 6.99.2 entryPrepFromS collapse (dayClear 0.15 -> 0.02) taught.
             entryArmorFromS: 750,
+            // ── v6.123.0 THE REGEN LEG OF THE PARK GATE ────────────────────
+            //
+            // `parkArmor` needs defense >= 30 AND regen >= 1.0. 6.99.2/6.105.0
+            // gave the armour leg a CHECKPOINT and it worked: parkMiss.armor
+            // is now 1.6-2.2%. The regen leg never got one, and at 6.122.0
+            // n=79 `parkMiss.regen` is 45.3% of all seat-miss ticks (472,405
+            // of 1,043,391) — the largest bucket by a wide margin.
+            //
+            // parkAudit splits the two groups on regen and ONLY on regen:
+            //     SEATED       medianEntryDef 35   medianEntryRegen 2.0
+            //     NEVER PARKED medianEntryDef 35   medianEntryRegen 0
+            // Identical armour. Runs that enter under 1.0 spend ZERO seconds
+            // parked no matter how long they live (t=6257 def 35 regen 0
+            // parkT 0 {regen:151657}; t=4811 def 35 regen 0 parkT 0
+            // {regen:108435}). It is a threshold, not a gradient.
+            //
+            // Every observed entry regen is 0.284*k — a WATER ladder that
+            // habitually stops at level 2 (0.568). The bar needs level 4
+            // (1.136). So the miss is two level-ups, not a missing card.
+            //
+            // Why the existing day bid cannot close it: it is scaled by the
+            // CEM dim `strategy.regenDeficit`, whose mean collapsed
+            // 17.82 -> 20.05 -> 11.36 across gens 737/740/741 in a box floored
+            // at 0. Two pick logs, same state: `entry-regen-water(100%short)`
+            // paid +59 at n=61 and +24 at n=70. The search is walking it to
+            // zero, and it is right to on its own evidence — regen costs day
+            // tempo NOW and pays at the seat twenty minutes later, which is a
+            // credit-assignment horizon CEM does not have.
+            //
+            // So this is a GATE, not a weight, and deliberately NOT a TUNABLE
+            // dimension — the same shape and the same reason as entry-armor.
+            // It releases the moment regen clears the bar, so its whole cost
+            // is bounded at the two-to-four WATER levels that clear it.
+            entryRegenFromS: 750,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
             // SAFE AND BROKE: kills are the only source of XP/gold/levels,
@@ -1314,6 +1348,42 @@
             // for a total near 700, so the ult still leads. Order at zero
             // regen: ult > regen > roster.
             regenSpine: 240,
+            // v6.123.0 ENTRY-REGEN CHECKPOINT weights (see
+            // movement.entryRegenFromS for why this is a gate and not a dim).
+            // Sized against the roster this actually has to beat, measured on
+            // the built script rather than guessed. Day scene at gt 1100,
+            // WATER level 2 (regen 0.568 — the never-parked median), armour at
+            // the 34.992 cap, `strategy.regenDeficit` FORCED TO 0 so the size
+            // is the checkpoint's own and not the CEM's:
+            //     WATER 241   MINT 294   SUGAR 291   TONIC 281
+            //     DRY VERMOUTH 247   NEGRONI 254   GIN TONIC(lv3) 183
+            // The first draft was 90. That put WATER at 289 against SUGAR 291
+            // — it lost by two points with the dim at zero, which is the exact
+            // failure this version exists to prevent. 120 clears the whole
+            // roster outright and still sits far under the ult.
+            //
+            // The early tier is deliberately NOT enough to lead. Measured in
+            // the same scene at gt 800, WATER's base is 199, so the band that
+            // clears the mid-roster (DRY VERMOUTH 247, NEGRONI 265) without
+            // overturning the top of the day order (MINT 278, TONIC 281,
+            // SUGAR 291) is 66..79. 72 is its midpoint. The user's doctrine
+            // has MINT leading and a regen checkpoint must not quietly
+            // overturn it; the graded shape mirrors entry-armor's 18/40.
+            //
+            // The whole cost is bounded by the release: the gate closes at
+            // regen >= 1.0 and 0.284*4 = 1.136 is the first rung over it, so
+            // from the seated group's level 2 it buys TWO levels and from the
+            // never-parked group's zero it buys four.
+            //
+            // PRE-REGISTERED FOLLOW-UP, so the next version is one variable
+            // and not a rewrite: entryPrepFromS is 1050 and hell latches at
+            // 1200, so the leading tier gets ~150 s — often not even one
+            // level-up, which is the exact complaint that took entry-armor
+            // from 6.99.2 to 6.105.0. If the next batch shows the WATER ladder
+            // still stalling below 1.0 at entry, the single move is to raise
+            // THIS number into the leading band, not to touch anything else.
+            entryRegen: 120,
+            entryRegenEarly: 72,
             // v6.111.0: the day retry gate. The game's own cooldown is the
             // real limiter (53-80 s), so a tighter retry only shaves the
             // latency between the cooldown ending and the bot noticing. At

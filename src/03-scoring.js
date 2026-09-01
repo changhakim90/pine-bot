@@ -1289,6 +1289,64 @@
                         (deficit > 0 ? '(' + Math.round(deficit * 100) + '%short)' : ''));
                 }
             }
+            // ── v6.123.0 ENTRY-REGEN CHECKPOINT ────────────────────────────
+            //
+            // The block above is a BID and the CEM is walking it to zero
+            // (`strategy.regenDeficit` mean 17.82 -> 20.05 -> 11.36 across
+            // gens 737/740/741; the same state paid +59 at n=61 and +24 at
+            // n=70). This is the same lever expressed as a GATE instead, held
+            // outside CEM control, exactly as `entry-armor` below is.
+            //
+            // The evidence it answers, 6.122.0 n=79: `parkMiss.regen` is 45.3%
+            // of seat-miss ticks, and parkAudit's two groups differ on regen
+            // ALONE — seated 2.0, never-parked 0, both at medianEntryDef 35.
+            // Runs entering under `deepHell.parkRegenRate` park for zero
+            // seconds regardless of how long they survive. It is a threshold.
+            //
+            // Tagged `park-regen`, not `entry-regen-*`: the older tag belongs
+            // to the CEM-scaled bid above and the two must stay separable in
+            // a pick log, or the next batch cannot tell which one paid.
+            //
+            // Four constraints, each of which is a tooth in
+            // test/scenario.js `park-regen`:
+            //   1. It gates on the MEASURED stat (regenRate() reads
+            //      player.regenBonus), never on ownedLevels['WATER'] — the
+            //      lesson the entry-armor bar learned when `< 30` worked only
+            //      by coincidence of OLIVE 5 vs OLIVE 6.
+            //   2. The bar is read from `deepHell.parkRegenRate`, never a
+            //      hardcoded 1.0, so it cannot drift away from the gate it
+            //      exists to pass. (parkAudit's toFixed(1) once produced an
+            //      unreachable defMin of 35; this is that mistake's shape.)
+            //   3. It is INDEPENDENT of `strategy.regenDeficit`. Set that dim
+            //      to 0 and the checkpoint still fires — that independence is
+            //      the entire point of the change, so it is asserted directly.
+            //   4. It RELEASES above the bar: at regen >= parkRegenRate it
+            //      contributes exactly 0. Without that it becomes the TIME
+            //      STOP failure mode — a flat premium that keeps paying long
+            //      after the thing it buys has stopped being worth anything.
+            //
+            // Level-ups are scored here too: `name` is the base name for a
+            // level-up card as much as a new one, and the ladder stalls at
+            // WATER 2 (0.568), two levels short of the 1.136 that clears 1.0.
+            // A checkpoint that only bought first picks would fix nothing.
+            if (!atCap && type === 'passive' && REGEN_PER_LV[name] != null && !hellDetected) {
+                const barR = CONFIG.deepHell.parkRegenRate != null ? CONFIG.deepHell.parkRegenRate : 1.0;
+                const nowR = regenRate();
+                // Same craft guard as the spine: SIMPLE SYRUP may not jump in
+                // front of its own ingredients (the 6.112.0/6.114.0 mistake).
+                const syrupHeld = name === 'SIMPLE SYRUP' &&
+                    !((ownedLevels['WATER'] || 0) >= 6 && (ownedLevels['SUGAR'] || 0) >= 6);
+                if (nowR < barR && barR > 0 && !syrupHeld) {
+                    const late = CONFIG.movement.entryPrepFromS != null ? CONFIG.movement.entryPrepFromS : 1050;
+                    const early = CONFIG.movement.entryRegenFromS != null ? CONFIG.movement.entryRegenFromS : 750;
+                    const wLate = (CONFIG.abilities && CONFIG.abilities.entryRegen != null)
+                        ? CONFIG.abilities.entryRegen : 90;
+                    const wEarly = (CONFIG.abilities && CONFIG.abilities.entryRegenEarly != null)
+                        ? CONFIG.abilities.entryRegenEarly : 45;
+                    if (gtR >= late) add(wLate, 'park-regen');
+                    else if (gtR >= early) add(wEarly, 'park-regen-early');
+                }
+            }
             // v6.99.2 ENTRY-ARMOR CHECKPOINT (funnel n=240: 35 entrants, 31
             // dead in entry at median def 29.2 — the parkAudit seat bar is
             // 35). The fund rush buys tempo; from entryPrepFromS this
