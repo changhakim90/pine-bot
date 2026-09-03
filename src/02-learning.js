@@ -87,8 +87,8 @@
         // handler must never depend on anything declared after it.
         try { return loadLearnInner(); }
         catch (e) {
-            try { console.log('[PineBot] STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey() + '.broken'); } catch (e3) { }
-            try { localStorage.setItem(learnKey() + '.broken', localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
+            try { console.log('[PineBot] STORE UNREADABLE (' + (e && e.message) + ') — starting from defaults; the old blob is kept under ' + learnKey('.broken')); } catch (e3) { }
+            try { localStorage.setItem(learnKey('.broken'), localStorage.getItem(learnKey()) || ''); localStorage.removeItem(learnKey()); } catch (e2) { }
             try { return loadLearnInner(); } catch (e2) { return blankLearn(); }
         }
     }
@@ -123,7 +123,7 @@
         // old — is the store.
         if (!d || typeof d !== 'object') {
             try {
-                const b = JSON.parse(localStorage.getItem(learnKey() + '__bak'));
+                const b = JSON.parse(localStorage.getItem(learnKey('__bak')));
                 if (b && typeof b === 'object') {
                     d = b;
                     log('own store missing/unreadable — HEALED from backup (' + (b.runs || 0) + ' runs recovered)');
@@ -375,7 +375,7 @@
         }
         // v6.96.2: the backup only ever holds a blob the primary ACCEPTED, so
         // a crash mid-save leaves the backup one save old, never corrupt-both.
-        if (ownSaved) { try { localStorage.setItem(learnKey() + '__bak', ownBlob); } catch (e) { } }
+        if (ownSaved) { try { localStorage.setItem(learnKey('__bak'), ownBlob); } catch (e) { } }
         try {
             pruneVersions();
             localStorage.setItem(SHARED_KEY, JSON.stringify({

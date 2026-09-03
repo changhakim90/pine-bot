@@ -2029,8 +2029,58 @@
         if (hellDetected) applyHellUnban();
 
         const scored = pool.map(scoreCard).sort((a, b) => b.score - a.score);
-        const best = scored[0];
+        let best = scored[0];
         if (!best) return false;
+
+        // =============================================================
+        // v6.124.0 CLAIM BEFORE YOU LEVEL
+        // =============================================================
+        // User, on the 6.123.0 n=83 run that walked into the gun: "May need
+        // to fill out cocktail slots earlier as choices go down dramatically
+        // in hell." The pick log agrees with him exactly. The opening of the
+        // fresh run was four STIRRING UP at 552-562 in the first 75 s —
+        //   gt 68  STIRRING UP 562   over  GIN TONIC 291 (unclaimed)
+        //   gt 75  STIRRING UP 562   over  WHISKY SOUR 207 (unclaimed)
+        // — and by gt 1992-2116 the same bot's pools were SODA WATER /
+        // COINTREAU / LEMON / GINGER BEER / SIDECAR: a slot still open at
+        // gt 2281 (MOSCOW MULE was claimed there, in HELL). The slot-claim
+        // term (+60, 6.89.0) is under the survival core by design and can
+        // never reach the base card: measured on the built 6.123.0 script,
+        // base-attack+310 day-base-second+220 = 541 against SOUTH SIDE 334,
+        // GIN TONIC 238, VODKA TONIC 237, MOJITO 216, MOSCOW MULE 209,
+        // WHISKY SOUR 177. Raising slot-claim to close a 300-point gap is
+        // the 6.89.0 disaster (+250 outranked OLIVE and two runs died in the
+        // day holding seven level-1 weapons).
+        //
+        // So this is not a score. It is a RULE about one pair of cards:
+        // when the ONLY thing beating an unclaimed plan cocktail is a
+        // level-up of the base attack, take the cocktail. The base card is
+        // offered again and again — a level deferred by one pool is a level
+        // taken at the next — while a slot unclaimed by hell is a slot the
+        // narrowed pool fills with junk or a gun line. Everything else keeps
+        // its rank: the ult still outranks both, OLIVE still outranks the
+        // cocktail, and a cocktail that is not second on merit is not
+        // promoted. This is the user's own phase-1 list — "Mojito, gin
+        // tonic, vodka tonic, southside, ultimate, shaking up as the first
+        // picks" — read as CLAIM the cocktails, then level the base.
+        // Day only: in hell the base is normally capped anyway, and a super
+        // needs it maxed.
+        {
+            const claimOn = !(CONFIG.abilities && CONFIG.abilities.claimBeforeLevel === false);
+            const second = scored[1];
+            if (claimOn && !hellDetected && second && best.type === 'base' &&
+                !(best.lv > 0 && best.cap && best.lv >= best.cap) &&
+                second.type === 'weapon' && !(second.lv > 0) &&
+                // PLAN membership is the whole test — MOJITO sits on the
+                // avoid list AND the plan, and the plan wins everywhere
+                // else in this file (avoidJunk, slot-claim). No AVOID guard.
+                PLAN_COCKTAILS.includes(second.name) &&
+                !((ownedLevels[second.name] || 0) > 0)) {
+                second.why = (second.why || '') + ' claim-before-level(over ' + best.name + '=' + Math.round(best.score) + ')';
+                scored.splice(1, 1); scored.unshift(second);
+                best = second;
+            }
+        }
 
         // v6.87.3 (user): "at a certain point in the early hell mode, there are
         // only 2 choices forcing the bot to pick a super cocktail leading item".

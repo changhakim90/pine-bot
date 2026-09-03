@@ -643,8 +643,14 @@
             //
             // So this is a GATE, not a weight, and deliberately NOT a TUNABLE
             // dimension — the same shape and the same reason as entry-armor.
-            // It releases the moment regen clears the bar, so its whole cost
-            // is bounded at the two-to-four WATER levels that clear it.
+            // It releases the moment regen clears the bar.
+            // v6.124.0 CORRECTION: the 6.123.0 comment here claimed the cost
+            // was "bounded at the two-to-four WATER levels that clear it".
+            // WRONG. The n=82 entry row read regen 2.22 = WATER 6 + SIMPLE
+            // SYRUP 1 — SEVEN regen levels. The checkpoint only breaks the
+            // ice; once WATER is owned, day-order8+123, craft-half+34 and
+            // craft-pair finish the ladder on their own. The bill was
+            // supersPerRun 1.2 -> 0.9/1.0 and dayClearRate 0.53 -> 0.45.
             entryRegenFromS: 750,
             // v6.95.0 DAY FARM STANCE — the 6.94.1 digest's smoking gun:
             // crowdMedian 0, crowdP75 1 across a 20-minute day. The bot was
@@ -1382,8 +1388,23 @@
             // from 6.99.2 to 6.105.0. If the next batch shows the WATER ladder
             // still stalling below 1.0 at entry, the single move is to raise
             // THIS number into the leading band, not to touch anything else.
-            entryRegen: 120,
-            entryRegenEarly: 72,
+            // v6.124.0 RETRACTED — the pre-registered abort fired. The
+            // 6.123.0 row at n=90 reads median 1260 -> 1012, dayClearRate
+            // 0.53 -> 0.44, supersPerRun 1.2 -> 0.9, z = -2.04 "worse"
+            // against 6.122.0, while the seat itself stayed bimodal (entry
+            // regen 2.22 / 1.42 / 0 / 0 across the four hell rows; the
+            // 3107 s run never parked at all: parkMiss.regen 57186 of
+            // 57186). The checkpoint bought WATER with the supers that make
+            // the seat survivable. Both weights go to 0 — the mechanism and
+            // its teeth stay (the scenario sets them explicitly) so it can
+            // be re-armed at a smaller size on a clean baseline later.
+            entryRegen: 0,
+            entryRegenEarly: 0,
+            // v6.124.0 CLAIM BEFORE YOU LEVEL (03-scoring.js handleLevelUp).
+            // Not a weight: a rule that an unclaimed plan cocktail beats a
+            // base-attack LEVEL-UP when that is the only card above it, day
+            // only. `false` restores the 6.123.0 behaviour exactly.
+            claimBeforeLevel: true,
             // v6.111.0: the day retry gate. The game's own cooldown is the
             // real limiter (53-80 s), so a tighter retry only shaves the
             // latency between the cooldown ending and the bot noticing. At
@@ -2545,8 +2566,76 @@
     // v6.85.0: learned state lives in a PER-BARTENDER store; the version
     // comparison (versions + snapshots) lives in ONE shared store. minguk
     // keeps the legacy key so his ~600 runs of tuning carry over untouched.
-    const learnKey = () => CONFIG.learning.storageKey + (activeChar && activeChar !== 'minguk' ? '_' + activeChar : '');
-    const SHARED_KEY = CONFIG.learning.storageKey + '_shared';
+    // =================================================================
+    // v6.124.0 THE STORE NAMESPACE — two bots, one localStorage
+    // =================================================================
+    // The 6.123.0 n=82/83 reports carried 234 of 240 funnel rows tagged
+    // 6.135.0-6.139.0: versions this tree never built, at medianSpeed 2.76
+    // against our 15.5, casts 3-4 against 13-21, dayClearRate 0 across all
+    // of them. The user's answer: "I have another model running made by
+    // codex." A fork of this script, on the same origin, in the same
+    // browser profile, writing the same localStorage keys. Every rolling
+    // window (funnel, parkAudit, markAudit, incomeAudit, damageAudit) was
+    // therefore unreadable for our own version, and nothing guaranteed the
+    // CEM vector was ours either.
+    //
+    // localStorage is per ORIGIN per BROWSER PROFILE, so the cleanest
+    // separation is a second profile — zero code. This is the code-side
+    // belt to that suspender: an opt-in suffix on every key the bot owns.
+    //   pineBot.namespace('claude')   -> sets it, migrates, reloads
+    //   pineBot.namespace()           -> reads it
+    // The suffix is stored under an UN-suffixed meta key (it has to be
+    // readable before we know the namespace) and lives in the profile, so
+    // a rebuilt script keeps the choice. Migration is COPY, never move:
+    // the first boot under a new namespace copies each owned key that has
+    // no namespaced twin yet, so the ~9500-run learn blob carries over
+    // untouched and the Codex fork keeps writing to the bare keys we no
+    // longer read. The game's own keys (paco_bdh_time) and the human demo
+    // recordings (pineBotDemos) are deliberately NOT namespaced — both are
+    // ground truth that either bot may read.
+    // Only keys of the exact shapes this file writes are migrated:
+    // `<base>`, `<base>_<char>`, `<base>_<char>__bak`, `<base>_shared`.
+    // Another namespace's copies (`<base>_joe.codex`) are never touched.
+    const STORE_NS_META = 'pineBotNamespace';
+    const STORE_NS = (() => {
+        try {
+            const v = String(localStorage.getItem(STORE_NS_META) || '').replace(/[^\w-]/g, '');
+            return v ? '.' + v : '';
+        } catch (e) { return ''; }
+    })();
+    const nsKey = k => k + STORE_NS;
+    const STORE_BASES = [CONFIG.learning.storageKey, 'pineBotDmgAudit', 'pineBotIncAudit',
+        'pineBotHuntAudit', 'pineBotPauseAudit', 'pineBotParkAudit', 'pineBotPhaseAudit',
+        'pineBotBossCensus_v1', 'pineBotMarkAudit', 'pineBotCraftAudit_v1'];
+    function migrateStoreNamespace() {
+        if (!STORE_NS) return 0;
+        let copied = 0;
+        try {
+            const keys = [];
+            for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+            for (const k of keys) {
+                if (typeof k !== 'string') continue;
+                const base = STORE_BASES.find(b => k === b || k.startsWith(b + '_'));
+                if (!base) continue;
+                const rest = k.slice(base.length);
+                if (!/^(_[a-z]+(__bak)?|_shared)?$/.test(rest)) continue;   // another namespace, or .broken
+                const target = k + STORE_NS;
+                if (localStorage.getItem(target) != null) continue;
+                const v = localStorage.getItem(k);
+                if (v == null) continue;
+                localStorage.setItem(target, v);
+                copied++;
+            }
+            if (copied) console.log('[PineBot] namespace ' + STORE_NS.slice(1) + ': copied ' + copied + ' key(s) from the bare store');
+        } catch (e) { }
+        return copied;
+    }
+    migrateStoreNamespace();
+    // learnKey('__bak') / learnKey('.broken'): the suffix goes INSIDE the
+    // namespace so `_joe__bak.claude` migrates and reads as one family.
+    const learnKey = (sfx) => nsKey(CONFIG.learning.storageKey +
+        (activeChar && activeChar !== 'minguk' ? '_' + activeChar : '') + (sfx || ''));
+    const SHARED_KEY = nsKey(CONFIG.learning.storageKey + '_shared');
 
     // =================================================================
     // BOT STATE
@@ -2607,7 +2696,7 @@
     // reading bossD off `th.enemies` would be blind exactly where it counts.
     const nearestBossRef = { v: Infinity };
     const poFreeRef = { v: 0 };   // free passouts in the local window, set by gatherThreats
-    const DMG_AUDIT_KEY = 'pineBotDmgAudit';
+    const DMG_AUDIT_KEY = nsKey('pineBotDmgAudit');
     let dmgAudit = (() => {
         const blank = { n: 0, hp: 0, cls: {}, sole: {}, none: { n: 0, hp: 0, bossD: [], near: [] }, ev: [], runs: 0 };
         try {
@@ -2634,7 +2723,7 @@
     // FUNCTION OF DEPTH, which is the whole point — a build that clears the
     // floor at 40 min and falls under it at 90 is the expected shape, and the
     // crossing time is the number worth optimising against.
-    const INC_AUDIT_KEY = 'pineBotIncAudit';
+    const INC_AUDIT_KEY = nsKey('pineBotIncAudit');
     const INC_BUCKET_S = 600;
     let incAudit = (() => {
         const blank = { buckets: {}, runs: 0 };
@@ -2673,7 +2762,7 @@
     // departure; `pineBot.huntAudit()` reads it back. If `dmg` stays at zero,
     // the hunt is a walk to the edge that accomplishes nothing and should be
     // replaced by a warning posture rather than tuned.
-    const HUNT_AUDIT_KEY = 'pineBotHuntAudit';
+    const HUNT_AUDIT_KEY = nsKey('pineBotHuntAudit');
     let huntMark = null;   // live, per-attempt; never persisted
     let huntAudit = (() => {
         const blank = { attempts: 0, frozenAttempts: 0, dmg: 0, best: 0, vanished: 0, secs: 0, runs: 0 };
@@ -2709,7 +2798,7 @@
     // That premise is measured rather than assumed: pause uptime across hell,
     // per run and pooled. If `share` comes back high, TIME STOP is plentiful and
     // the scoring tilt below is wrong.
-    const PAUSE_AUDIT_KEY = 'pineBotPauseAudit';
+    const PAUSE_AUDIT_KEY = nsKey('pineBotPauseAudit');
     let runHellTicks = 0, runPauseTicks = 0;
     let pauseAudit = (() => {
         const blank = { runs: 0, hellTicks: 0, pauseTicks: 0 };
@@ -2745,7 +2834,7 @@
     // true. This audit records the build AT THE ENTRANCE and when park first
     // engaged, so the 10% and the 90% can be compared directly instead of
     // guessed at.
-    const PARK_AUDIT_KEY = 'pineBotParkAudit';
+    const PARK_AUDIT_KEY = nsKey('pineBotParkAudit');
     let parkFirstS = null;      // gameTime park first engaged this run
     let parkOnTicks = 0;        // hell ticks with parkOn
     let parkedTicks = 0;        // hell ticks actually seated (vx=vy=0)
@@ -2765,7 +2854,7 @@
     // the 82% day-death mass actually sit, and does a run that survives the
     // entry window ever die before deep? parkAudit answers the seat question
     // for hell runs only; this covers every run, day deaths included.
-    const PHASE_AUDIT_KEY = 'pineBotPhaseAudit';
+    const PHASE_AUDIT_KEY = nsKey('pineBotPhaseAudit');
     let hellEnterGt = null;         // gameTime when hell latched (0 = run began in hell)
     let capFiredThisRun = false;    // the run-cap patrol engaged at least once
     // v6.99.3 EARLY CAP (user: "the auto-kill protocol to continue learning
@@ -2919,7 +3008,7 @@
     // the radius re-sampled as it grows, so r(t) can be fitted across runs
     // rather than assumed. Cheap: bosses are a handful per run, and the census
     // is capped. Aggregated by `pineBot.bossCensus()`.
-    const BOSS_CENSUS_KEY = 'pineBotBossCensus_v1';
+    const BOSS_CENSUS_KEY = nsKey('pineBotBossCensus_v1');
     let bossCensus = (() => {
         const blank = { runs: [] };
         try {
@@ -2943,7 +3032,7 @@
         return blank;
     })();
 
-    const MARK_AUDIT_KEY = 'pineBotMarkAudit';
+    const MARK_AUDIT_KEY = nsKey('pineBotMarkAudit');
     let markAudit = (() => {
         const blank = { buckets: {}, runs: 0 };
         try {
@@ -3103,7 +3192,7 @@
     // parts are maxed and a craft is therefore owed; `seen` counts ticks a
     // prompt was on screen; `labels` keeps what the buttons actually said —
     // which is the one piece of evidence that separates (a) from (b).
-    const CRAFT_AUDIT_KEY = 'pineBotCraftAudit_v1';
+    const CRAFT_AUDIT_KEY = nsKey('pineBotCraftAudit_v1');
     let craftAudit = (() => {
         try { return JSON.parse(localStorage.getItem(CRAFT_AUDIT_KEY)) ||
             { runs: 0, ready: 0, seen: 0, clicked: 0, confirmed: 0, labels: {}, pairs: {} }; }

@@ -849,6 +849,7 @@
             const cur = (curId && vers.filter(v => v && v.version === curId)[0]) ||
                         (typeof cmp.current === 'object' && cmp.current) || {};
             L.push('v' + n(curId || cur.version) +
+                (STORE_NS ? '  ns=' + STORE_NS.slice(1) : '  ns=(bare)') +
                 '  n=' + n(cur.runs != null ? cur.runs : cur.n) +
                 '  gen=' + n(r && r.learning && r.learning.gen) +
                 '  runs=' + n(r && r.learning && r.learning.runs));
@@ -1287,6 +1288,22 @@
                 panel: on => { setPanelHidden(on === false); return on === false ? 'hidden' : 'shown'; },
                 config: CONFIG, learn: () => learn, plan: () => lastPlan, state: () => G.state,
                 version: SCRIPT_VERSION, tag: scriptTag(),
+                // v6.124.0 THE STORE NAMESPACE. pineBot.namespace('claude')
+                // suffixes every key this bot owns, copies the bare keys over
+                // once, and reloads so the boot-time constants pick it up.
+                // pineBot.namespace() reads it; pineBot.namespace('') clears
+                // it (the bare keys were never deleted, so this is lossless).
+                namespace: (v) => {
+                    if (v === undefined) return STORE_NS ? STORE_NS.slice(1) : '';
+                    const clean = String(v || '').replace(/[^\w-]/g, '');
+                    try {
+                        if (clean) localStorage.setItem(STORE_NS_META, clean);
+                        else localStorage.removeItem(STORE_NS_META);
+                    } catch (e) { return 'localStorage refused: ' + (e && e.message); }
+                    try { setTimeout(() => { try { location.reload(); } catch (e) { } }, 250); } catch (e) { }
+                    return clean ? 'namespace set to "' + clean + '" — reloading; the bare keys are copied on the next boot'
+                        : 'namespace cleared — reloading onto the bare keys';
+                },
                 // VERSION SNAPSHOTS
                 compare: versionComparison,            // every version side by side, with deltas
                 // v6.95.2 (user: "I can't die on this run without purposefully
@@ -2051,6 +2068,7 @@
             const reportBody = () => ({
                 note: 'paste this whole object to Claude — it contains every audit. compare = version table; funnel = phase aggregation (READ deepHeldRate, not deepRate); phases = raw per-run rows; damage = HP-loss attribution; boss = spawn timetable + size growth + predicted ringAt; learning = CEM dims/tags/enemy types (atEdge = the BOX is wrong, converged = no exploration left); park/income/hunt/mark/pause/picks = the per-subsystem audits; cap = live kill-protocol state.',
                 summary: null,
+                namespace: STORE_NS ? STORE_NS.slice(1) : null,   // v6.124.0: which store this report reads
                 compare: safe(() => versionComparison(), null),
                 funnel: safe(() => window.pineBot.phaseAudit(), null),
                 phases: safe(() => (phaseAudit.rows || []).slice(), null),

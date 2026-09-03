@@ -6,6 +6,10 @@ module.exports = function makeEnv(opts = {}) {
         getItem: k => (k in store ? store[k] : null),
         setItem: (k, v) => { store[k] = String(v); },
         removeItem: k => { delete store[k]; },
+        // v6.124.0: the namespace migration enumerates the store the way the
+        // real Storage API does (length + key(i)).
+        get length() { return Object.keys(store).length; },
+        key: i => Object.keys(store)[i] == null ? null : Object.keys(store)[i],
         _store: store
     };
     const mkEl = () => ({ style: {}, children: [], querySelector: () => mkEl(), querySelectorAll: () => [], appendChild() {}, remove() {}, classList: { contains: () => true }, set innerHTML(v) {}, textContent: '' });

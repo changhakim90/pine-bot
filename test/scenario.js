@@ -4302,7 +4302,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -8202,8 +8202,15 @@ if (which === 'park-regen') {
     // the CEM params, so any dim override has to be written AFTER it — the
     // first draft of these tests set regenDeficit to 0 before startRun and
     // silently measured the tuned value instead of zero.
+    // v6.124.0: the shipped weights are 0 (retracted). These tests pin the
+    // MECHANISM at the size 6.123.0 shipped, so it can be re-armed later.
+    test('6.124.0 ships the checkpoint RETRACTED: both weights 0', () => {
+        assert.strictEqual(C.abilities.entryRegen, 0);
+        assert.strictEqual(C.abilities.entryRegenEarly, 0);
+    });
     const scene = (gt, waterLv, k) => {
         global.hell = false; global.gameTime = gt; T.startRun(); global.gameTime = gt;
+        C.abilities.entryRegen = 120; C.abilities.entryRegenEarly = 72;   // the 6.123.0 size, under test
         if (k != null) C.strategy.regenDeficit = k;
         global.player.defense = 6 * 5.832;              // 34.992, the armour ceiling
         global.player.regenBonus = 0.284 * waterLv;
@@ -8449,5 +8456,185 @@ if (which === 'audit-repairs') {
             assert.ok(armed > 0.3, 'armed lane accrued only ' + armed);
         });
     }
+    done();
+}
+
+// v6.124.0 CLAIM BEFORE YOU LEVEL — an unclaimed plan cocktail beats a
+// base-attack level-up when that is the only card above it (day only).
+if (which === 'claim-before-level') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'levelup', gameTime: 68, hell: false } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test, C = pineBot.config;
+    const scene = (gt, owned, hell) => {
+        global.hell = !!hell; global.gameTime = gt; T.startRun(); global.gameTime = gt;
+        if (hell) T.latchHell();
+        T.setOwned(Object.assign({ 'NEGRONI': 1 }, owned || {}));
+    };
+    const base = lv => ({ n: 'STIRRING UP', type: 'base', lv: lv == null ? 2 : lv, maxlv: 6 });
+    const pickOf = pool => {
+        global.picks.length = 0;
+        global.window._pool = pool;
+        const ok = T.handleLevelUp();
+        return ok ? pool[global.picks[0]].n : null;
+    };
+    const lastWhy = () => { const a = T.pickAudit(); return a.length ? a[a.length - 1].why : ''; };
+
+    // FIXTURE SELF-CHECK: the pair the log recorded, priced the way the
+    // built script prices it — base far above the unclaimed cocktail.
+    test('the scene is the gt 68 pool: base 500+, GIN TONIC unclaimed at ~240', () => {
+        scene(68);
+        const b = T.scoreCard(base(), 0, []).score, g = T.scoreCard({ n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).score;
+        assert.ok(b > 450 && g > 150 && g < b - 200, 'base ' + Math.round(b) + ' GIN TONIC ' + Math.round(g));
+        assert.ok(!T.hellLatched(), 'this is a day scene');
+    });
+
+    // TOOTH 1 — the claim. This is the whole change.
+    test('gt 68: GIN TONIC is taken over STIRRING UP', () => {
+        scene(68);
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }, { n: 'NEGRONI UP', type: 'weapon', lv: 1, maxlv: 6 }]);
+        assert.strictEqual(took, 'GIN TONIC', 'took ' + took);
+        assert.ok(/claim-before-level/.test(lastWhy()), 'the audit does not say why: ' + lastWhy());
+    });
+    test('the pick log records the base it stepped over', () => {
+        const a = T.pickAudit(); const last = a[a.length - 1];
+        assert.ok(/STIRRING UP=\d+/.test((last.over || []).join(' ')), JSON.stringify(last));
+    });
+    test('every plan cocktail claims over the base, not just the tonic line', () => {
+        for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'WHISKY SOUR', 'MOSCOW MULE']) {
+            scene(120);
+            const took = pickOf([base(), { n: c, type: 'weapon', lv: 0, maxlv: 6 }]);
+            assert.strictEqual(took, c, c + ': took ' + took);
+        }
+    });
+
+    // TOOTH 2 — it is a rule about ONE pair; nothing else moves.
+    test('the ULTIMATE still outranks both', () => {
+        scene(68);
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }, { n: 'ULTIMATE UP', type: 'ult', lv: 1, maxlv: 6 }]);
+        assert.strictEqual(took, 'ULTIMATE UP', 'took ' + took);
+    });
+    test('OLIVE above the cocktail on merit is not overtaken (base wins, as before)', () => {
+        scene(400);
+        const olive = T.scoreCard({ n: 'OLIVE', type: 'passive', lv: 0, maxlv: 6 }, 0, []).score;
+        const gt = T.scoreCard({ n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }, 0, []).score;
+        assert.ok(olive > gt, 'fixture: OLIVE ' + Math.round(olive) + ' must outrank GIN TONIC ' + Math.round(gt));
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }, { n: 'OLIVE', type: 'passive', lv: 0, maxlv: 6 }]);
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took + ' — the rule promoted a cocktail that was not second');
+    });
+    test('a cocktail LEVEL-UP is not a claim: base keeps winning', () => {
+        scene(68);
+        const took = pickOf([base(), { n: 'NEGRONI UP', type: 'weapon', lv: 1, maxlv: 6 }]);
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took);
+    });
+    test('an off-plan cocktail is not a claim: base keeps winning', () => {
+        scene(68);
+        const took = pickOf([base(), { n: 'BLOODY MARY', type: 'weapon', lv: 0, maxlv: 6 }]);
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took);
+    });
+    test('a slot already claimed this run is not a claim (ownedLevels wins over a stale card)', () => {
+        scene(68, { 'GIN TONIC': 2 });
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }]);
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took);
+    });
+    test('in hell the base keeps its rank', () => {
+        scene(1500, null, true);
+        assert.ok(T.hellLatched(), 'fixture: hell did not latch');
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }]);
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took);
+    });
+    test('abilities.claimBeforeLevel=false restores 6.123.0 exactly', () => {
+        scene(68);
+        C.abilities.claimBeforeLevel = false;
+        const took = pickOf([base(), { n: 'GIN TONIC', type: 'weapon', lv: 0, maxlv: 6 }]);
+        C.abilities.claimBeforeLevel = true;
+        assert.strictEqual(took, 'STIRRING UP', 'took ' + took);
+    });
+    test('the flag is not a CEM dimension', () =>
+        assert.ok(!Object.keys(T.tunable()).some(k => /claimBeforeLevel/.test(k))));
+
+    // THE USER'S SECOND RULE, verified rather than built: "if there are no
+    // good options other than upgrading cocktails ... it should do so".
+    // In every logged pool that offered a cocktail level-up beside junk, the
+    // level-up won already (MOSCOW MULE UP 136 over SUPER WHISKY SOUR UP -96;
+    // NEGRONI UP over LEMON). The gun run's LEMON pick (score 8) came from a
+    // pool of LEMON / GINGER BEER / SIDECAR with NO cocktail level-up on
+    // offer. These pin the invariant so a future weight cannot undo it.
+    test('hell junk pool: an owned cocktail level-up beats a NEW junk ingredient', () => {
+        scene(2100, { 'MOSCOW MULE': 3, 'WHISKY SOUR': 1 }, true);
+        const took = pickOf([{ n: 'LEMON', type: 'passive', lv: 0, maxlv: 6 }, { n: 'SODA WATER', type: 'passive', lv: 0, maxlv: 6 },
+            { n: 'MOSCOW MULE UP', type: 'weapon', lv: 3, maxlv: 6 }]);
+        assert.strictEqual(took, 'MOSCOW MULE UP', 'took ' + took);
+    });
+    test('day junk pool: the same', () => {
+        scene(900, { 'NEGRONI': 3 });
+        const took = pickOf([{ n: 'LEMON', type: 'passive', lv: 0, maxlv: 6 }, { n: 'COINTREAU', type: 'passive', lv: 0, maxlv: 6 },
+            { n: 'NEGRONI UP', type: 'weapon', lv: 3, maxlv: 6 }]);
+        assert.strictEqual(took, 'NEGRONI UP', 'took ' + took);
+    });
+    done();
+}
+
+// v6.124.0 THE STORE NAMESPACE — two bots on one origin.
+if (which === 'store-namespace') {
+    const blob = JSON.stringify({ runs: 42, bartender: 'joe', items: {}, marker: 'claude-history' });
+    const sharedBlob = JSON.stringify({ versions: { '6.1.0': { n: 1 } } });
+    const phase = JSON.stringify({ rows: [{ v: '6.139.0+crown+joe', t: 380 }] });
+    test('without a namespace every key is bare (the 6.123.0 layout, byte for byte)', () => {
+        const { pineBot, store } = makeEnv({ script: SCRIPT, storage: { pineBotUCB_v5_joe: blob } });
+        pineBot.stop();
+        assert.strictEqual(pineBot.namespace(), '');
+        assert.ok(pineBot.learn().marker === 'claude-history', 'learn blob not read from the bare key');
+        assert.ok(!Object.keys(store).some(k => /\.[\w-]+$/.test(k) && /^pineBot/.test(k) && !/\.broken$/.test(k)),
+            'a suffixed key appeared with no namespace set: ' + Object.keys(store).join(','));
+    });
+    test('with a namespace the learn blob is COPIED onto the suffixed key and read from there', () => {
+        const { pineBot, store } = makeEnv({ script: SCRIPT, storage: {
+            pineBotNamespace: 'claude', pineBotUCB_v5_joe: blob, pineBotUCB_v5_shared: sharedBlob,
+            pineBotPhaseAudit: phase, pineBotUCB_v5_joe__bak: blob,
+            'pineBotUCB_v5_joe.codex': '{"marker":"not-ours"}', paco_bdh_time: '[{"time":1}]', pineBotDemos: '[]' } });
+        pineBot.stop();
+        assert.strictEqual(pineBot.namespace(), 'claude');
+        assert.strictEqual(pineBot.learn().marker, 'claude-history', 'history did not carry over');
+        assert.strictEqual(store['pineBotUCB_v5_joe.claude'] != null, true, 'no suffixed learn key: ' + Object.keys(store).join(','));
+        assert.strictEqual(store['pineBotUCB_v5_shared.claude'] != null, true, 'shared store not migrated');
+        assert.strictEqual(store['pineBotPhaseAudit.claude'], phase, 'phase audit not migrated');
+        // boot normalises and re-saves the learn blob (and its __bak), so
+        // compare the fields that prove provenance, not the bytes
+        assert.strictEqual(JSON.parse(store['pineBotUCB_v5_joe__bak.claude']).marker, 'claude-history', '__bak not migrated');
+        assert.strictEqual(JSON.parse(store['pineBotUCB_v5_joe.claude']).runs, 42, 'runs did not carry over');
+        assert.strictEqual(store['pineBotUCB_v5_joe'], blob, 'the bare key was MOVED, not copied — the other bot lost its store');
+        assert.strictEqual(store['pineBotUCB_v5_joe.codex.claude'], undefined, 'another namespace was re-suffixed');
+        assert.strictEqual(store['paco_bdh_time.claude'], undefined, 'the game\'s own key was touched');
+        assert.strictEqual(store['pineBotDemos.claude'], undefined, 'demos were namespaced');
+    });
+    test('migration is one-shot: an existing suffixed key is never overwritten by the bare one', () => {
+        const ours = JSON.stringify({ runs: 99, bartender: 'joe', items: {}, marker: 'already-ours' });
+        const { pineBot, store } = makeEnv({ script: SCRIPT, storage: {
+            pineBotNamespace: 'claude', pineBotUCB_v5_joe: blob, 'pineBotUCB_v5_joe.claude': ours } });
+        pineBot.stop();
+        assert.strictEqual(pineBot.learn().marker, 'already-ours');
+        assert.strictEqual(JSON.parse(store['pineBotUCB_v5_joe.claude']).runs, 99, 'the bare blob (runs 42) overwrote ours');
+    });
+    test('saves land on the suffixed key and leave the bare key alone', () => {
+        const { pineBot, store } = makeEnv({ script: SCRIPT, storage: { pineBotNamespace: 'claude', pineBotUCB_v5_joe: blob } });
+        pineBot.stop();
+        pineBot.test.saveLearn();
+        assert.strictEqual(store['pineBotUCB_v5_joe'], blob, 'the bare key was written');
+        assert.ok(store['pineBotUCB_v5_joe.claude'] !== blob, 'the suffixed key was not written');
+        assert.ok(store['pineBotUCB_v5_joe__bak.claude'] != null, 'the backup is not namespaced');
+    });
+    test('the report says which store it read', () => {
+        const { pineBot } = makeEnv({ script: SCRIPT, storage: { pineBotNamespace: 'claude', pineBotUCB_v5_joe: blob } });
+        pineBot.stop();
+        const r = pineBot.report();
+        assert.strictEqual(r.namespace, 'claude');
+        assert.ok(/ns=claude/.test(r.summary || ''), r.summary);
+    });
+    test('the meta key is sanitised', () => {
+        const { pineBot } = makeEnv({ script: SCRIPT, storage: { pineBotNamespace: 'cl aude/../x', pineBotUCB_v5_joe: blob } });
+        pineBot.stop();
+        assert.strictEqual(pineBot.namespace(), 'claudex');
+    });
     done();
 }
