@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.131.0
+// @version      6.132.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.131.0';
+    const SCRIPT_VERSION = '6.132.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -1272,7 +1272,20 @@
             // hp hold is doing the real filtering: of the 13 ready builds,
             // 7 died naturally between 2523 and 7394 because their hold
             // never completed — being "ready" is necessary, not sufficient.
-            capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
+            // v6.132.0 `supersMin: 3` IS GONE, REPLACED BY `build` (user:
+            // "let's remove this from the rule and instead replace it with
+            // has southside, simple syrup, olives, and sweet vermouth or
+            // black vermouth all maxed out"). The live report that prompted
+            // it had hp and defense both passing and `supers: 2` alone
+            // holding the gate shut, with streakS 0 and ~1,090 s left — the
+            // funnel had already flagged supersMin as the binding constraint
+            // on nearly every ready build. Clauses are AND across, OR within;
+            // levels are read from `player.weapons` by buildGateState(), NOT
+            // from ownedLevels (see the BUILD GATE block for why that
+            // distinction has cost this project four versions once already).
+            // An empty list disables the leg.
+            capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, holdS: 300, dipGraceS: 4,
+                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']] },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             // v6.112.0: the gate is now max(parkRegenRate, breakEven * this).
@@ -2986,8 +2999,15 @@
         // as the 6.128.0 one, its own guard, and it also clears the
         // round-robin cursor so the new cycle starts at `order[0]`. A store
         // that has NEITHER flag (pre-6.128.0) gets both stamped in one go.
-        if (!g.resetEpoch128 || !g.resetEpoch130) {
-            g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: SCRIPT_VERSION };
+        // v6.132.0 THE THIRD RESET — because the DEFINITION changed, not
+        // because the user asked to start over. `capStable.supersMin: 3` is
+        // gone and the four-ingredient build gate replaced it, so every count
+        // standing in the store was earned against a different bar and a
+        // graduation mixing the two proves nothing. Same shape and its own
+        // guard; a store missing any of the three flags gets all three.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132) {
+            g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
+                  immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -3433,6 +3453,153 @@
         const r = safe(() => player.regenBonus, null);
         if (typeof r === 'number' && r > 0) return r;
         return 0.284 * (ownedLevels['WATER'] || 0) + 0.512 * (ownedLevels['SIMPLE SYRUP'] || 0);
+    }
+
+    // ── v6.132.0 THE BUILD GATE, replacing capStable.supersMin ──────────────
+    //
+    // USER: "let's remove this from the rule and instead replace it with has
+    // southside, simple syrup, olives, and sweet vermouth or black vermouth
+    // all maxed out."
+    //
+    // WHY THE OLD BAR WAS WRONG. `supersMin: 3` counted super EVOLUTIONS, and
+    // the funnel had already recorded it as the binding constraint on nearly
+    // every ready build. The live report the user pasted made it concrete: hp
+    // and defense both passed, `supers: 2` alone held the gate shut, and the
+    // hold clock had therefore banked zero seconds with ~1,090 game-seconds
+    // left. Supers are also the part of the build the bot controls least — a
+    // line arms only when the pool happens to offer its key's last level. The
+    // four ingredients below are what the run is actually built for, and the
+    // planner steers toward all four on purpose.
+    //
+    // WHY IT READS `player.weapons` AND NOT `ownedLevels`. This is 6.91.2's
+    // lesson, and it is the single most expensive naming mistake in the
+    // project. A live probe at gt 2218 read `player.defense` 34.992 — the cap
+    // — while `ownedLevels['OLIVE']` read 1, because in-run upgrade levels
+    // land under "OLIVE UP" and the bare key freezes at 1 the moment the
+    // ingredient is first acquired. Four armour gates spent four versions
+    // comparing 1 against thresholds of 2, 4 and 6, and deep park never
+    // engaged in a single real run. A gate keyed on `ownedLevels['OLIVE']`
+    // would reproduce that failure exactly.
+    //
+    // `player.weapons` is the game's own combined map, and three independent
+    // live dumps recorded in this file agree on its shape: lowercase, squashed
+    // and ABBREVIATED keys with plain numeric levels — `southside: 6`,
+    // `olive: 6`, `sweetver: 6`, `dryver: 6`, plus the craft results `syrup`
+    // and `blackver`. Note `sweetver`, not `sweetvermouth`: a generic
+    // squash of the display name does NOT produce the key the game uses, so
+    // the measured spellings are listed first and the squash is only a
+    // fallback. applyCraft leaves consumed materials in `weapons` at full
+    // level ("능력치 효과는 계속 적용되고, 슬롯 카운트에서만 빠짐"), so this
+    // reading survives the BLACK VERMOUTH craft that eats SWEET VERMOUTH.
+    //
+    // AND IT SELF-REPORTS. Every leg carries the key that actually answered
+    // and where the number came from, and `capStatus().build` prints them. If
+    // a spelling is wrong the first report after install shows `key: null,
+    // src: 'none'` on that leg — instead of the rule quietly never firing
+    // again for four versions, which is precisely how this class of bug has
+    // cost this project every time.
+    const BUILD_WEAPON_KEYS = {
+        'SOUTH SIDE': ['southside'],
+        'SIMPLE SYRUP': ['syrup', 'simplesyrup'],
+        'OLIVE': ['olive'],
+        'SWEET VERMOUTH': ['sweetver', 'sweetvermouth'],
+        'BLACK VERMOUTH': ['blackver', 'blackvermouth'],
+        'DRY VERMOUTH': ['dryver', 'dryvermouth']
+    };
+    function buildKeyLevel(name) {
+        const max = ownedMax[name] || 6;
+        const cands = (BUILD_WEAPON_KEYS[name] || []).slice();
+        const squash = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cands.indexOf(squash) < 0) cands.push(squash);
+        // 1. the game's own map. Object of key->level in every dump; an array
+        //    of entries is accepted too so a shape change degrades to a miss
+        //    on one leg rather than a thrown planner tick.
+        const w = safe(() => player.weapons, null);
+        const lvOf = (v) => typeof v === 'number' ? v
+            : (v && typeof v === 'object' && typeof v.lv === 'number') ? v.lv
+            : (v && typeof v === 'object' && typeof v.level === 'number') ? v.level : null;
+        if (w && typeof w === 'object') {
+            if (Array.isArray(w)) {
+                for (const e of w) {
+                    const k = String((e && (e.key || e.n || e.name)) || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (cands.indexOf(k) < 0) continue;
+                    const lv = lvOf(e);
+                    if (lv != null) return { lv, max, key: k, src: 'weapons' };
+                }
+            } else {
+                for (const k of cands) {
+                    const lv = lvOf(w[k]);
+                    if (lv != null) return { lv, max, key: k, src: 'weapons' };
+                }
+            }
+        }
+        // 2. the levels we scored ourselves. "OLIVE UP" FIRST — that is where
+        //    in-run upgrades actually land; the bare key is the acquisition
+        //    flag that froze at 1 and fooled every armour gate before 6.91.2.
+        const up = ownedLevels[name + ' UP'];
+        if (typeof up === 'number' && up > 0) return { lv: up, max: ownedMax[name + ' UP'] || max, key: name + ' UP', src: 'owned' };
+        const own = ownedLevels[name];
+        if (typeof own === 'number' && own > 0) return { lv: own, max, key: name, src: 'owned' };
+        // 3. the absorbed-key blind spot (6.89.0): a craft eats its parts, so
+        //    a maxed half can leave every live reading behind.
+        if (typeof keyEffectivelyMaxed === 'function' && safe(() => keyEffectivelyMaxed(name), false)) {
+            return { lv: max, max, key: name, src: 'absorbed' };
+        }
+        if (everMaxed.has(name) || everMaxed.has(name + ' UP')) return { lv: max, max, key: name, src: 'evermaxed' };
+        return { lv: 0, max, key: null, src: 'none' };
+    }
+    // Clauses are AND across, OR within: [['SOUTH SIDE'], ['SIMPLE SYRUP'],
+    // ['OLIVE'], ['SWEET VERMOUTH','BLACK VERMOUTH']]. An absent or empty
+    // `build` list is the off switch and passes, so the gate can be disabled
+    // from config without a code change.
+    // v6.132.0 THE TICK BILL. planMove calls this every tick, and the tick is
+    // gated on GAME time — at medianSpeed 15 that is ~455 calls per wall
+    // second (optimizer-ceiling.md), so a per-call array of leg objects is 455
+    // allocations/s for a value that changes a handful of times per run.
+    // Levels only ever go UP, so the pass is MONOTONE: once every clause is
+    // satisfied it stays satisfied for the run, and `buildGateLatched` short-
+    // circuits to a shared frozen result. Before that it recomputes at most
+    // once per game-second. `buildGateState(true)` forces a fresh read for the
+    // report, which must never show a cached picture.
+    let buildGateLatched = false, buildGateAt = -1e9, buildGateLast = null;
+    const BUILD_GATE_OK = { ok: true, legs: [], clauses: 0, latched: true };
+    // ONE reset, called from every run boundary — startRun (04) and both test
+    // resetters (06). The first cut cleared it only in startRun, and six
+    // scenarios went red: a latch taken on a complete build stayed set into
+    // the next scene, so a build one level short still passed the gate. That
+    // is the production hazard too — a latch surviving into a run that has
+    // not bought a card would cap it immortal on its first stable tick.
+    function resetBuildGate() { buildGateLatched = false; buildGateAt = -1e9; buildGateLast = null; }
+    function buildGateState(force) {
+        if (buildGateLatched && !force) return BUILD_GATE_OK;
+        if (!force) {
+            const gtB = safe(() => gameTime, 0) || 0;
+            if (buildGateLast && (gtB - buildGateAt) < 1 && gtB >= buildGateAt) return buildGateLast;
+            buildGateAt = gtB;
+        }
+        const r = buildGateCompute();
+        if (!force) { buildGateLast = r; if (r.ok) buildGateLatched = true; }
+        return r;
+    }
+    function buildGateCompute() {
+        const CS = (CONFIG.deepHell && CONFIG.deepHell.capStable) || {};
+        const clauses = Array.isArray(CS.build) ? CS.build : [];
+        const legs = [];
+        let ok = true;
+        for (const clause of clauses) {
+            const names = Array.isArray(clause) ? clause : [clause];
+            let best = null, done = false;
+            for (const n of names) {
+                const r = buildKeyLevel(n);
+                r.name = n;
+                if (r.lv >= r.max && r.max > 0) { best = r; done = true; break; }
+                if (best == null || r.lv > best.lv) best = r;
+            }
+            if (!done) ok = false;
+            legs.push({ need: names.join(' or '), ok: done, name: best.name,
+                lv: best.lv, max: best.max, key: best.key, src: best.src });
+        }
+        return { ok, legs, clauses: clauses.length, latched: false };
     }
 
     // ── v6.112.0 CONTACT BREAK-EVEN ─────────────────────────────────────────
@@ -7499,6 +7666,10 @@
         capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
         capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
         capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
+        // v6.132.0: the build gate's monotone latch and its 1 s cache are per-run
+        // too — a new run starts with no ingredients, and a latch carried over
+        // would pass the build leg on a run that has not bought a single card.
+        resetBuildGate();
         capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
@@ -8094,12 +8265,30 @@
     // Book one finished run against the counter. Called from finishRun after
     // the phase row is appended, so the audit-derived figure already includes
     // this run and the max() below cannot double-count it.
+    // v6.132.0 MULTI-TAB. `graduation` is read once at page load and written
+    // back WHOLE, so two tabs each hold a stale copy and the last writer wins
+    // — one tab's run counts, ledger marks and rotation cursor silently
+    // overwrite the other's. `beginTrial` already re-reads the learn store
+    // for exactly this reason ("re-read shared storage to pick up other
+    // tabs' progress before this run counts itself in"); the graduation
+    // store never did. Caught in a live 6.131.0 paste: `compare` showed 4/8/6
+    // runs per character on 6.131.0 while the race ledger read 1/1/1, and
+    // minguk's runRange [618,621] covered four run numbers for eight counted
+    // runs. Adopted only when the stored blob carries the current reset guard,
+    // so a pre-reset blob can never be pulled back in.
+    function reloadGraduation() {
+        try {
+            const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
+            if (s && typeof s === 'object' && s.resetEpoch132) graduation = s;
+        } catch (e) { }
+    }
     function bookImmortal(row) {
         try {
             if (!row || typeof row.v !== 'string') return;
             const m = row.v.match(/\+([a-z]+)$/);
             if (!m || !CHARS[m[1]]) return;
             const c = m[1];
+            reloadGraduation();   // v6.132.0: another tab may have booked runs since this page loaded
             graduation.counts = graduation.counts || {};
             const prev = graduation.counts[c] || 0;
             graduation.counts[c] = Math.max(prev + (isImmortalRow(row) ? 1 : 0), immortalRowsCount(c));
@@ -8195,6 +8384,7 @@
         return { char: pick, graduatedNow };
     }
     function graduationPick() {
+        reloadGraduation();   // v6.132.0: the rotation cursor is shared state too
         const Gd = CONFIG.graduation || {};
         const pin = CONFIG.preferredBartender;
         const need = Gd.count != null ? Gd.count : Gd.streak;   // `streak` accepted as a legacy alias
@@ -12674,10 +12864,15 @@
             if (!capEarly && (CS.holdS || 0) > 0) {
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
-                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
                 const defNow = liveDefense() || 0;
+                // v6.132.0: the third leg is the BUILD, not the super count.
+                // `supersMin` stays honoured only if a config still carries it,
+                // so an older stored config cannot silently open the gate.
+                const bg = buildGateState();
+                const supersMin = CS.supersMin != null ? CS.supersMin : 0;
                 const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
-                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
+                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin;
+                const supOk = bg.ok && supersNow >= supersMin;
                 const stableNow = hpOk && defOk && supOk;
                 // v6.102.0 BUILD COMPLETE, measured. The armour and supers
                 // bars are the BUILD; hp is the proof that the build holds.
@@ -12693,18 +12888,33 @@
                         if (streak > capBestStreakS) capBestStreakS = streak;
                         if (streak >= CS.holdS && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) capEarly = true;
                     }
-                } else if (capStableSince != null) {
-                    // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
-                    // the old code zeroed the WHOLE hold on any instantaneous
-                    // dip, which a contact-damage game trips constantly. A
-                    // blip shorter than dipGraceS pauses the clock (streak
-                    // keeps counting once we're back over the floor); a dip
-                    // that outlasts the grace still resets fully, same as before.
-                    const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
-                    if (capDipSince == null) capDipSince = gtCap;
-                    if (grace <= 0 || (gtCap - capDipSince) > grace) {
-                        capStableSince = null; capDipSince = null;
-                        capLastResetReason = !hpOk ? 'hp' : !defOk ? 'def' : 'supers';
+                } else {
+                    // v6.132.0: name the leg AND, for the build leg, the clause
+                    // that is short — "build:SIMPLE SYRUP" reads straight out
+                    // of the report without a second probe.
+                    const shortLeg = !hpOk ? 'hp' : !defOk ? 'def'
+                        : !bg.ok ? ('build:' + ((bg.legs.filter(l => !l.ok)[0] || {}).need || '?')) : 'supers';
+                    if (capStableSince != null) {
+                        // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
+                        // the old code zeroed the WHOLE hold on any instantaneous
+                        // dip, which a contact-damage game trips constantly. A
+                        // blip shorter than dipGraceS pauses the clock (streak
+                        // keeps counting once we're back over the floor); a dip
+                        // that outlasts the grace still resets fully, same as before.
+                        const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
+                        if (capDipSince == null) capDipSince = gtCap;
+                        if (grace <= 0 || (gtCap - capDipSince) > grace) {
+                            capStableSince = null; capDipSince = null;
+                            capLastResetReason = shortLeg;
+                        }
+                    } else {
+                        // v6.132.0: record the short leg even when NO streak was
+                        // running. The old code only wrote this field on a reset,
+                        // so a build that never once met its bars left it null —
+                        // which is exactly the report the user pasted: streakS 0,
+                        // nothing saying why. "Why has the clock never started"
+                        // is the more common question, and now it has an answer.
+                        capLastResetReason = shortLeg;
                     }
                 }
             }
@@ -14642,7 +14852,16 @@
                     trimReport, REPORT_BUDGET_KB,   // v6.125.0: the prompt-size budget, pure function of the report
                     isImmortalRow, immortalCount, immortalRowsCount, bookImmortal, graduationPick, graduationStatus,   // v6.125.0/6.126.0: the immortal stop rule (a COUNT)
                     versionAtOrAfterEpoch,   // v6.128.0: the reset floor a pre-reset row must clear to still count
-                    setGraduation: (g) => { graduation = g || { graduated: {} }; },
+                    // v6.132.0: this MUST persist, not just assign. bookImmortal
+                    // and graduationPick now re-read localStorage first (the
+                    // multi-tab fix), so a fixture that lives only in memory is
+                    // overwritten by the stored blob before the code under test
+                    // ever sees it. Writing through keeps the test surface and
+                    // the real load path telling the same story.
+                    setGraduation: (g) => {
+                        graduation = g || { graduated: {} };
+                        try { localStorage.setItem(GRADUATION_KEY, JSON.stringify(graduation)); } catch (e) { }
+                    },
                     graduationKey: () => GRADUATION_KEY,   // v6.126.0: the persistence test reads the store back
                     setPhaseRows: (rows) => { phaseAudit = phaseAudit || {}; phaseAudit.rows = rows; },
                     endRun: () => finishRun(),
@@ -14711,11 +14930,12 @@
                     // v6.99.3: the early-cap stability proof reads the run's
                     // supers count; the test arranges it directly.
                     setSupers: n => { supersThisRun = n; },
-                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; resetBuildGate(); },
                     // v6.101.0: the ladder's own clock, so a scenario can put
                     // the run at a chosen rung without replaying 4 minutes.
                     resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null;
                         capEarly = false; capStableSince = null; capLastResetReason = null;
+                        resetBuildGate();   // v6.132.0: a run boundary clears the build latch too
                         capFirstWall = 0; satSince = null; satPeakEn = 0; },
                     // v6.108.0 hooks. The two escapes are WALL-clock by
                     // design, so a test cannot advance them with gameTime —
@@ -15188,8 +15408,15 @@
                     ? p.hp / p.maxHp : null;
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
-                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 0;
                 const def = liveDefense();
+                // v6.132.0: the build leg reports ITSELF. Every clause carries
+                // the key that answered and where the number came from, so a
+                // wrong weapon-key spelling shows as `key: null, src: 'none'`
+                // in the very first report instead of the gate silently never
+                // firing — which is exactly how the ownedLevels['OLIVE'] trap
+                // went unnoticed for four versions.
+                const bg = buildGateState(true);   // force: a report must never show a cached picture
                 return {
                     gt: Math.round(gt),
                     fromS: CS.fromS != null ? CS.fromS : 3600,
@@ -15215,10 +15442,24 @@
                     readyAt: capReadyGt == null ? null : Math.round(capReadyGt),
                     defMinReachable: defMin <= 34.992,
                     live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
-                    need: { hpFloor, defMin, supersMin },
+                    need: { hpFloor, defMin, supersMin, build: (CS.build || []).map(c => (Array.isArray(c) ? c : [c]).join(' or ')) },
+                    // v6.132.0: `build.legs` is the self-report. `raw` is the
+                    // whole weapons map as the game holds it, capped, so a key
+                    // this gate does not know is still visible in the paste.
+                    build: {
+                        ok: bg.ok, clauses: bg.clauses, legs: bg.legs,
+                        raw: safe(() => {
+                            const w = player.weapons; if (!w || typeof w !== 'object' || Array.isArray(w)) return w || null;
+                            const o = {}; let n = 0;
+                            for (const k in w) { if (n++ >= 40) break; o[k] = w[k]; }
+                            return o;
+                        }, null)
+                    },
                     short: {
                         hp: hp != null && hp < hpFloor,
                         def: def != null && def < defMin,
+                        build: !bg.ok,
+                        buildShort: bg.legs.filter(l => !l.ok).map(l => l.need + ' ' + l.lv + '/' + l.max + ' (' + l.src + ')'),
                         supers: (typeof supersThisRun === 'number' ? supersThisRun : 0) < supersMin
                     }
                 };

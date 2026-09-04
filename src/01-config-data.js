@@ -1270,7 +1270,20 @@
             // hp hold is doing the real filtering: of the 13 ready builds,
             // 7 died naturally between 2523 and 7394 because their hold
             // never completed — being "ready" is necessary, not sufficient.
-            capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, supersMin: 3, holdS: 300, dipGraceS: 4 },
+            // v6.132.0 `supersMin: 3` IS GONE, REPLACED BY `build` (user:
+            // "let's remove this from the rule and instead replace it with
+            // has southside, simple syrup, olives, and sweet vermouth or
+            // black vermouth all maxed out"). The live report that prompted
+            // it had hp and defense both passing and `supers: 2` alone
+            // holding the gate shut, with streakS 0 and ~1,090 s left — the
+            // funnel had already flagged supersMin as the binding constraint
+            // on nearly every ready build. Clauses are AND across, OR within;
+            // levels are read from `player.weapons` by buildGateState(), NOT
+            // from ownedLevels (see the BUILD GATE block for why that
+            // distinction has cost this project four versions once already).
+            // An empty list disables the leg.
+            capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, holdS: 300, dipGraceS: 4,
+                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']] },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             // v6.112.0: the gate is now max(parkRegenRate, breakEven * this).
@@ -2984,8 +2997,15 @@
         // as the 6.128.0 one, its own guard, and it also clears the
         // round-robin cursor so the new cycle starts at `order[0]`. A store
         // that has NEITHER flag (pre-6.128.0) gets both stamped in one go.
-        if (!g.resetEpoch128 || !g.resetEpoch130) {
-            g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: SCRIPT_VERSION };
+        // v6.132.0 THE THIRD RESET — because the DEFINITION changed, not
+        // because the user asked to start over. `capStable.supersMin: 3` is
+        // gone and the four-ingredient build gate replaced it, so every count
+        // standing in the store was earned against a different bar and a
+        // graduation mixing the two proves nothing. Same shape and its own
+        // guard; a store missing any of the three flags gets all three.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132) {
+            g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
+                  immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -3431,6 +3451,153 @@
         const r = safe(() => player.regenBonus, null);
         if (typeof r === 'number' && r > 0) return r;
         return 0.284 * (ownedLevels['WATER'] || 0) + 0.512 * (ownedLevels['SIMPLE SYRUP'] || 0);
+    }
+
+    // ── v6.132.0 THE BUILD GATE, replacing capStable.supersMin ──────────────
+    //
+    // USER: "let's remove this from the rule and instead replace it with has
+    // southside, simple syrup, olives, and sweet vermouth or black vermouth
+    // all maxed out."
+    //
+    // WHY THE OLD BAR WAS WRONG. `supersMin: 3` counted super EVOLUTIONS, and
+    // the funnel had already recorded it as the binding constraint on nearly
+    // every ready build. The live report the user pasted made it concrete: hp
+    // and defense both passed, `supers: 2` alone held the gate shut, and the
+    // hold clock had therefore banked zero seconds with ~1,090 game-seconds
+    // left. Supers are also the part of the build the bot controls least — a
+    // line arms only when the pool happens to offer its key's last level. The
+    // four ingredients below are what the run is actually built for, and the
+    // planner steers toward all four on purpose.
+    //
+    // WHY IT READS `player.weapons` AND NOT `ownedLevels`. This is 6.91.2's
+    // lesson, and it is the single most expensive naming mistake in the
+    // project. A live probe at gt 2218 read `player.defense` 34.992 — the cap
+    // — while `ownedLevels['OLIVE']` read 1, because in-run upgrade levels
+    // land under "OLIVE UP" and the bare key freezes at 1 the moment the
+    // ingredient is first acquired. Four armour gates spent four versions
+    // comparing 1 against thresholds of 2, 4 and 6, and deep park never
+    // engaged in a single real run. A gate keyed on `ownedLevels['OLIVE']`
+    // would reproduce that failure exactly.
+    //
+    // `player.weapons` is the game's own combined map, and three independent
+    // live dumps recorded in this file agree on its shape: lowercase, squashed
+    // and ABBREVIATED keys with plain numeric levels — `southside: 6`,
+    // `olive: 6`, `sweetver: 6`, `dryver: 6`, plus the craft results `syrup`
+    // and `blackver`. Note `sweetver`, not `sweetvermouth`: a generic
+    // squash of the display name does NOT produce the key the game uses, so
+    // the measured spellings are listed first and the squash is only a
+    // fallback. applyCraft leaves consumed materials in `weapons` at full
+    // level ("능력치 효과는 계속 적용되고, 슬롯 카운트에서만 빠짐"), so this
+    // reading survives the BLACK VERMOUTH craft that eats SWEET VERMOUTH.
+    //
+    // AND IT SELF-REPORTS. Every leg carries the key that actually answered
+    // and where the number came from, and `capStatus().build` prints them. If
+    // a spelling is wrong the first report after install shows `key: null,
+    // src: 'none'` on that leg — instead of the rule quietly never firing
+    // again for four versions, which is precisely how this class of bug has
+    // cost this project every time.
+    const BUILD_WEAPON_KEYS = {
+        'SOUTH SIDE': ['southside'],
+        'SIMPLE SYRUP': ['syrup', 'simplesyrup'],
+        'OLIVE': ['olive'],
+        'SWEET VERMOUTH': ['sweetver', 'sweetvermouth'],
+        'BLACK VERMOUTH': ['blackver', 'blackvermouth'],
+        'DRY VERMOUTH': ['dryver', 'dryvermouth']
+    };
+    function buildKeyLevel(name) {
+        const max = ownedMax[name] || 6;
+        const cands = (BUILD_WEAPON_KEYS[name] || []).slice();
+        const squash = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cands.indexOf(squash) < 0) cands.push(squash);
+        // 1. the game's own map. Object of key->level in every dump; an array
+        //    of entries is accepted too so a shape change degrades to a miss
+        //    on one leg rather than a thrown planner tick.
+        const w = safe(() => player.weapons, null);
+        const lvOf = (v) => typeof v === 'number' ? v
+            : (v && typeof v === 'object' && typeof v.lv === 'number') ? v.lv
+            : (v && typeof v === 'object' && typeof v.level === 'number') ? v.level : null;
+        if (w && typeof w === 'object') {
+            if (Array.isArray(w)) {
+                for (const e of w) {
+                    const k = String((e && (e.key || e.n || e.name)) || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (cands.indexOf(k) < 0) continue;
+                    const lv = lvOf(e);
+                    if (lv != null) return { lv, max, key: k, src: 'weapons' };
+                }
+            } else {
+                for (const k of cands) {
+                    const lv = lvOf(w[k]);
+                    if (lv != null) return { lv, max, key: k, src: 'weapons' };
+                }
+            }
+        }
+        // 2. the levels we scored ourselves. "OLIVE UP" FIRST — that is where
+        //    in-run upgrades actually land; the bare key is the acquisition
+        //    flag that froze at 1 and fooled every armour gate before 6.91.2.
+        const up = ownedLevels[name + ' UP'];
+        if (typeof up === 'number' && up > 0) return { lv: up, max: ownedMax[name + ' UP'] || max, key: name + ' UP', src: 'owned' };
+        const own = ownedLevels[name];
+        if (typeof own === 'number' && own > 0) return { lv: own, max, key: name, src: 'owned' };
+        // 3. the absorbed-key blind spot (6.89.0): a craft eats its parts, so
+        //    a maxed half can leave every live reading behind.
+        if (typeof keyEffectivelyMaxed === 'function' && safe(() => keyEffectivelyMaxed(name), false)) {
+            return { lv: max, max, key: name, src: 'absorbed' };
+        }
+        if (everMaxed.has(name) || everMaxed.has(name + ' UP')) return { lv: max, max, key: name, src: 'evermaxed' };
+        return { lv: 0, max, key: null, src: 'none' };
+    }
+    // Clauses are AND across, OR within: [['SOUTH SIDE'], ['SIMPLE SYRUP'],
+    // ['OLIVE'], ['SWEET VERMOUTH','BLACK VERMOUTH']]. An absent or empty
+    // `build` list is the off switch and passes, so the gate can be disabled
+    // from config without a code change.
+    // v6.132.0 THE TICK BILL. planMove calls this every tick, and the tick is
+    // gated on GAME time — at medianSpeed 15 that is ~455 calls per wall
+    // second (optimizer-ceiling.md), so a per-call array of leg objects is 455
+    // allocations/s for a value that changes a handful of times per run.
+    // Levels only ever go UP, so the pass is MONOTONE: once every clause is
+    // satisfied it stays satisfied for the run, and `buildGateLatched` short-
+    // circuits to a shared frozen result. Before that it recomputes at most
+    // once per game-second. `buildGateState(true)` forces a fresh read for the
+    // report, which must never show a cached picture.
+    let buildGateLatched = false, buildGateAt = -1e9, buildGateLast = null;
+    const BUILD_GATE_OK = { ok: true, legs: [], clauses: 0, latched: true };
+    // ONE reset, called from every run boundary — startRun (04) and both test
+    // resetters (06). The first cut cleared it only in startRun, and six
+    // scenarios went red: a latch taken on a complete build stayed set into
+    // the next scene, so a build one level short still passed the gate. That
+    // is the production hazard too — a latch surviving into a run that has
+    // not bought a card would cap it immortal on its first stable tick.
+    function resetBuildGate() { buildGateLatched = false; buildGateAt = -1e9; buildGateLast = null; }
+    function buildGateState(force) {
+        if (buildGateLatched && !force) return BUILD_GATE_OK;
+        if (!force) {
+            const gtB = safe(() => gameTime, 0) || 0;
+            if (buildGateLast && (gtB - buildGateAt) < 1 && gtB >= buildGateAt) return buildGateLast;
+            buildGateAt = gtB;
+        }
+        const r = buildGateCompute();
+        if (!force) { buildGateLast = r; if (r.ok) buildGateLatched = true; }
+        return r;
+    }
+    function buildGateCompute() {
+        const CS = (CONFIG.deepHell && CONFIG.deepHell.capStable) || {};
+        const clauses = Array.isArray(CS.build) ? CS.build : [];
+        const legs = [];
+        let ok = true;
+        for (const clause of clauses) {
+            const names = Array.isArray(clause) ? clause : [clause];
+            let best = null, done = false;
+            for (const n of names) {
+                const r = buildKeyLevel(n);
+                r.name = n;
+                if (r.lv >= r.max && r.max > 0) { best = r; done = true; break; }
+                if (best == null || r.lv > best.lv) best = r;
+            }
+            if (!done) ok = false;
+            legs.push({ need: names.join(' or '), ok: done, name: best.name,
+                lv: best.lv, max: best.max, key: best.key, src: best.src });
+        }
+        return { ok, legs, clauses: clauses.length, latched: false };
     }
 
     // ── v6.112.0 CONTACT BREAK-EVEN ─────────────────────────────────────────

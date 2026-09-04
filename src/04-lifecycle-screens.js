@@ -108,6 +108,10 @@
         capDipSince = null; capBestStreakS = 0; capLastResetReason = null;   // v6.100.1: dip-grace state is per-run
         capHurtAt = 0; capForcedThisRun = false;   // v6.101.0: the cap ladder's actuator state is per-run
         capReadyGt = null;                         // v6.102.0: build-complete gt is per-run
+        // v6.132.0: the build gate's monotone latch and its 1 s cache are per-run
+        // too — a new run starts with no ingredients, and a latch carried over
+        // would pass the build leg on a run that has not bought a single card.
+        resetBuildGate();
         capFirstWall = 0; satSince = null; satPeakEn = 0;   // v6.108.0: wall stamp + saturation state are per-run
         spdLastGt = null; spdLastWall = 0; spdSamples = []; spdWorst = null;   // v6.108.0: speed telemetry is per-run
         invulnTicks = 0; planTicks = 0; ultMaxLv = 0; ultLv6At = null;   // v6.109.0: ult-uptime economy is per-run
@@ -703,12 +707,30 @@
     // Book one finished run against the counter. Called from finishRun after
     // the phase row is appended, so the audit-derived figure already includes
     // this run and the max() below cannot double-count it.
+    // v6.132.0 MULTI-TAB. `graduation` is read once at page load and written
+    // back WHOLE, so two tabs each hold a stale copy and the last writer wins
+    // — one tab's run counts, ledger marks and rotation cursor silently
+    // overwrite the other's. `beginTrial` already re-reads the learn store
+    // for exactly this reason ("re-read shared storage to pick up other
+    // tabs' progress before this run counts itself in"); the graduation
+    // store never did. Caught in a live 6.131.0 paste: `compare` showed 4/8/6
+    // runs per character on 6.131.0 while the race ledger read 1/1/1, and
+    // minguk's runRange [618,621] covered four run numbers for eight counted
+    // runs. Adopted only when the stored blob carries the current reset guard,
+    // so a pre-reset blob can never be pulled back in.
+    function reloadGraduation() {
+        try {
+            const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
+            if (s && typeof s === 'object' && s.resetEpoch132) graduation = s;
+        } catch (e) { }
+    }
     function bookImmortal(row) {
         try {
             if (!row || typeof row.v !== 'string') return;
             const m = row.v.match(/\+([a-z]+)$/);
             if (!m || !CHARS[m[1]]) return;
             const c = m[1];
+            reloadGraduation();   // v6.132.0: another tab may have booked runs since this page loaded
             graduation.counts = graduation.counts || {};
             const prev = graduation.counts[c] || 0;
             graduation.counts[c] = Math.max(prev + (isImmortalRow(row) ? 1 : 0), immortalRowsCount(c));
@@ -804,6 +826,7 @@
         return { char: pick, graduatedNow };
     }
     function graduationPick() {
+        reloadGraduation();   // v6.132.0: the rotation cursor is shared state too
         const Gd = CONFIG.graduation || {};
         const pin = CONFIG.preferredBartender;
         const need = Gd.count != null ? Gd.count : Gd.streak;   // `streak` accepted as a legacy alias

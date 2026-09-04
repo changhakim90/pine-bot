@@ -3800,10 +3800,15 @@
             if (!capEarly && (CS.holdS || 0) > 0) {
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
-                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
                 const defNow = liveDefense() || 0;
+                // v6.132.0: the third leg is the BUILD, not the super count.
+                // `supersMin` stays honoured only if a config still carries it,
+                // so an older stored config cannot silently open the gate.
+                const bg = buildGateState();
+                const supersMin = CS.supersMin != null ? CS.supersMin : 0;
                 const supersNow = typeof supersThisRun === 'number' ? supersThisRun : 0;
-                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin, supOk = supersNow >= supersMin;
+                const hpOk = hpRatio >= hpFloor, defOk = defNow >= defMin;
+                const supOk = bg.ok && supersNow >= supersMin;
                 const stableNow = hpOk && defOk && supOk;
                 // v6.102.0 BUILD COMPLETE, measured. The armour and supers
                 // bars are the BUILD; hp is the proof that the build holds.
@@ -3819,18 +3824,33 @@
                         if (streak > capBestStreakS) capBestStreakS = streak;
                         if (streak >= CS.holdS && gtCap >= (CS.fromS != null ? CS.fromS : 3600)) capEarly = true;
                     }
-                } else if (capStableSince != null) {
-                    // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
-                    // the old code zeroed the WHOLE hold on any instantaneous
-                    // dip, which a contact-damage game trips constantly. A
-                    // blip shorter than dipGraceS pauses the clock (streak
-                    // keeps counting once we're back over the floor); a dip
-                    // that outlasts the grace still resets fully, same as before.
-                    const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
-                    if (capDipSince == null) capDipSince = gtCap;
-                    if (grace <= 0 || (gtCap - capDipSince) > grace) {
-                        capStableSince = null; capDipSince = null;
-                        capLastResetReason = !hpOk ? 'hp' : !defOk ? 'def' : 'supers';
+                } else {
+                    // v6.132.0: name the leg AND, for the build leg, the clause
+                    // that is short — "build:SIMPLE SYRUP" reads straight out
+                    // of the report without a second probe.
+                    const shortLeg = !hpOk ? 'hp' : !defOk ? 'def'
+                        : !bg.ok ? ('build:' + ((bg.legs.filter(l => !l.ok)[0] || {}).need || '?')) : 'supers';
+                    if (capStableSince != null) {
+                        // v6.100.1 DIP GRACE (user: "not dying ... using dashes" —
+                        // the old code zeroed the WHOLE hold on any instantaneous
+                        // dip, which a contact-damage game trips constantly. A
+                        // blip shorter than dipGraceS pauses the clock (streak
+                        // keeps counting once we're back over the floor); a dip
+                        // that outlasts the grace still resets fully, same as before.
+                        const grace = CS.dipGraceS != null ? CS.dipGraceS : 0;
+                        if (capDipSince == null) capDipSince = gtCap;
+                        if (grace <= 0 || (gtCap - capDipSince) > grace) {
+                            capStableSince = null; capDipSince = null;
+                            capLastResetReason = shortLeg;
+                        }
+                    } else {
+                        // v6.132.0: record the short leg even when NO streak was
+                        // running. The old code only wrote this field on a reset,
+                        // so a build that never once met its bars left it null —
+                        // which is exactly the report the user pasted: streakS 0,
+                        // nothing saying why. "Why has the clock never started"
+                        // is the more common question, and now it has an answer.
+                        capLastResetReason = shortLeg;
                     }
                 }
             }
