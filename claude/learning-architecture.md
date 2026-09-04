@@ -1,3 +1,5 @@
+# The learning architecture
+
 Written because "how do I make the bot learn X" kept needing this map rebuilt from scratch. Read this before adding another learned layer.
 
 ## Standing epistemics (user, 2026-08-30)

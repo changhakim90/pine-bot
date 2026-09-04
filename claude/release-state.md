@@ -1,3 +1,5 @@
+# Release state
+
 Last updated 2026-09-04 (6.130.0 confirmed live on `origin/main` — immortal count reset again + per-run rotation; **6.131.0 built — the race ledger, instrument only — push pending**; the mis-stamped-build incident and the shared-store wipe it caused are in their own section below). Measured performance lives in `claude/version-history.md` and `claude/pat-measurements.md`; demo evidence in `claude/pat-manual-demos.md` and `claude/joe-manual-demo.md`; this doc is mechanics and process. **6.125.0's notes are in `claude/batch-6.125.0.md`; 6.126.0's root cause and proof are in `claude/optimizer-ceiling.md`; 6.127.0's shared-skill architecture (CEM/bandits now one store across Joe, Pat, and Minguk) is in `claude/shared-skill-architecture.md`; the immortal rule — now a count of TEN, reset fresh as of 6.128.0 — is in `claude/immortal-stop-rule.md` (note: that doc was accidentally overwritten and partially reconstructed during the 6.128.0 update; flagged at its top). 6.129.0 (cluster-aware ult aiming for Pat/Joe) has no separate doc — its CHANGELOG.md row and this doc's entries below are the full record.**
 
 ## Where things stand

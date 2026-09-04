@@ -1,3 +1,5 @@
+# The optimizer ceiling
+
 **Status:** fixed in 6.126.0. Read this before touching planMove's size or any hot loop.
 
 ## The finding

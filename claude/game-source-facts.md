@@ -1,3 +1,5 @@
+# Game source facts
+
 Read out of `pineandco.online`'s inline script (~650 KB) via the console, not inferred from play. These supersede several long-standing assumptions in the bot; where they do, the superseded belief is named.
 
 **Scope gotcha, cost two probes:** the game's state lives in module-scope `let`/`const`, **not on `window`**. `window.player` / `window.gameTime` / `window.enemies` are all `undefined`; bare `player` / `gameTime` / `enemies` resolve fine in the console, which is why the bot reads them via `safe(() => player)`. Game *functions* (`update`, `onHit`, `fireCocktail`, `tryDash`, `dashCd`, …) **are** enumerable on `window`, so `Object.keys(window).filter(k => typeof window[k] === 'function')` is the way to scan source. Write probes accordingly.
