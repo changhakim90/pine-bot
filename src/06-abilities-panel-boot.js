@@ -1511,7 +1511,16 @@
                     trimReport, REPORT_BUDGET_KB,   // v6.125.0: the prompt-size budget, pure function of the report
                     isImmortalRow, immortalCount, immortalRowsCount, bookImmortal, graduationPick, graduationStatus,   // v6.125.0/6.126.0: the immortal stop rule (a COUNT)
                     versionAtOrAfterEpoch,   // v6.128.0: the reset floor a pre-reset row must clear to still count
-                    setGraduation: (g) => { graduation = g || { graduated: {} }; },
+                    // v6.132.0: this MUST persist, not just assign. bookImmortal
+                    // and graduationPick now re-read localStorage first (the
+                    // multi-tab fix), so a fixture that lives only in memory is
+                    // overwritten by the stored blob before the code under test
+                    // ever sees it. Writing through keeps the test surface and
+                    // the real load path telling the same story.
+                    setGraduation: (g) => {
+                        graduation = g || { graduated: {} };
+                        try { localStorage.setItem(GRADUATION_KEY, JSON.stringify(graduation)); } catch (e) { }
+                    },
                     graduationKey: () => GRADUATION_KEY,   // v6.126.0: the persistence test reads the store back
                     setPhaseRows: (rows) => { phaseAudit = phaseAudit || {}; phaseAudit.rows = rows; },
                     endRun: () => finishRun(),
@@ -1580,11 +1589,12 @@
                     // v6.99.3: the early-cap stability proof reads the run's
                     // supers count; the test arranges it directly.
                     setSupers: n => { supersThisRun = n; },
-                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; },
+                    resetCapLatch: () => { capStableSince = null; capEarly = false; capDipSince = null; capBestStreakS = 0; capLastResetReason = null; resetBuildGate(); },
                     // v6.101.0: the ladder's own clock, so a scenario can put
                     // the run at a chosen rung without replaying 4 minutes.
                     resetCapLadder: () => { capFirstGt = null; capHurtAt = 0; capForcedThisRun = false; capReadyGt = null;
                         capEarly = false; capStableSince = null; capLastResetReason = null;
+                        resetBuildGate();   // v6.132.0: a run boundary clears the build latch too
                         capFirstWall = 0; satSince = null; satPeakEn = 0; },
                     // v6.108.0 hooks. The two escapes are WALL-clock by
                     // design, so a test cannot advance them with gameTime —
@@ -2057,8 +2067,15 @@
                     ? p.hp / p.maxHp : null;
                 const hpFloor = CS.hpFloor != null ? CS.hpFloor : 0.97;
                 const defMin = CS.defMin != null ? CS.defMin : 35;
-                const supersMin = CS.supersMin != null ? CS.supersMin : 3;
+                const supersMin = CS.supersMin != null ? CS.supersMin : 0;
                 const def = liveDefense();
+                // v6.132.0: the build leg reports ITSELF. Every clause carries
+                // the key that answered and where the number came from, so a
+                // wrong weapon-key spelling shows as `key: null, src: 'none'`
+                // in the very first report instead of the gate silently never
+                // firing — which is exactly how the ownedLevels['OLIVE'] trap
+                // went unnoticed for four versions.
+                const bg = buildGateState(true);   // force: a report must never show a cached picture
                 return {
                     gt: Math.round(gt),
                     fromS: CS.fromS != null ? CS.fromS : 3600,
@@ -2084,10 +2101,24 @@
                     readyAt: capReadyGt == null ? null : Math.round(capReadyGt),
                     defMinReachable: defMin <= 34.992,
                     live: { hp: hp == null ? null : +hp.toFixed(3), def: def == null ? null : +def.toFixed(1), supers: supersThisRun },
-                    need: { hpFloor, defMin, supersMin },
+                    need: { hpFloor, defMin, supersMin, build: (CS.build || []).map(c => (Array.isArray(c) ? c : [c]).join(' or ')) },
+                    // v6.132.0: `build.legs` is the self-report. `raw` is the
+                    // whole weapons map as the game holds it, capped, so a key
+                    // this gate does not know is still visible in the paste.
+                    build: {
+                        ok: bg.ok, clauses: bg.clauses, legs: bg.legs,
+                        raw: safe(() => {
+                            const w = player.weapons; if (!w || typeof w !== 'object' || Array.isArray(w)) return w || null;
+                            const o = {}; let n = 0;
+                            for (const k in w) { if (n++ >= 40) break; o[k] = w[k]; }
+                            return o;
+                        }, null)
+                    },
                     short: {
                         hp: hp != null && hp < hpFloor,
                         def: def != null && def < defMin,
+                        build: !bg.ok,
+                        buildShort: bg.legs.filter(l => !l.ok).map(l => l.need + ' ' + l.lv + '/' + l.max + ' (' + l.src + ')'),
                         supers: (typeof supersThisRun === 'number' ? supersThisRun : 0) < supersMin
                     }
                 };

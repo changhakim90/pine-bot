@@ -5283,9 +5283,20 @@ if (which === 'run-cap') {
 
         // 5. v6.99.3 EARLY CAP — the stability proof. Config teeth first:
         const CS = pineBot.config.deepHell.capStable;
-        test('capStable ships fromS 2400 / hpFloor 0.97 / defMin 34.9 / supersMin 3 / holdS 300 / dipGraceS 4', () =>
+        test('capStable ships fromS 2400 / hpFloor 0.97 / defMin 34.9 / holdS 300 / dipGraceS 4', () =>
             assert.ok(CS && CS.fromS === 2400 && CS.hpFloor === 0.97 &&
-                      CS.defMin === 34.9 && CS.supersMin === 3 && CS.holdS === 300 && CS.dipGraceS === 4));
+                      CS.defMin === 34.9 && CS.holdS === 300 && CS.dipGraceS === 4));
+        // v6.132.0 THE BUILD GATE replaces supersMin (user: "let's remove this
+        // from the rule and instead replace it with has southside, simple
+        // syrup, olives, and sweet vermouth or black vermouth all maxed out").
+        // supersMin must be GONE, not merely lowered — a stale 3 sitting in
+        // config would keep the old binding constraint alive underneath the
+        // new one, and the live report showed supers:2 was the ONLY leg short.
+        test('v6.132.0: supersMin is gone from the shipped config', () =>
+            assert.strictEqual(CS.supersMin, undefined));
+        test('...replaced by the four build clauses, vermouth as an OR', () =>
+            assert.deepStrictEqual(CS.build,
+                [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']]));
         // v6.102.0 THE CEILING TOOTH — the assertion that would have caught
         // the bug that made the whole early cap dead code for four versions.
         // The game computes player.defense = min(60, 3*upDefense + pas.armor);
@@ -5300,9 +5311,18 @@ if (which === 'run-cap') {
                 'defMin ' + CS.defMin + ' > ceiling ' + DEF_CEILING + ' — the early cap can never fire'));
         // ...and every early-cap test below now runs at the REAL ceiling
         // rather than a rounded 35, so they are all regression tests for it.
+        // v6.132.0: the third leg is now the BUILD, read off `player.weapons`.
+        // The key spellings here are the ones three live dumps recorded in
+        // 01-config-data.js — lowercase, squashed and ABBREVIATED (`sweetver`,
+        // not `sweetvermouth`) — so these scenes double as a check that the
+        // gate reads the game's real map rather than a squash of the display
+        // name. `WEAPONS_FULL` is a complete build; scenes override it to
+        // knock a single clause out.
+        const WEAPONS_FULL = { southside: 6, syrup: 6, olive: 6, sweetver: 6, dryver: 6, mint: 6 };
         const stableScene = (gt, extraP) => {
             global.player = Object.assign({ x: 200, y: 200, hp: 469, maxHp: 469, speed: 3.0,
-                                            r: 7.2, ultReadyAt: 1e9, defense: DEF_CEILING }, extraP || {});
+                                            r: 7.2, ultReadyAt: 1e9, defense: DEF_CEILING,
+                                            weapons: Object.assign({}, WEAPONS_FULL) }, extraP || {});
             global.enemies = [];
             global.gameTime = gt;
             let pl; for (let i = 0; i < 2; i++) pl = T.planMove();
@@ -5351,13 +5371,92 @@ if (which === 'run-cap') {
         test('dipGraceS: 0 resets on ANY dip, however brief', () =>
             assert.strictEqual(T.capDebug().capStableSince, null));
         pineBot.config.deepHell.capStable = CS;
-        // supers under the floor never prove anything:
-        T.resetCapLatch(); T.setSupers(1);
-        stableScene(6000);
-        pl = stableScene(6320);
-        test('supers under supersMin: stable hp alone is not a proof', () =>
-            assert.strictEqual(pl.capDive, false));
-        T.setSupers(4);
+        // v6.132.0 AN INCOMPLETE BUILD NEVER PROVES ANYTHING. One clause at a
+        // time, because "all four" passing by accident (an empty clause list,
+        // a gate that reads nothing and returns true) is the failure mode that
+        // would quietly re-open the rule to every build.
+        for (const [label, drop] of [['SOUTH SIDE', 'southside'], ['SIMPLE SYRUP', 'syrup'],
+                                     ['OLIVE', 'olive'], ['SWEET VERMOUTH', 'sweetver']]) {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL); w[drop] = 5;   // one level short
+            stableScene(6000, { weapons: w });
+            pl = stableScene(6320, { weapons: w });
+            test(label + ' one level short: stable hp + seat armor is not a proof', () =>
+                assert.strictEqual(pl.capDive, false));
+        }
+        // v6.132.0 THE LATCH IS PER-RUN. buildGateState() latches once every
+        // clause is satisfied, because levels only go up and the planner calls
+        // it ~455x per wall-second at medianSpeed 15. A latch that survived a
+        // run boundary would pass the build leg on a run that has not bought a
+        // single card — and it did: the first cut cleared it only in startRun,
+        // and the four clause tests above went red because a latch taken on a
+        // complete build carried into the next scene.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            stableScene(6100); stableScene(6420);      // complete build: the gate latches
+            T.resetCapLatch();                         // a run boundary
+            const bare = { southside: 0, syrup: 0, olive: 0, sweetver: 0 };
+            stableScene(6500, { weapons: bare });
+            pl = stableScene(6820, { weapons: bare });
+            test('the build latch does not survive a run boundary', () =>
+                assert.strictEqual(pl.capDive, false,
+                    'a run with NO ingredients capped immortal on a stale latch'));
+        }
+        // ...and BLACK VERMOUTH satisfies the vermouth clause on its own —
+        // that is the whole point of the OR, because the craft eats SWEET
+        // VERMOUTH and a gate keyed on the part alone would shut the moment
+        // the plan's own craft succeeded (the 6.89.0 absorbed-key blind spot).
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL);
+            delete w.sweetver; w.blackver = 6;
+            stableScene(6400, { weapons: w });
+            pl = stableScene(6720, { weapons: w });
+            test('BLACK VERMOUTH alone satisfies the vermouth clause', () =>
+                assert.strictEqual(pl.capDive, true));
+        }
+        // the reset reason NAMES the short clause, so the report answers
+        // "why is this build not immortal yet" without a second probe.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            // Full hp and capped armour on purpose: the build is the ONLY
+            // short leg, and the clock therefore never starts at all. Before
+            // 6.132.0 this field was written only on a reset, so a run whose
+            // clock never started reported `lastResetReason: null` — which is
+            // precisely the paste the user brought in (streakS 0, no reason).
+            const w = Object.assign({}, WEAPONS_FULL); w.syrup = 3;
+            stableScene(6800, { weapons: w });
+            stableScene(6820, { weapons: w });
+            test('...and a short build is named in the reset reason', () =>
+                assert.ok(/^build:SIMPLE SYRUP/.test(String(T.capDebug().capLastResetReason)),
+                    'reason was ' + T.capDebug().capLastResetReason));
+        }
+        // an EMPTY build list is the off switch — config, not a code change.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            pineBot.config.deepHell.capStable = Object.assign({}, CS, { build: [] });
+            const w = Object.assign({}, WEAPONS_FULL); w.southside = 1; w.syrup = 0;
+            stableScene(6900, { weapons: w });
+            pl = stableScene(7220, { weapons: w });
+            test('an empty build list disables the leg', () =>
+                assert.strictEqual(pl.capDive, true));
+            pineBot.config.deepHell.capStable = CS;
+        }
+        // the gate reads `player.weapons`, NOT ownedLevels — 6.91.2's lesson.
+        // The bare "OLIVE" key freezes at 1 on acquisition while in-run levels
+        // land under "OLIVE UP", which is how four armour gates spent four
+        // versions comparing 1 against thresholds of 2, 4 and 6. A build that
+        // is maxed in the game's own map must pass even with ownedLevels
+        // carrying exactly the misleading values the live probe recorded.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            T.setOwned({ 'OLIVE': 1, 'WATER': 1, 'OLIVE UP': 4, 'WATER UP': 3 });
+            stableScene(7300);
+            pl = stableScene(7620);
+            test('a maxed weapons map passes even with the frozen ownedLevels OLIVE:1', () =>
+                assert.strictEqual(pl.capDive, true));
+        }
+        T.resetCapLatch(); T.setSupers(4);
         // the 06 ult holster honors the PLAN's early-cap latch, not just the
         // gt clock — below runCapS, a plan carrying capDive:true must not fire:
         {
@@ -5393,12 +5492,14 @@ if (which === 'run-cap') {
         // rather than fromS+holdS: 2200 s of unbroken proof is already banked.
         test('a build ready long before fromS latches AT the floor', () =>
             assert.strictEqual(stableScene(3600).capDive, true));
-        // supers short => the build is NOT complete, and readyAt stays unset.
-        T.resetCapLatch(); T.resetCapLadder(); T.setSupers(1);
-        stableScene(1500);
+        // v6.132.0: the build short => NOT complete, and readyAt stays unset.
+        // capReadyGt is what medianReadyAt (and therefore fromS) is set from,
+        // so a build leg that failed to gate here would feed the funnel a
+        // "ready" time for a build that was never ready.
+        T.resetCapLatch(); T.resetCapLadder(); T.setSupers(4);
+        stableScene(1500, { weapons: Object.assign({}, WEAPONS_FULL, { olive: 5 }) });
         test('an incomplete build books no readyAt', () =>
             assert.strictEqual(T.capDebug().capReadyGt, null));
-        T.setSupers(4);
 
         // 6. v6.101.0 THE CAP LADDER. The smother is rung 1; if a build
         //    somehow survives standing in the crowd, the run must STILL end.
@@ -8935,7 +9036,7 @@ if (which === 'immortal-graduation') {
     // anyone. The round-robin that now ships is tested in its own block
     // below; this one proves the pin path is untouched by it.
     pineBot.config.graduation.rotate = false;
-    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0' });
+    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
     T.setPhaseRows(Array(N - 1).fill(0).map(() => immortal('joe')));
     test('at N-1 the pin still resolves to joe', () => assert.strictEqual(T.chooseBartender(), 'joe'));
     test('...and nothing is recorded as graduated', () => assert.deepStrictEqual(T.graduationStatus().graduated, {}));
@@ -9005,7 +9106,7 @@ if (which === 'immortal-graduation') {
     // of sticking with one character until it reaches the 10 immortal
     // build count"). Shipped default; the pin block above ran with it off.
     pineBot.config.graduation.rotate = true;
-    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0' });
+    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
     fresh(); T.setPhaseRows([]);
     test('rotate: a fresh store cycles joe -> minguk -> pat -> joe -> minguk, one step per run start', () => {
         const seq = Array(5).fill(0).map(() => T.chooseBartender());
@@ -9018,7 +9119,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.chooseBartender(), 'pat', 'after minguk comes pat, not joe');
     });
     test('rotate: the report previews the next pick without moving the cursor', () => {
-        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
+        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
         T.setGraduation(g); global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));
         const st1 = T.graduationStatus();
         assert.strictEqual(st1.rotate, true); assert.strictEqual(st1.lastPlayed, 'joe'); assert.strictEqual(st1.playing, 'minguk');
@@ -9027,7 +9128,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(JSON.parse(global.localStorage.getItem(T.graduationKey())).lastPlayed, 'joe', 'the cursor did not move');
     });
     test('rotate: a character at the bar is graduated on the next pick — whoever\'s turn it is — and KEEPS PLAYING (user: "rotate on every session regardless of whether they graduated")', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
         // pat (not the next in line) has ten; minguk is next by the cursor.
         T.setPhaseRows(Array(N).fill(0).map(() => immortal('pat', { v: tag('pat', '6.130.0') })));
         const b = T.chooseBartender();
@@ -9104,7 +9205,7 @@ if (which === 'immortal-graduation') {
     test('race: a ledger opened mid-epoch adopts the standing count and flags it, so runsTo is not overstated', () => {
         fresh();
         // A store already carrying counts from before the ledger existed.
-        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0' });
+        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
         T.setPhaseRows([]);
         T.bookImmortal(immortal('pat'));
         const p = JSON.parse(global.localStorage.getItem(T.graduationKey())).progress.pat;
@@ -9125,8 +9226,42 @@ if (which === 'immortal-graduation') {
         const out2 = T.reportSummary(pineBot.reportFull());
         assert.ok(/minguk 🎓 in 10/.test(out2), 'a graduate keeps the run cost that earned it: ' + out2);
     });
+    // v6.132.0 MULTI-TAB. Two tabs each hold `graduation` in memory and write
+    // it back whole; without a re-read the second one to finish a run wipes
+    // the first's counts, ledger and cursor. Simulated here by writing the
+    // "other tab" state straight into localStorage between this tab's calls.
+    test('multi-tab: another tab\'s counts survive this tab booking a run', () => {
+        fresh(); T.setPhaseRows([]);
+        T.bookImmortal(immortal('joe'));          // this tab: joe reaches 1
+        // other tab, meanwhile, books two for minguk and moves the cursor
+        const other = JSON.parse(global.localStorage.getItem(T.graduationKey()));
+        other.counts.minguk = 2;
+        other.progress.minguk = { runs: 5, immortal: 2, startedAt: '2026-09-04T00:00:00.000Z', marks: {} };
+        other.lastPlayed = 'pat';
+        global.localStorage.setItem(T.graduationKey(), JSON.stringify(other));
+        T.bookImmortal(immortal('joe'));          // this tab books again
+        const st = JSON.parse(global.localStorage.getItem(T.graduationKey()));
+        assert.strictEqual(st.counts.minguk, 2, "the other tab's count was clobbered: " + JSON.stringify(st.counts));
+        assert.strictEqual(st.progress.minguk.runs, 5, "the other tab's ledger was clobbered: " + JSON.stringify(st.progress));
+        assert.strictEqual(st.counts.joe, 2, 'this tab still booked its own: ' + JSON.stringify(st.counts));
+    });
+    test('multi-tab: the rotation cursor is re-read, so two tabs do not both replay the same character', () => {
+        const g = JSON.parse(global.localStorage.getItem(T.graduationKey()));
+        g.lastPlayed = 'joe';
+        global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));   // other tab just played joe
+        assert.strictEqual(T.chooseBartender(), 'minguk', 'should follow the STORED cursor, not this tab stale copy');
+    });
+    test('multi-tab: a pre-reset blob is never adopted back', () => {
+        fresh();
+        const stale = { graduated: { joe: { at: 'x', count: 10 } }, counts: { joe: 10 }, resetEpoch128: 1 };  // no resetEpoch130
+        global.localStorage.setItem(T.graduationKey(), JSON.stringify(stale));
+        T.setPhaseRows([]);
+        T.bookImmortal(death('joe'));
+        assert.ok(!T.graduationStatus().graduated.joe, 'the pre-reset graduation was pulled back in');
+        assert.strictEqual(T.immortalCount('joe'), 0, 'the pre-reset count was pulled back in');
+    });
     test('rotate: the summary line still prints, with the next pick', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
         T.setPhaseRows([immortal('joe', { v: tag('joe', '6.130.0') })]);
         const s = T.reportSummary(pineBot.reportFull());
         assert.ok(/IMMORTAL\s+joe 1\/10\s+minguk 0\/10\s+pat 0\/10\s+playing joe/.test(s), s);
@@ -9160,12 +9295,41 @@ if (which === 'immortal-graduation') {
             assert.strictEqual(st.counts.pat || 0, 0, 'pat: ' + JSON.stringify(st.counts));
             assert.strictEqual(st.lastPlayed, null, 'the cycle restarts at order[0]: ' + JSON.stringify(st));
         });
-        test('...and the reset stamps BOTH guards and the running version as the floor, persisted', () => {
+        test('...and the reset stamps ALL THREE guards and the running version as the floor, persisted', () => {
             const raw = JSON.parse(boot1.store.pineBotGraduation);
             assert.strictEqual(raw.resetEpoch128, 1, JSON.stringify(raw));
             assert.strictEqual(raw.resetEpoch130, 1, JSON.stringify(raw));
+            assert.strictEqual(raw.resetEpoch132, 1, JSON.stringify(raw));
             assert.strictEqual(raw.immortalEpochVersion, pkg.version, JSON.stringify(raw));
         });
+        // v6.132.0 THE THIRD RESET, and the only case the earlier two guards
+        // cannot cover: a store carrying BOTH prior flags with real 6.131.0
+        // counts and a graduation. Those counts were earned against
+        // `supersMin: 3`; the bar is now the four-ingredient build gate, so a
+        // graduation mixing the two proves nothing and the store must go.
+        {
+            const s131 = JSON.stringify({
+                graduated: { joe: { at: 'x', count: 10 } },
+                counts: { joe: 10, minguk: 8, pat: 6 },
+                progress: { joe: { runs: 12, immortal: 10 } },
+                resetEpoch128: 1, resetEpoch130: 1,
+                immortalEpochVersion: '6.131.0', lastPlayed: 'minguk' });
+            const b = makeEnv({ script: SCRIPT, storage: { pineBotGraduation: s131 } });
+            b.pineBot.stop();
+            test('a 6.131.0 store (both prior guards, counts earned under supersMin) is wiped by the third reset', () => {
+                const st = b.pineBot.graduation();
+                assert.deepStrictEqual(st.graduated, {}, JSON.stringify(st.graduated));
+                assert.strictEqual(st.counts.joe || 0, 0, JSON.stringify(st.counts));
+                assert.strictEqual(st.counts.minguk || 0, 0, JSON.stringify(st.counts));
+                assert.strictEqual(st.counts.pat || 0, 0, JSON.stringify(st.counts));
+                assert.strictEqual(st.lastPlayed, null, JSON.stringify(st));
+            });
+            test('...and the race ledger goes with it — those runs raced a different bar', () => {
+                const raw = JSON.parse(b.store.pineBotGraduation);
+                assert.ok(!raw.progress || !raw.progress.joe, JSON.stringify(raw.progress));
+                assert.strictEqual(raw.resetEpoch132, 1, JSON.stringify(raw));
+            });
+        }
         test('a pre-6.128.0 store (no guard at all) is wiped and stamped the same way', () => {
             const b = makeEnv({ script: SCRIPT, storage: { pineBotGraduation: JSON.stringify({ graduated: { joe: { at: 'x', count: 5 } }, counts: { joe: 5 } }) } });
             b.pineBot.stop();
