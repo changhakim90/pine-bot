@@ -1476,6 +1476,10 @@
                     // assert it is emptied once its migration has run.
                     tunablePrior: () => JSON.parse(JSON.stringify(TUNABLE_PRIOR)),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
+                    // v6.133.0: read the craft audit back. `ready` was
+                    // structurally 0 for 1,079 runs and nothing could see it.
+                    craftAudit: () => JSON.parse(JSON.stringify(craftAudit)),
+                    craftReserve: () => new Set(CRAFT_RESERVE),   // v6.133.0: prove it is DERIVED, not hand-listed
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks

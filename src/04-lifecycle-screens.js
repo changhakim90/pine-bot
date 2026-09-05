@@ -588,8 +588,19 @@
             // at max is the game's own stated trigger, so this separates "the
             // prompt never came" from "the prompt came and we missed it".
             try {
+                // v6.133.0 THE AUDIT WAS BLIND FOR 1,079 RUNS. This read
+                // `ownedLevels[pair[0]] >= 6` — the bare acquisition key, which
+                // freezes at 1 while real levels land under "<NAME> UP" (the
+                // 6.91.2 trap, third instance). So `ready` could never be
+                // anything but 0, and the one question the audit exists to
+                // answer — "does the prompt appear, or does the game never owe
+                // us a craft?" — was unanswerable by construction. Measured at
+                // gt 5079: sweetver 6 and dryver 6 in `player.weapons`, a craft
+                // plainly owed, and `ready: 0`. Reads `buildKeyLevel` now, the
+                // same game-state reader the build gate uses.
                 for (const pair of CRAFT_PAIRS) {
-                    if ((ownedLevels[pair[0]] || 0) >= 6 && (ownedLevels[pair[1]] || 0) >= 6) {
+                    const a = buildKeyLevel(pair[0]), b = buildKeyLevel(pair[1]);
+                    if (a.lv >= a.max && a.max > 0 && b.lv >= b.max && b.max > 0) {
                         craftAuditNote('ready');
                         const pk = pair.join('+');
                         craftAudit.pairs[pk] = (craftAudit.pairs[pk] || 0) + 1;
@@ -721,7 +732,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch1321) graduation = s;
+            if (s && typeof s === 'object' && s.resetEpoch133) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
