@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.132.0
+// @version      6.132.1
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.132.0';
+    const SCRIPT_VERSION = '6.132.1';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -3506,8 +3506,41 @@
         'BLACK VERMOUTH': ['blackver', 'blackvermouth'],
         'DRY VERMOUTH': ['dryver', 'dryvermouth']
     };
+    // v6.132.1 A CRAFT RESULT IS BINARY, AND 6.132.0 READ IT AS A LEVEL.
+    //
+    // USER, on a live run the rule refused: "this should be counted as an
+    // immortal build", then "simple syrup disappears from the ingredients list
+    // like the black vermouth once crafted."
+    //
+    // The report proves it. At gt 5179, `player.weapons` read:
+    //     water 6  sugar 6  syrup 1        <- SIMPLE SYRUP = WATER + SUGAR
+    //     sweetver 6  dryver 6  blackver 1 <- BLACK VERMOUTH = the vermouths
+    //     ...and EVERY other entry at 6.
+    // Both crafts had fired. The two craft RESULTS are the only keys not at 6,
+    // and they sit at exactly 1 because a crafted item leaves the ingredient
+    // pool — it can never be offered again, so its level can never move. 1 is
+    // COMPLETE, not 1-of-6.
+    //
+    // 6.132.0 compared that 1 against `ownedMax[name] || 6` and refused a build
+    // holding all four named ingredients at def 35 (the cap), hp 1.00 and four
+    // supers. That is the SAME failure as the ownedLevels['OLIVE'] trap
+    // documented above — a value meaning "owned" read as a level against a
+    // threshold of 6 — reproduced inside the very gate written to avoid it.
+    // The self-report is what caught it: `SIMPLE SYRUP 1/6 (weapons)` in
+    // `cap.short.buildShort` named the clause and showed the raw number, so
+    // the bug surfaced in one run instead of the four versions the OLIVE trap
+    // cost. That is the whole argument for making a gate report its inputs.
+    //
+    // So: a name that is an EVOLUTIONS *result* has max 1. Not `min(1, ...)`
+    // of a pool-derived value — hard 1, because ownedMax can be seeded from a
+    // card the pool offered before the craft and would put the bar back at 6.
+    const CRAFT_RESULTS = (() => {
+        const s = new Set();
+        try { for (const e of EVOLUTIONS) if (e && e.result) s.add(e.result); } catch (e) { }
+        return s;
+    })();
     function buildKeyLevel(name) {
-        const max = ownedMax[name] || 6;
+        const max = CRAFT_RESULTS.has(name) ? 1 : (ownedMax[name] || 6);
         const cands = (BUILD_WEAPON_KEYS[name] || []).slice();
         const squash = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
         if (cands.indexOf(squash) < 0) cands.push(squash);
