@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.132.2
+// @version      6.133.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.132.2';
+    const SCRIPT_VERSION = '6.133.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -527,6 +527,20 @@
         // user's joe recording took VODKA CRANBERRY to exactly lv4 and ended
         // at 4 supers — below evolution range, so the line never armed.
         gunSafeOffPlanLv: 4,
+        // v6.133.0 SLOT URGENCY (user: "the bot needs to fill up the cocktail
+        // spaces with junk to not be forced to pick ingredients or upgrades
+        // that will lead to a rainbow gun ... it should not upgrade weapons
+        // and ingredients upgrades despite the weights making this the correct
+        // decision"). From `fromS` on — or the moment hell latches — an
+        // unclaimed cocktail slot outranks any weapon/passive LEVEL-UP,
+        // because a level can be bought at the next level-up and a slot lost
+        // to a gun cocktail is lost for the run. `junkFromS`/hell gates the
+        // repricing of the two slot-wasters from −300 to a positive claim:
+        // during the day they would pollute the build, but once the pool is
+        // narrowing a cocktail that can never arm a line is the best possible
+        // occupant. Hell latches near 1200 s, so 900 opens the window with
+        // ~300 s of still-wide pool to use it.
+        slotUrgency: { enabled: true, fromS: 900, junkFromS: 900, bid: 150 },
         // v6.87.4: how far an OFF-PLAN super line must already be before the
         // bot starts paying to avoid it. Below this, an off-plan cocktail is
         // just damage and is judged on merit; above it, the line is close
@@ -1950,6 +1964,46 @@
     // Two-part fusions the build actively pursues: each frees an ingredient
     // slot (two consumed, one returned) — see the craft-pair engine below.
     const CRAFT_PAIRS = [['SWEET VERMOUTH', 'DRY VERMOUTH'], ['SUGAR', 'WATER']];
+    // v6.133.0: the ingredient bar holds EIGHT. These are the parts the
+    // immortal build cannot do without — SIMPLE SYRUP is WATER + SUGAR — so an
+    // unowned one must never be locked out by a slot spent on anything else.
+    // Measured, gt 5079: olive/tomato/mint/sweetver/dryver/sugar/tonic/
+    // cranberry, all at 6, all eight slots gone, NO WATER and no blackver.
+    // The BLACK VERMOUTH craft was owed (sweetver 6 + dryver 6) and had not
+    // fired, so the two vermouths still held their slots and the bar never
+    // reopened. That run could not satisfy the build gate from the moment its
+    // eighth slot filled, whatever it did for the next ninety minutes.
+    // WATER only, deliberately. SUGAR is the other half of SIMPLE SYRUP but it
+    // needs no help: it is MOJITO's super key and a plan ingredient, and the
+    // measured failure is always the same shape — `sugar: 6` sitting in the bar
+    // with WATER absent entirely. Reserving for both is actively worse: with
+    // both unowned and one slot left the bid lands on whichever scores higher,
+    // and SUGAR then displaces the very card the reserve exists to protect
+    // (WATER 345 vs SUGAR 691 in the entry-prep scene, before this was cut).
+    const INGREDIENT_SLOTS = 8;
+    // v6.133.0: DERIVED from the immortal gate, not hand-listed. The first cut
+    // hardcoded WATER, because WATER was the ingredient the gt-5079 run lost.
+    // The very next report lost a DIFFERENT one — `dryver 6` with no
+    // `sweetver` at all, `buildShort: ["SWEET VERMOUTH or BLACK VERMOUTH 0/6
+    // (none)"]` — with WATER and SIMPLE SYRUP both fine. A hand-list protects
+    // whichever ingredient failed last; the gate's own clauses protect all of
+    // them. Cocktail clauses are skipped (they cost a cocktail slot, not an
+    // ingredient one) and a craft result expands to its parts, since those are
+    // what actually occupy the bar.
+    const CRAFT_RESERVE = (() => {
+        const out = new Set();
+        try {
+            const cl = (CONFIG.deepHell && CONFIG.deepHell.capStable && CONFIG.deepHell.capStable.build) || [];
+            const add = (n) => {
+                if (COCKTAILS.includes(n)) return;                 // a cocktail slot, not an ingredient one
+                const evo = EVOLUTIONS.filter(e => e.result === n)[0];
+                if (evo) { for (const part of evo.parts) out.add(part); return; }
+                out.add(n);
+            };
+            for (const clause of cl) for (const n of (Array.isArray(clause) ? clause : [clause])) add(n);
+        } catch (e) { }
+        return out;
+    })();
 
     const COCKTAIL_PRIORITY = {
         'GIN TONIC': 34, 'VODKA TONIC': 32, 'COSMOPOLITAN': 30, 'WHISKEY HIGHBALL': 30,
@@ -2120,6 +2174,45 @@
         if (type === 'weapon' || !armsOffPlanLine(name)) return false;
         const top = (typeof maxlv === 'number' && maxlv > 0) ? maxlv : 6;
         return (lv || 0) + 1 >= top;
+    }
+
+    // ── v6.133.0 SAFE OCCUPANTS — the slot is the only structural defence ───
+    //
+    // USER: "at a certain point, the bot needs to fill up the cocktail spaces
+    // with junk to not be forced to pick ingredients or upgrades that will
+    // lead to a rainbow gun. The choices in hell become smaller from 4 in day
+    // to 3 or 2 ... this may mean that it should not upgrade weapons and
+    // ingredients upgrades despite the weights making this the correct
+    // decision."
+    //
+    // Every other guard in this file is a SCORE, and the run at gt 5179 shows
+    // what a score is worth in a two-card pool: LEMON reached 6 through a
+    // −700 arming cap. A filled slot cannot be filled again at any score. So
+    // occupancy is the only defence that holds under force — and the window to
+    // establish it closes as the pool narrows.
+    //
+    // WHICH cocktails are safe to spend a slot on. Not "its key is
+    // arming-capped", which is the assumption LEMON just falsified. Two
+    // clauses, and the second is the lesson:
+    //   - the key must be one we never intend to level (arming-capped), so
+    //     the plan is not fighting itself, AND
+    //   - the key must still have HEADROOM. A key already at or one below max
+    //     makes its cocktail a live gun line no matter what list it is on,
+    //     because the only thing holding it there is a score.
+    // Cocktails keyed on a PLAN ingredient are never safe: we max those on
+    // purpose, so MANHATTAN (SWEET VERMOUTH), VODKA CRANBERRY (CRANBERRY) and
+    // ESPRESSO MARTINI (COFFEE BEANS) arm themselves as the build completes —
+    // and `armsOffPlanLine` already returns false for exactly those keys.
+    function safeOccupant(name) {
+        if (!COCKTAILS.includes(name)) return false;
+        if (SUPER_LINE_COCKTAILS.includes(name)) return true;   // a line we INTEND
+        const key = SUPER_KEY_INGREDIENT[name];
+        if (!key) return true;                                   // genuinely keyless
+        if (!armsOffPlanLine(key)) return false;                 // keyed on something we max
+        const kMax = ownedMax[key] || 6;
+        const kLv = (typeof keyEffectivelyMaxed === 'function' && safe(() => keyEffectivelyMaxed(key), false))
+            ? kMax : (ownedLevels[key] || 0);
+        return kLv < kMax - 1;                                   // the cap still has room to bite
     }
 
     // v6.89.4 (user): "make kiting lower in hell mode if bot has SOUTH SIDE /
@@ -3016,9 +3109,16 @@
         // — the three figures the race exists to report. The race would have
         // measured the broken gate instead of the character. A store missing
         // ANY of the four flags gets all four.
-        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321) {
+        // v6.133.0 THE FIFTH RESET (user: "let's also restart the count again
+        // for immortal build"). This one is earned: 6.133.0 changes the PICKER,
+        // not just the measurement. The slot doctrine reserves an ingredient
+        // slot for WATER, reprices the two slot-wasters as occupants once the
+        // pool is about to narrow, and stops treating LEMON's line as
+        // harmless. Builds assembled under the old picker are a different
+        // experiment, so counts earned there cannot be pooled with these.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 || !g.resetEpoch133) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
-                  resetEpoch1321: 1, immortalEpochVersion: SCRIPT_VERSION };
+                  resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -5497,16 +5597,47 @@
                 const k = String(c).toLowerCase().replace(/[^a-z0-9]/g, '');
                 return Object.keys(sl).some(s2 => s2.toLowerCase().replace(/[^a-z0-9]/g, '') === k && sl[s2] > 0);
             };
-            const NEVER_UNBANNED = new Set(['LEMON', 'ORANGE']);
+            // ── v6.133.0 THE KEYLESS-OCCUPANT PREMISE WAS NEVER ENFORCED ────
+            //
+            // Measured, from a live 6.132.x run at gt 5179. `player.weapons`:
+            //     whiskysour 6   lemon 6      <- SUPER WHISKY SOUR, ARMED
+            // and the four supers that run carried were SOUTH SIDE, GIN TONIC,
+            // MOJITO and WHISKY SOUR — an unintended line displacing VODKA
+            // TONIC, at a `maxSuperLines` of 4.
+            //
+            // WHISKY SOUR, NEGRONI and MOSCOW MULE sit in PLAN_COCKTAILS as
+            // deliberate KEYLESS occupants: slot-fillers that were believed
+            // unable to super because their keys (LEMON, CAMPARI, GINGER BEER)
+            // are avoid-listed. This function skipped them TWICE over — once
+            // as PLAN_COCKTAILS, once as NEVER_UNBANNED — and so returned 0.
+            // Two consequences, and the second is the expensive one:
+            //   1. no `gun-path` tax on the cocktail or its key, and
+            //   2. `forcedGunPool` is `pool.every(risk > 0)`, so a pool holding
+            //      one of these never counted as forced and NO RE-ROLL was
+            //      ever spent on it.
+            // `arming-cap` still fired at lv5 — but that is a −700 SCORE, and
+            // in a two-card hell pool −700 wins. Over hundreds of hell
+            // level-ups, "least bad" compounded into a maxed LEMON.
+            //
+            // The error is a conflation. "Never unbanned" means WE NEVER
+            // PROMOTE THIS INGREDIENT INTO THE PLAN (`hellUnbanIngredients`).
+            // It was read as THIS INGREDIENT CAN NEVER BE MAXED. The game kept
+            // offering it either way, and a narrowed pool took it.
+            //
+            // So: exempt only the lines we actually intend to complete
+            // (SUPER_LINE_COCKTAILS), not every plan cocktail. A keyless
+            // occupant whose key is climbing is no longer keyless, and now
+            // registers as risk — which taxes it, and lets a pool full of
+            // such cards trip `forcedGunPool` and spend the re-roll.
             const cocktails = [];
             if (type === 'weapon' && COCKTAILS.includes(name)) cocktails.push(name);
             else if (type === 'passive') for (const c of COCKTAILS) if (SUPER_KEY_INGREDIENT[c] === name) cocktails.push(c);
             let worst = 0;
             for (const c of cocktails) {
-                if (PLAN_COCKTAILS.includes(c)) continue;      // one of the sanctioned five
+                if (SUPER_LINE_COCKTAILS.includes(c)) continue;  // a line we INTEND to complete
                 if (made(c)) continue;                          // already a line we counted
                 const key = SUPER_KEY_INGREDIENT[c];
-                if (!key || NEVER_UNBANNED.has(key)) continue;  // unreachable line: harmless
+                if (!key) continue;
                 const cMax = ownedMax[c] || 6, kMax = ownedMax[key] || 6;
                 const cLv = Math.min(cMax, (ownedLevels[c] || 0) + (type === 'weapon' ? 1 : 0));
                 // v6.89.0: an ABSORBED key still counts (see keyEffectivelyMaxed).
@@ -7054,9 +7185,25 @@
             // v6.89.0 SLOT WASTERS (user: old fashioned / corpse reviver out of
             // the junk pool). A cocktail slot is the lockout's currency; these
             // two buy nothing with it.
+            // v6.133.0: the −300 was priced BEFORE the arming cap existed, and
+            // never revisited. OLD FASHIONED keys off ANGOSTURA and CORPSE
+            // REVIVER NO.2 off ABSINTHE — both arming-capped, so while their
+            // keys still have headroom neither cocktail can complete a line.
+            // Once the pool is narrowing that makes them the BEST occupant
+            // available: they eat a slot a gun cocktail would otherwise take,
+            // and can never become the sixth super themselves. During the day
+            // they stay −300 (the build is still being assembled and a wasted
+            // slot is a real cost); from junkFromS, or the moment hell
+            // latches, they flip to a claim bid. `safeOccupant` carries the
+            // headroom test, so a waster whose key has crept up is NOT
+            // repriced — that is the LEMON lesson applied here.
             if (type === 'weapon' && lv === 0 &&
                 SLOT_WASTERS.includes(name) && !PLAN_COCKTAILS.includes(name)) {
-                add(-300, 'slot-waster');
+                const SU = CONFIG.slotUrgency || {};
+                const jFrom = SU.junkFromS != null ? SU.junkFromS : 900;
+                const jOn = SU.enabled !== false && (hellDetected || gtOrd >= jFrom);
+                if (jOn && safeOccupant(name)) add(40, 'slot-occupant');
+                else add(-300, 'slot-waster');
             }
             // v6.87.2: the same refusal one step earlier and independent of the
             // count — a card that COMPLETES a line outside the planned five is
@@ -7272,6 +7419,63 @@
         if (type === 'passive' && lv === 0 && !PLAN_INGREDIENTS.includes(name) &&
             Object.keys(ownedLevels).filter(k => INGREDIENT_TAGS[k]).length >= 8 && score > 10) {
             score = 10; why.push('slot-guard ');
+        }
+        // ── v6.133.0 THE INGREDIENT RESERVE ────────────────────────────────
+        //
+        // USER: "if the black vermouth craft doesn't appear as intended then
+        // the bot picks other useful items but can't pick water as it has
+        // filled the 8 ingredients." And: "simple syrup is the more important
+        // bit of the immortal build."
+        //
+        // SIMPLE SYRUP is WATER + SUGAR, both maxed. The bar holds 8
+        // ingredients. The plan expects the BLACK VERMOUTH craft to fuse
+        // SWEET + DRY VERMOUTH and hand back slots ("3칸 -> 조합품 1칸"), and
+        // the bot spends its slots as though that refund is guaranteed. When
+        // the craft does not fire, the two vermouths keep their slots, the bar
+        // fills at 8, and WATER — an ingredient that was never acquired — can
+        // no longer be taken AT ALL. No score fixes that: an unowned
+        // ingredient with no free slot is not a bad pick, it is an impossible
+        // one. The whole immortal build then fails on a clause that had
+        // nothing to do with combat.
+        //
+        // Same doctrine as the cocktail slot, one level down: the slot is a
+        // ONE-WAY DOOR. So a craft part the build REQUIRES and does not yet
+        // own outbids everything while the bar still has room, and the bid
+        // climbs as the room disappears. This is deliberately not a tuned
+        // weight — at 7 of 8 slots it is the last chance the run will get.
+        // It is a LOCK, not a bid, and that distinction is the whole design.
+        // A bid is a score, and a score competes: the first cut gave reserved
+        // parts +400 and it promptly displaced the very card it existed to
+        // protect (WATER 345 against SUGAR 691 in the entry-prep scene) and
+        // shifted the day order in two other scenarios. Occupancy is
+        // structural instead — while N required ingredients are unowned, the
+        // last N slots are simply not on offer to anything else, clamped below
+        // every consumable exactly as `slot-burn` clamps a banned pick.
+        // Nothing outbids a slot that isn't available, and the day build is
+        // untouched until the bar is nearly full. The gt-5079 run lost SIMPLE
+        // SYRUP to TONIC and CRANBERRY, both legitimately scored plan
+        // ingredients: no weight tuning saves that, because each pick was
+        // correct on its own terms and only the LAST one was fatal.
+        if (type === 'passive' && lv === 0 && !CRAFT_RESERVE.has(name)) {
+            let missing = 0;
+            for (const r of CRAFT_RESERVE) if (!((ownedLevels[r] || 0) > 0)) missing++;
+            // Reserve the TAIL, never the whole bar. `missing` starts at five
+            // (WATER, SUGAR, OLIVE and both vermouths are all unowned at gt 0),
+            // and reserving five of eight slots from the third pick onward
+            // locked out the day build entirely — two day-order scenarios went
+            // red and said so. Three is the cap: it engages at five slots used,
+            // leaves the early game alone, and still guarantees that whatever
+            // the build is missing can always be taken. OLIVE, SUGAR and DRY
+            // VERMOUTH arrive early on merit anyway; the ones that actually
+            // starve are WATER and SWEET VERMOUTH, and three slots covers them
+            // with one to spare.
+            const reserved = Math.min(missing, 3);
+            if (reserved > 0) {
+                const used = Object.keys(ownedLevels).filter(k => INGREDIENT_TAGS[k]).length;
+                if ((INGREDIENT_SLOTS - used) <= reserved && score > 6) {
+                    score = 6; why.push('slot-lock(' + missing + ' build part(s) unowned) ');
+                }
+            }
         }
         return { index, name, type, lv, cap, score, why: why.join('') };
     }
@@ -8190,8 +8394,19 @@
             // at max is the game's own stated trigger, so this separates "the
             // prompt never came" from "the prompt came and we missed it".
             try {
+                // v6.133.0 THE AUDIT WAS BLIND FOR 1,079 RUNS. This read
+                // `ownedLevels[pair[0]] >= 6` — the bare acquisition key, which
+                // freezes at 1 while real levels land under "<NAME> UP" (the
+                // 6.91.2 trap, third instance). So `ready` could never be
+                // anything but 0, and the one question the audit exists to
+                // answer — "does the prompt appear, or does the game never owe
+                // us a craft?" — was unanswerable by construction. Measured at
+                // gt 5079: sweetver 6 and dryver 6 in `player.weapons`, a craft
+                // plainly owed, and `ready: 0`. Reads `buildKeyLevel` now, the
+                // same game-state reader the build gate uses.
                 for (const pair of CRAFT_PAIRS) {
-                    if ((ownedLevels[pair[0]] || 0) >= 6 && (ownedLevels[pair[1]] || 0) >= 6) {
+                    const a = buildKeyLevel(pair[0]), b = buildKeyLevel(pair[1]);
+                    if (a.lv >= a.max && a.max > 0 && b.lv >= b.max && b.max > 0) {
                         craftAuditNote('ready');
                         const pk = pair.join('+');
                         craftAudit.pairs[pk] = (craftAudit.pairs[pk] || 0) + 1;
@@ -8323,7 +8538,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch1321) graduation = s;
+            if (s && typeof s === 'object' && s.resetEpoch133) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
@@ -14861,6 +15076,10 @@
                     // assert it is emptied once its migration has run.
                     tunablePrior: () => JSON.parse(JSON.stringify(TUNABLE_PRIOR)),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
+                    // v6.133.0: read the craft audit back. `ready` was
+                    // structurally 0 for 1,079 runs and nothing could see it.
+                    craftAudit: () => JSON.parse(JSON.stringify(craftAudit)),
+                    craftReserve: () => new Set(CRAFT_RESERVE),   // v6.133.0: prove it is DERIVED, not hand-listed
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks

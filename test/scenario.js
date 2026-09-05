@@ -2191,6 +2191,40 @@ if (which === 'craft-prompt') {
     global.document.querySelectorAll = () => [yes, no];
     const took = pineBot.test.takeCraftPrompt();
     test('the fusion prompt is answered', () => assert.strictEqual(took, true));
+    // ── v6.133.0 THE AUDIT WAS BLIND FOR 1,079 RUNS ────────────────────────
+    //
+    // `ready` counts ticks where both halves of a CRAFT_PAIR are maxed, i.e. a
+    // craft is OWED. It read `ownedLevels[pair[0]] >= 6` — the bare
+    // acquisition key, which freezes at 1 while real levels land under
+    // "<NAME> UP" (the 6.91.2 trap, third instance in this codebase). So
+    // `ready` could never be anything but 0, and the single question the audit
+    // exists to answer — "does the prompt never appear, or does it appear and
+    // we miss it?" — was unanswerable by construction. Measured at gt 5079:
+    // `sweetver 6` and `dryver 6` in player.weapons, a craft plainly owed, and
+    // `ready: 0`. It now reads the same game-state source as the build gate.
+    {
+        const before = pineBot.test.craftAudit ? pineBot.test.craftAudit().ready : null;
+        global.player.weapons = { sweetver: 6, dryver: 6 };
+        pineBot.test.takeCraftPrompt();
+        test('a craft owed in player.weapons is BOOKED as ready', () => {
+            const a = pineBot.test.craftAudit();
+            assert.ok(a.ready > 0, 'ready ' + a.ready + ' (was ' + before + ')');
+        });
+        test('...and the pair that owed it is named', () => {
+            const a = pineBot.test.craftAudit();
+            assert.ok(a.pairs['SWEET VERMOUTH+DRY VERMOUTH'] > 0, JSON.stringify(a.pairs));
+        });
+        // ...and the frozen bare key, which is all the old reader could see,
+        // is NOT what answers: ownedLevels says 1 and the audit still books it.
+        test('...even though ownedLevels reads the frozen acquisition 1', () => {
+            pineBot.test.setOwned({ 'SWEET VERMOUTH': 1, 'DRY VERMOUTH': 1 });
+            const n0 = pineBot.test.craftAudit().ready;
+            pineBot.test.takeCraftPrompt();
+            assert.ok(pineBot.test.craftAudit().ready > n0);
+        });
+        global.player.weapons = {};
+    }
+
     test('and MAKE is what gets clicked', () =>
         assert.deepStrictEqual(clicked, ['MAKE BLACK VERMOUTH'], clicked.join(',')));
     test('NOT NOW is never clicked', () =>
@@ -3014,13 +3048,120 @@ if (which === 'latent-line') {
     test('a cocktail whose key is permanently banned stays available', () =>
         assert.ok(!/latent-line/.test(why('COSMOPOLITAN', 'weapon', 0))));
 
+    // ── v6.133.0 THE KEYLESS-OCCUPANT PREMISE ──────────────────────────────
+    //
+    // Measured, live 6.132.x at gt 5179: `whiskysour 6` and `lemon 6` — SUPER
+    // WHISKY SOUR armed, displacing VODKA TONIC among the four supers. WHISKY
+    // SOUR sits in PLAN_COCKTAILS as a KEYLESS occupant, safe only while LEMON
+    // stays under 6, and gunPathProgress skipped that line twice (as a plan
+    // cocktail, and as NEVER_UNBANNED) so it returned 0. Two costs: no
+    // gun-path tax, and — the expensive one — `forcedGunPool` is
+    // `every(risk > 0)`, so a pool holding LEMON never counted as forced and
+    // NO RE-ROLL was ever spent. `arming-cap` still fired at lv5, but that is
+    // a SCORE, and in a two-card hell pool −700 wins.
+    {
+        T.setOwned({ 'WHISKY SOUR': 6, 'LEMON': 4 });
+        test('a keyless occupant with a climbing key REGISTERS risk', () =>
+            assert.ok(T.gunPathProgress('passive', 'LEMON') > 0,
+                'LEMON risk ' + T.gunPathProgress('passive', 'LEMON')));
+        test('...and so does the cocktail itself', () =>
+            assert.ok(T.gunPathProgress('weapon', 'WHISKY SOUR') > 0));
+        // ...which is what lets a pool of these register as FORCED and spend
+        // the re-roll, the thing that never happened for 1,000+ runs.
+        test('...the risk rises as the key climbs', () => {
+            const at4 = T.gunPathProgress('passive', 'LEMON');
+            T.setOwned({ 'LEMON': 5 });
+            assert.ok(T.gunPathProgress('passive', 'LEMON') > at4);
+        });
+        // The four lines we INTEND are still exempt — this must not tax the plan.
+        test('...but an INTENDED super line is still untaxed', () => {
+            T.setOwned({ 'SOUTH SIDE': 6, 'MINT': 5 });
+            assert.strictEqual(T.gunPathProgress('passive', 'MINT'), 0);
+        });
+        T.setOwned({ 'WHISKY SOUR': 0, 'LEMON': 0, 'SOUTH SIDE': 0, 'MINT': 0 });
+    }
+
     // v6.89.0 SLOT WASTERS (user).
-    test('OLD FASHIONED is out of the junk pool', () =>
-        assert.ok(sc('OLD FASHIONED', 'weapon', 0) < 0,
-            'OLD FASHIONED ' + Math.round(sc('OLD FASHIONED', 'weapon', 0))));
-    test('CORPSE REVIVER No.2 is out of the junk pool', () =>
-        assert.ok(sc('CORPSE REVIVER NO.2', 'weapon', 0) < 0,
+    // ── v6.133.0 THE INGREDIENT RESERVE ────────────────────────────────────
+    //
+    // Measured, live 6.132.2 at gt 5079: the ingredient bar held olive,
+    // tomato, mint, sweetver, dryver, sugar, tonic, cranberry — EIGHT, the
+    // cap, all at 6 — and NO WATER. sweetver 6 + dryver 6 means the BLACK
+    // VERMOUTH craft was owed and had not fired, so the two vermouths kept
+    // their slots and the bar never reopened. WATER could no longer be
+    // ACQUIRED, so SIMPLE SYRUP was impossible and the build gate reported
+    // `SIMPLE SYRUP 0/1 (none)` as its only short leg while def 35 and hp 1.00
+    // both passed. The run was unwinnable from the moment its eighth slot
+    // filled. No weight fixes that: each of those eight picks was correct on
+    // its own terms, and only the last one was fatal.
+    {
+        const eight = {};
+        for (const k of ['OLIVE', 'TOMATO JUICE', 'MINT', 'SWEET VERMOUTH', 'DRY VERMOUTH', 'SUGAR', 'TONIC']) eight[k] = 6;
+        T.setOwned(eight);   // SEVEN owned: one slot left, WATER not among them
+        test('with one slot left and WATER unowned, WATER outranks a fresh ingredient', () =>
+            assert.ok(sc('WATER', 'passive', 0) > sc('CRANBERRY', 'passive', 0),
+                'WATER ' + Math.round(sc('WATER', 'passive', 0)) + ' vs CRANBERRY ' + Math.round(sc('CRANBERRY', 'passive', 0))));
+        // ...and it wins by OCCUPANCY, not by a bid: WATER's own score is
+        // untouched, the rival is clamped. A bid competes and can lose; a slot
+        // that is not on offer cannot be outbid.
+        test('...and WATER itself carries no bid — the rival is what moves', () =>
+            assert.ok(!/craft-reserve/.test(why('WATER', 'passive', 0)), why('WATER', 'passive', 0)));
+        // THE LOCK is the half that actually saves the run: a bid can be
+        // outscored, a filled bar cannot be undone.
+        test('...and no OTHER new ingredient may take the last slot', () =>
+            assert.ok(sc('CRANBERRY', 'passive', 0) <= 6 && /slot-lock/.test(why('CRANBERRY', 'passive', 0)),
+                'CRANBERRY ' + Math.round(sc('CRANBERRY', 'passive', 0)) + ' ' + why('CRANBERRY', 'passive', 0)));
+        // ...the lock is about ACQUISITION, not levelling: an ingredient
+        // already owned costs no slot, so it is untouched.
+        test('...but LEVELLING an already-owned ingredient is untouched', () =>
+            assert.ok(!/slot-lock/.test(why('OLIVE', 'passive', 3)), why('OLIVE', 'passive', 3)));
+        // v6.133.0: the reserve is DERIVED from the gate, not hand-listed. The
+        // first cut hardcoded WATER because that is what the gt-5079 run lost;
+        // the very next report lost a DIFFERENT one — `dryver 6` with no
+        // `sweetver` at all and `buildShort: ["SWEET VERMOUTH or BLACK
+        // VERMOUTH 0/6 (none)"]`, with WATER and SIMPLE SYRUP both fine. A
+        // hand-list protects whichever part failed last; the gate's clauses
+        // protect all of them.
+        test('...and the reserve covers SWEET VERMOUTH too, not just WATER', () =>
+            assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)),
+                'reserve is ' + JSON.stringify([...T.craftReserve()])));
+        {
+            // WATER in, SWEET VERMOUTH still out: the lock must still hold.
+            T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 0 });
+            test('...with WATER owned but SWEET VERMOUTH missing the lock holds', () =>
+                assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
+            T.setOwned({ 'WATER': 0 });
+        }
+        // ...and once WATER is in, the bar is free to fill normally again.
+        T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 6, 'DRY VERMOUTH': 6, 'SUGAR': 6, 'OLIVE': 6 });
+        test('...and with every build part owned the lock lifts', () =>
+            assert.ok(!/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
+        T.setOwned({ 'OLIVE': 0, 'TOMATO JUICE': 0, 'MINT': 0, 'SWEET VERMOUTH': 0,
+                     'DRY VERMOUTH': 0, 'SUGAR': 0, 'TONIC': 0, 'WATER': 0 });
+    }
+
+    // v6.133.0: this scene sits at gt 900, which is now INSIDE the slot-urgency
+    // window (hell latches ~1200), so the two wasters are repriced as occupants
+    // here. The day refusal is unchanged and is asserted below at gt 600.
+    test('OLD FASHIONED is a slot OCCUPANT once the pool is about to narrow', () =>
+        assert.ok(sc('OLD FASHIONED', 'weapon', 0) > 0 &&
+            /slot-occupant/.test(why('OLD FASHIONED', 'weapon', 0)),
+            'OLD FASHIONED ' + Math.round(sc('OLD FASHIONED', 'weapon', 0)) + ' ' + why('OLD FASHIONED', 'weapon', 0)));
+    test('CORPSE REVIVER No.2 likewise', () =>
+        assert.ok(sc('CORPSE REVIVER NO.2', 'weapon', 0) > 0 &&
+            /slot-occupant/.test(why('CORPSE REVIVER NO.2', 'weapon', 0)),
             'CORPSE REVIVER ' + Math.round(sc('CORPSE REVIVER NO.2', 'weapon', 0))));
+    // ...and the DAY refusal is intact: before the window they are still a
+    // wasted slot on a build that is only half assembled.
+    {
+        const day = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 600 } });
+        const dsc = (n, t, lv) => day.pineBot.test.scoreCard({ n, type: t, lv }, 0).score;
+        const dwhy = (n, t, lv) => day.pineBot.test.scoreCard({ n, type: t, lv }, 0).why;
+        day.pineBot.stop();
+        test('...but in the DAY both are still slot-wasters', () =>
+            assert.ok(dsc('OLD FASHIONED', 'weapon', 0) < 0 && /slot-waster/.test(dwhy('OLD FASHIONED', 'weapon', 0)),
+                'OLD FASHIONED ' + Math.round(dsc('OLD FASHIONED', 'weapon', 0)) + ' ' + dwhy('OLD FASHIONED', 'weapon', 0)));
+    }
     test('...and both now lose to the mule, which is the safe forced pick', () =>
         assert.ok(sc('MOSCOW MULE', 'weapon', 0) > sc('OLD FASHIONED', 'weapon', 0) &&
             sc('MOSCOW MULE', 'weapon', 0) > sc('CORPSE REVIVER NO.2', 'weapon', 0),
@@ -9078,7 +9219,7 @@ if (which === 'immortal-graduation') {
     // anyone. The round-robin that now ships is tested in its own block
     // below; this one proves the pin path is untouched by it.
     pineBot.config.graduation.rotate = false;
-    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
+    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
     T.setPhaseRows(Array(N - 1).fill(0).map(() => immortal('joe')));
     test('at N-1 the pin still resolves to joe', () => assert.strictEqual(T.chooseBartender(), 'joe'));
     test('...and nothing is recorded as graduated', () => assert.deepStrictEqual(T.graduationStatus().graduated, {}));
@@ -9148,7 +9289,7 @@ if (which === 'immortal-graduation') {
     // of sticking with one character until it reaches the 10 immortal
     // build count"). Shipped default; the pin block above ran with it off.
     pineBot.config.graduation.rotate = true;
-    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
+    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
     fresh(); T.setPhaseRows([]);
     test('rotate: a fresh store cycles joe -> minguk -> pat -> joe -> minguk, one step per run start', () => {
         const seq = Array(5).fill(0).map(() => T.chooseBartender());
@@ -9161,7 +9302,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.chooseBartender(), 'pat', 'after minguk comes pat, not joe');
     });
     test('rotate: the report previews the next pick without moving the cursor', () => {
-        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
+        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
         T.setGraduation(g); global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));
         const st1 = T.graduationStatus();
         assert.strictEqual(st1.rotate, true); assert.strictEqual(st1.lastPlayed, 'joe'); assert.strictEqual(st1.playing, 'minguk');
@@ -9170,7 +9311,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(JSON.parse(global.localStorage.getItem(T.graduationKey())).lastPlayed, 'joe', 'the cursor did not move');
     });
     test('rotate: a character at the bar is graduated on the next pick — whoever\'s turn it is — and KEEPS PLAYING (user: "rotate on every session regardless of whether they graduated")', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
         // pat (not the next in line) has ten; minguk is next by the cursor.
         T.setPhaseRows(Array(N).fill(0).map(() => immortal('pat', { v: tag('pat', '6.130.0') })));
         const b = T.chooseBartender();
@@ -9247,7 +9388,7 @@ if (which === 'immortal-graduation') {
     test('race: a ledger opened mid-epoch adopts the standing count and flags it, so runsTo is not overstated', () => {
         fresh();
         // A store already carrying counts from before the ledger existed.
-        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
+        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
         T.setPhaseRows([]);
         T.bookImmortal(immortal('pat'));
         const p = JSON.parse(global.localStorage.getItem(T.graduationKey())).progress.pat;
@@ -9303,7 +9444,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.immortalCount('joe'), 0, 'the pre-reset count was pulled back in');
     });
     test('rotate: the summary line still prints, with the next pick', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
         T.setPhaseRows([immortal('joe', { v: tag('joe', '6.130.0') })]);
         const s = T.reportSummary(pineBot.reportFull());
         assert.ok(/IMMORTAL\s+joe 1\/10\s+minguk 0\/10\s+pat 0\/10\s+playing joe/.test(s), s);
