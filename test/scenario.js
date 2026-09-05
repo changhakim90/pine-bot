@@ -2056,6 +2056,98 @@ if (which === 'char-posture') {
 
 // v6.87.2 — the junk pool must not walk toward the Rainbow Gun, and the
 // super lines are capped at five.
+// ── v6.134.0 THE UP-CARD AXIS ──────────────────────────────────────────────
+//
+// The game emits TWO cards per thing: an acquisition card (`OLIVE`) and a
+// level-up card (`OLIVE UP`). `baseNameOf` stripped `Lv3`/`+1` but not ` UP`,
+// and all 39 name-keyed lookups in 03-scoring.js therefore matched only the
+// acquisition form. Measured before the fix, gt 1740, hell, both forms at lv5:
+//
+//     OLIVE           262  ->  OLIVE UP            9   (8 plan terms lost)
+//     WATER            80  ->  WATER UP            9
+//     LIME           -704  ->  LIME UP             9   (arming-cap lost)
+//     LEMON          -679  ->  LEMON UP            9
+//     MANHATTAN     -1065  ->  MANHATTAN UP       71   (latent-line lost)
+//
+// EVERY passive level-up scored exactly 9 (`ingredient+8 ucb+1`), so ingredient
+// level-ups were chosen by UCB noise alone. 12 of 14 picks in a live log were
+// UP cards. This scenario exists because ~1,900 existing assertions all score
+// by base name — the guards were verified against a card shape the game rarely
+// offers, which is why this survived 5,000+ runs.
+if (which === 'up-cards') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1740, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const own = {};
+    for (const n of ['MANHATTAN', 'LIME', 'LEMON', 'OLD FASHIONED', 'SOUTH SIDE',
+                     'OLIVE', 'WATER', 'CAMPARI', 'GIMLET', 'VODKA CRANBERRY'])
+        { own[n] = 5; own[n + ' UP'] = 5; }
+    own['SWEET VERMOUTH'] = 6; own['CRANBERRY'] = 6; own['ANGOSTURA'] = 5;
+    T.setOwned(own);
+    const card = (n, t, lv) => T.scoreCard({ n, type: t, lv }, 0);
+    const why = (n, t, lv) => card(n, t, lv).why;
+    const sc = (n, t, lv) => card(n, t, lv).score;
+
+    // THE SAFETY HALF. A guard that cannot see the card that does the levelling
+    // is not a guard: LEMON, LIME and CAMPARI all reached 6 in live runs
+    // through a -700 arming cap that never once looked at `<NAME> UP`.
+    for (const key of ['LIME', 'LEMON', 'CAMPARI']) {
+        test('arming-cap sees ' + key + ' UP, not just ' + key, () =>
+            assert.ok(/arming-cap/.test(why(key + ' UP', 'passive', 5)),
+                key + ' UP: ' + why(key + ' UP', 'passive', 5)));
+    }
+    for (const ck of ['MANHATTAN', 'VODKA CRANBERRY']) {
+        test('latent-line sees ' + ck + ' UP', () =>
+            assert.ok(/latent-line/.test(why(ck + ' UP', 'weapon', 5)),
+                ck + ' UP: ' + why(ck + ' UP', 'weapon', 5)));
+    }
+    for (const ck of ['GIMLET', 'OLD FASHIONED']) {
+        test('gun-path sees ' + ck + ' UP', () =>
+            assert.ok(/gun-path/.test(why(ck + ' UP', 'weapon', 5)),
+                ck + ' UP: ' + why(ck + ' UP', 'weapon', 5)));
+    }
+
+    // THE PLAN HALF, and the one that explains the variance. OLIVE 6 is
+    // defense 34.99; OLIVE 3 is 17.5. The park audit splits exactly there —
+    // SEATED medianEntryDef 35 / medianTimeS 2364 against NEVER-PARKED 17.5 /
+    // 1331 — and `OLIVE UP` scored 9, the same as every other ingredient.
+    test('OLIVE UP carries the armour plan terms', () =>
+        assert.ok(/entry-armor|survival-core|roadmap/.test(why('OLIVE UP', 'passive', 5)),
+            'OLIVE UP: ' + why('OLIVE UP', 'passive', 5)));
+    test('WATER UP carries its craft-half term', () =>
+        assert.ok(/craft-half|roadmap/.test(why('WATER UP', 'passive', 5)),
+            'WATER UP: ' + why('WATER UP', 'passive', 5)));
+
+    // THE AGGREGATE: a level-up must not be scored as an anonymous ingredient.
+    // Before the fix every one of these was 9.
+    test('plan and junk level-ups are no longer the SAME score', () =>
+        assert.ok(sc('OLIVE UP', 'passive', 5) > sc('LIME UP', 'passive', 5) + 100,
+            'OLIVE UP ' + Math.round(sc('OLIVE UP', 'passive', 5)) +
+            ' vs LIME UP ' + Math.round(sc('LIME UP', 'passive', 5))));
+
+    // SIMPLE SYRUP ends in "UP" with no space before it. The strip is
+    // `/\s+UP$/`, so this name must survive intact — a bare /UP$/ would turn
+    // it into "SIMPLE SYR" and silently unhook the whole regen half.
+    test('SIMPLE SYRUP is not mangled by the UP strip', () =>
+        assert.ok(/entry-regen-syrup|craft/.test(why('SIMPLE SYRUP', 'passive', 0)),
+            'SIMPLE SYRUP: ' + why('SIMPLE SYRUP', 'passive', 0)));
+    // v6.134.0 (user: "simple syrup, mint, and olives are vital ingredients
+    // along with supersouthside level 6 as the main weapon for boss killer").
+    // A live run held southside 6 with NO mint at all, so SUPER SOUTH SIDE was
+    // impossible, while BLOODY MARY and VODKA MARTINI had both armed.
+    test('the reserve holds MINT — SOUTH SIDE\'s super key', () =>
+        assert.ok([...T.craftReserve()].includes('MINT'), JSON.stringify([...T.craftReserve()])));
+    test('...and SIMPLE SYRUP itself, not only its parts', () =>
+        assert.ok([...T.craftReserve()].includes('SIMPLE SYRUP'), JSON.stringify([...T.craftReserve()])));
+    test('...and OLIVE, the third vital ingredient', () =>
+        assert.ok([...T.craftReserve()].includes('OLIVE'), JSON.stringify([...T.craftReserve()])));
+    test('...and SIMPLE SYRUP UP still resolves to SIMPLE SYRUP', () =>
+        assert.ok(sc('SIMPLE SYRUP UP', 'passive', 3) > 20,
+            'SIMPLE SYRUP UP: ' + Math.round(sc('SIMPLE SYRUP UP', 'passive', 3))));
+    done();
+}
+
 if (which === 'gun-path') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
@@ -3137,7 +3229,10 @@ if (which === 'latent-line') {
             T.setOwned({ 'WATER': 0 });
         }
         // ...and once WATER is in, the bar is free to fill normally again.
-        T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 6, 'DRY VERMOUTH': 6, 'SUGAR': 6, 'OLIVE': 6 });
+        // v6.134.0: the reserve now also holds MINT (SOUTH SIDE's super key)
+        // and SIMPLE SYRUP itself, so "every build part" means all of them.
+        T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 6, 'DRY VERMOUTH': 6, 'SUGAR': 6,
+                     'OLIVE': 6, 'MINT': 6, 'SIMPLE SYRUP': 1 });
         test('...and with every build part owned the lock lifts', () =>
             assert.ok(!/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
         T.setOwned({ 'OLIVE': 0, 'TOMATO JUICE': 0, 'MINT': 0, 'SWEET VERMOUTH': 0,
@@ -4462,7 +4557,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace', 'report-budget', 'immortal-graduation', 'plan-golden-joe', 'plan-golden-pat', 'plan-golden-minguk', 'hell-latch-scan', 'shared-skill', 'passout-cluster-aim'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace', 'report-budget', 'immortal-graduation', 'plan-golden-joe', 'plan-golden-pat', 'plan-golden-minguk', 'hell-latch-scan', 'shared-skill', 'passout-cluster-aim','up-cards'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -8837,9 +8932,12 @@ if (which === 'claim-before-level') {
         assert.strictEqual(took, 'GIN TONIC', 'took ' + took);
         assert.ok(/claim-before-level/.test(lastWhy()), 'the audit does not say why: ' + lastWhy());
     });
+    // v6.134.0: the audit now records STIRRING, not "STIRRING UP" — the ` UP`
+    // suffix is stripped at `baseNameOf`, so the log names the CARD rather than
+    // the decoration the game happened to print on it. Same card, one identity.
     test('the pick log records the base it stepped over', () => {
         const a = T.pickAudit(); const last = a[a.length - 1];
-        assert.ok(/STIRRING UP=\d+/.test((last.over || []).join(' ')), JSON.stringify(last));
+        assert.ok(/\bSTIRRING=\d+/.test((last.over || []).join(' ')), JSON.stringify(last));
     });
     test('every plan cocktail claims over the base, not just the tonic line', () => {
         for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'WHISKY SOUR', 'MOSCOW MULE']) {
@@ -9253,7 +9351,7 @@ if (which === 'immortal-graduation') {
     // anyone. The round-robin that now ships is tested in its own block
     // below; this one proves the pin path is untouched by it.
     pineBot.config.graduation.rotate = false;
-    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
     T.setPhaseRows(Array(N - 1).fill(0).map(() => immortal('joe')));
     test('at N-1 the pin still resolves to joe', () => assert.strictEqual(T.chooseBartender(), 'joe'));
     test('...and nothing is recorded as graduated', () => assert.deepStrictEqual(T.graduationStatus().graduated, {}));
@@ -9323,7 +9421,7 @@ if (which === 'immortal-graduation') {
     // of sticking with one character until it reaches the 10 immortal
     // build count"). Shipped default; the pin block above ran with it off.
     pineBot.config.graduation.rotate = true;
-    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
     fresh(); T.setPhaseRows([]);
     test('rotate: a fresh store cycles joe -> minguk -> pat -> joe -> minguk, one step per run start', () => {
         const seq = Array(5).fill(0).map(() => T.chooseBartender());
@@ -9336,7 +9434,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.chooseBartender(), 'pat', 'after minguk comes pat, not joe');
     });
     test('rotate: the report previews the next pick without moving the cursor', () => {
-        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
+        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
         T.setGraduation(g); global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));
         const st1 = T.graduationStatus();
         assert.strictEqual(st1.rotate, true); assert.strictEqual(st1.lastPlayed, 'joe'); assert.strictEqual(st1.playing, 'minguk');
@@ -9345,7 +9443,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(JSON.parse(global.localStorage.getItem(T.graduationKey())).lastPlayed, 'joe', 'the cursor did not move');
     });
     test('rotate: a character at the bar is graduated on the next pick — whoever\'s turn it is — and KEEPS PLAYING (user: "rotate on every session regardless of whether they graduated")', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
         // pat (not the next in line) has ten; minguk is next by the cursor.
         T.setPhaseRows(Array(N).fill(0).map(() => immortal('pat', { v: tag('pat', '6.130.0') })));
         const b = T.chooseBartender();
@@ -9422,7 +9520,7 @@ if (which === 'immortal-graduation') {
     test('race: a ledger opened mid-epoch adopts the standing count and flags it, so runsTo is not overstated', () => {
         fresh();
         // A store already carrying counts from before the ledger existed.
-        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
         T.setPhaseRows([]);
         T.bookImmortal(immortal('pat'));
         const p = JSON.parse(global.localStorage.getItem(T.graduationKey())).progress.pat;
@@ -9478,7 +9576,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.immortalCount('joe'), 0, 'the pre-reset count was pulled back in');
     });
     test('rotate: the summary line still prints, with the next pick', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
         T.setPhaseRows([immortal('joe', { v: tag('joe', '6.130.0') })]);
         const s = T.reportSummary(pineBot.reportFull());
         assert.ok(/IMMORTAL\s+joe 1\/10\s+minguk 0\/10\s+pat 0\/10\s+playing joe/.test(s), s);

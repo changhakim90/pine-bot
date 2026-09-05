@@ -15,9 +15,40 @@
         const raw = card.n || card.name || card.key || '';
         return String(raw).toUpperCase().replace(/\s+/g, ' ').trim();
     }
+    // v6.134.0 — THE ` UP` SUFFIX. The game emits TWO cards per thing: an
+    // acquisition card (`OLIVE`) and a level-up card (`OLIVE UP`). This
+    // stripped `Lv3` and `+1` but not ` UP`, and all 39 name-keyed lookups in
+    // this file — COCKTAILS.includes, PLAN_INGREDIENTS.includes,
+    // SUPER_KEY_INGREDIENT[], INGREDIENT_TAGS[], AVOID_INGREDIENTS.has,
+    // SLOT_WASTERS.includes — therefore matched ONLY the acquisition form.
+    //
+    // Measured before the fix (gt 1740, hell, both forms at lv5):
+    //     OLIVE     262 -> OLIVE UP      9    (8 plan terms lost)
+    //     WATER      80 -> WATER UP      9
+    //     LIME     -704 -> LIME UP       9    (arming-cap lost)
+    //     LEMON    -679 -> LEMON UP      9
+    //     MANHATTAN -1065 -> MANHATTAN UP 71  (latent-line lost)
+    // EVERY passive level-up scored exactly 9 (`ingredient+8 ucb+1`), so
+    // ingredient level-ups were decided by UCB noise alone — and 12 of 14
+    // picks in a live log were ` UP` cards. The plan model and the safety
+    // model both applied only to the card that ACQUIRES a thing, never to any
+    // card that LEVELS it.
+    //
+    // This is the root cause behind findings previously filed separately:
+    // WATER never reaching 6 (so SIMPLE SYRUP never crafts), OLIVE stalling at
+    // 5 (park: SEATED def 35 / 2364 s against NEVER-PARKED 17.5 / 1373 s —
+    // decided by noise), the 6.118.0 regen spine doing nothing, LEMON/LIME/
+    // CAMPARI maxing through a -700 arming cap, MANHATTAN and VODKA CRANBERRY
+    // arming a fifth line, and `ownedLevels['OLIVE']` frozen at 1 (6.91.2).
+    //
+    // `\s+UP$` and NOT `UP$`: SIMPLE SYRUP ends in "UP" with no space before
+    // it, and a bare anchor would rewrite it to "SIMPLE SYR" and silently
+    // unhook the entire regen half of the plan. ULTIMATE cards are identified
+    // by `type === 'ult'`, never by name, so they are unaffected.
     function baseNameOf(card) {
         // strip a trailing "Lv3" / "LV 3" / "+1" decoration if present
-        return nameOf(card).replace(/\s*(LV\.?\s*\d+|\+\d+)\s*$/i, '').trim();
+        return nameOf(card).replace(/\s*(LV\.?\s*\d+|\+\d+)\s*$/i, '')
+                           .replace(/\s+UP$/i, '').trim();
     }
     function levelOf(card) {
         if (card && typeof card.lv === 'number') return card.lv;

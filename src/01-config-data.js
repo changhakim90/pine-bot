@@ -2017,10 +2017,31 @@
         const out = new Set();
         try {
             const cl = (CONFIG.deepHell && CONFIG.deepHell.capStable && CONFIG.deepHell.capStable.build) || [];
+            // v6.134.0 (user: "simple syrup, mint, and olives are vital
+            // ingredients along with supersouthside level 6 as the main weapon
+            // for boss killer"). Three corrections, all measured:
+            //
+            //  - A COCKTAIL clause reserves its SUPER KEY. The gate names SOUTH
+            //    SIDE, and what the build actually wants is SUPER SOUTH SIDE,
+            //    which needs MINT at 6. A live 6.133.0 run held `southside: 6`
+            //    with NO `mint` anywhere in `player.weapons` — the super was
+            //    impossible — while `bloodymary 6 + tomato 6` and
+            //    `vodkamartini 6 + dryver 6` had both armed. The bot built two
+            //    lines it should not have and missed the one the plan is named
+            //    after. The cocktail itself still costs a cocktail slot, not an
+            //    ingredient one, so only the key is reserved here.
+            //  - A CRAFT RESULT reserves ITSELF as well as its parts. SIMPLE
+            //    SYRUP is a pickable card in its own right (the regen spine
+            //    scores it), so reserving only WATER and SUGAR let the slot
+            //    lock clamp the very thing the gate requires.
             const add = (n) => {
-                if (COCKTAILS.includes(n)) return;                 // a cocktail slot, not an ingredient one
+                if (COCKTAILS.includes(n)) {
+                    const k = SUPER_KEY_INGREDIENT[n];
+                    if (k) out.add(k);
+                    return;
+                }
                 const evo = EVOLUTIONS.filter(e => e.result === n)[0];
-                if (evo) { for (const part of evo.parts) out.add(part); return; }
+                if (evo) { out.add(n); for (const part of evo.parts) out.add(part); return; }
                 out.add(n);
             };
             for (const clause of cl) for (const n of (Array.isArray(clause) ? clause : [clause])) add(n);
@@ -3139,9 +3160,14 @@
         // pool is about to narrow, and stops treating LEMON's line as
         // harmless. Builds assembled under the old picker are a different
         // experiment, so counts earned there cannot be pooled with these.
-        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 || !g.resetEpoch133) {
+        // v6.134.0 THE SIXTH RESET, and the most clearly earned of them. The
+        // ` UP` fix means the scorer's plan model and safety model now apply to
+        // level-up cards for the first time — roughly 12 of every 14 picks.
+        // Builds assembled before it were assembled by a different bot.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 ||
+            !g.resetEpoch133 || !g.resetEpoch134) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
-                  resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: SCRIPT_VERSION };
+                  resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
