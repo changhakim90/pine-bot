@@ -1296,8 +1296,33 @@
             // from ownedLevels (see the BUILD GATE block for why that
             // distinction has cost this project four versions once already).
             // An empty list disables the leg.
+            // v6.133.1 THE VERMOUTH CLAUSE IS DROPPED (user: "it seems that one
+            // run where sweet vermouth or black vermouth wasn't carried still
+            // ended with an immortal build run ... if they don't need it then
+            // maybe we should drop it from the immortal build requirement").
+            //
+            // There is a second, independent reason, and it is the stronger
+            // one: THE CLAUSE WAS MANUFACTURING THE RAINBOW GUN. `MANHATTAN`'s
+            // super key IS `SWEET VERMOUTH` (SUPER_KEY_INGREDIENT, 01:1945),
+            // and this file already names MANHATTAN first among the six
+            // cocktails that are "latent by construction" because the plan
+            // maxes their keys on purpose. `armsOffPlanLine` returns FALSE for
+            // SWEET VERMOUTH — it is a PLAN_INGREDIENT — so the arming cap is
+            // structurally unable to protect that line. Measured at gt 2795:
+            //     manhattan 6   sweetver 6      <- SUPER MANHATTAN, ARMED
+            // and the pool offered "★ SUPER MANHATTAN UP" at gt 1884. A fifth
+            // line against `maxSuperLines: 4`, and the immortal rule itself
+            // required the ingredient that armed it. The gate was working
+            // against the gun doctrine it shares a config with.
+            //
+            // NO RESET accompanies this. The bar is being RELAXED, not
+            // redefined: every build already counted met a strictly harder
+            // requirement and still qualifies. Resetting here would discard
+            // five honestly earned builds (joe 1, minguk 2, pat 2) for no
+            // reason — the previous four resets each followed a change that
+            // made old counts incomparable, and this one does not.
             capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, holdS: 300, dipGraceS: 4,
-                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']] },
+                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE']] },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             // v6.112.0: the gate is now max(parkRegenRate, breakEven * this).

@@ -3122,13 +3122,17 @@ if (which === 'latent-line') {
         // VERMOUTH 0/6 (none)"]`, with WATER and SIMPLE SYRUP both fine. A
         // hand-list protects whichever part failed last; the gate's clauses
         // protect all of them.
-        test('...and the reserve covers SWEET VERMOUTH too, not just WATER', () =>
+        // (v6.133.1: the gate's clauses are now SOUTH SIDE / SIMPLE SYRUP /
+        // OLIVE, so the reserve is WATER + SUGAR + OLIVE. The vermouths left
+        // with the clause — which is the point of deriving it.)
+        test('...and the reserve covers every part the gate names, not just WATER', () =>
             assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)),
                 'reserve is ' + JSON.stringify([...T.craftReserve()])));
         {
-            // WATER in, SWEET VERMOUTH still out: the lock must still hold.
-            T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 0 });
-            test('...with WATER owned but SWEET VERMOUTH missing the lock holds', () =>
+            // WATER in, another reserved part still out: the lock must hold on
+            // ANY missing part, not only the one that failed in the field.
+            T.setOwned({ 'WATER': 1, 'OLIVE': 0 });
+            test('...with WATER owned but another build part missing the lock holds', () =>
                 assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
             T.setOwned({ 'WATER': 0 });
         }
@@ -5435,9 +5439,23 @@ if (which === 'run-cap') {
         // new one, and the live report showed supers:2 was the ONLY leg short.
         test('v6.132.0: supersMin is gone from the shipped config', () =>
             assert.strictEqual(CS.supersMin, undefined));
-        test('...replaced by the four build clauses, vermouth as an OR', () =>
+        // v6.133.1: THREE clauses. The vermouth clause is gone — a run that
+        // never carried either still booked an immortal build, and more
+        // decisively, SWEET VERMOUTH is MANHATTAN's super key, so requiring it
+        // armed a fifth super line (`manhattan 6, sweetver 6` measured at gt
+        // 2795, with "★ SUPER MANHATTAN UP" offered at 1884) against a
+        // maxSuperLines of 4. The immortal rule was feeding the rainbow gun.
+        test('...replaced by THREE build clauses; the vermouth clause is gone', () =>
             assert.deepStrictEqual(CS.build,
-                [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']]));
+                [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE']]));
+        // ...and the reserve follows the gate, so the two vermouth ingredient
+        // slots are released rather than held for a requirement that no longer
+        // exists. That is the payoff for deriving it instead of hand-listing.
+        test('...and the ingredient reserve drops the vermouths with it', () => {
+            const r = [...T.craftReserve()];
+            assert.ok(!r.includes('SWEET VERMOUTH') && !r.includes('DRY VERMOUTH'), JSON.stringify(r));
+            assert.ok(r.includes('WATER') && r.includes('OLIVE'), JSON.stringify(r));
+        });
         // v6.102.0 THE CEILING TOOTH — the assertion that would have caught
         // the bug that made the whole early cap dead code for four versions.
         // The game computes player.defense = min(60, 3*upDefense + pas.armor);
@@ -5518,8 +5536,12 @@ if (which === 'run-cap') {
         // time, because "all four" passing by accident (an empty clause list,
         // a gate that reads nothing and returns true) is the failure mode that
         // would quietly re-open the rule to every build.
+        // v6.133.1: three clauses now — the vermouth clause was dropped because
+        // SWEET VERMOUTH is MANHATTAN's super key and requiring it armed a
+        // fifth line. SWEET VERMOUTH short must therefore NOT block the proof,
+        // which is asserted separately below.
         for (const [label, drop] of [['SOUTH SIDE', 'southside'], ['SIMPLE SYRUP', 'syrup'],
-                                     ['OLIVE', 'olive'], ['SWEET VERMOUTH', 'sweetver']]) {
+                                     ['OLIVE', 'olive']]) {
             T.resetCapLatch(); T.setSupers(4);
             const w = Object.assign({}, WEAPONS_FULL);
             // v6.132.1: a craft result has no level to dock — short means
@@ -5548,6 +5570,18 @@ if (which === 'run-cap') {
             test('the build latch does not survive a run boundary', () =>
                 assert.strictEqual(pl.capDive, false,
                     'a run with NO ingredients capped immortal on a stale latch'));
+        }
+        // v6.133.1 THE DROPPED CLAUSE IS INERT: a build with NO vermouth of
+        // either kind must now pass. This is the assertion that would catch the
+        // clause being silently reinstated.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL);
+            delete w.sweetver; delete w.dryver;   // neither half, and no craft
+            stableScene(9000, { weapons: w });
+            pl = stableScene(9320, { weapons: w });
+            test('v6.133.1: no vermouth of any kind still proves the build', () =>
+                assert.strictEqual(pl.capDive, true, JSON.stringify(T.capDebug())));
         }
         // ...and BLACK VERMOUTH satisfies the vermouth clause on its own —
         // that is the whole point of the OR, because the craft eats SWEET
