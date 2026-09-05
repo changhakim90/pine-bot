@@ -3003,9 +3003,20 @@
         // standing in the store was earned against a different bar and a
         // graduation mixing the two proves nothing. Same shape and its own
         // guard; a store missing any of the three flags gets all three.
-        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132) {
+        // v6.132.2 THE FOURTH RESET — for the RACE, not the counts. The counts
+        // were already 0/10/0 and honest; nothing false was ever booked. What
+        // needed clearing is `progress[char].runs`. Roughly 230 runs (joe 77,
+        // minguk 75, pat 78) were played under 6.132.0's gate, which could not
+        // fire at all: it compared a craft result's permanent level of 1
+        // against a max of 6, so no build could ever satisfy the SIMPLE SYRUP
+        // clause. Those runs are in the ledger, and leaving them there would
+        // inflate `runsTo`, `perRun` and `hoursTo` for whoever finishes first
+        // — the three figures the race exists to report. The race would have
+        // measured the broken gate instead of the character. A store missing
+        // ANY of the four flags gets all four.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
-                  immortalEpochVersion: SCRIPT_VERSION };
+                  resetEpoch1321: 1, immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.

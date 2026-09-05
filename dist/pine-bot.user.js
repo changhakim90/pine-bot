@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.132.1
+// @version      6.132.2
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.132.1';
+    const SCRIPT_VERSION = '6.132.2';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -3005,9 +3005,20 @@
         // standing in the store was earned against a different bar and a
         // graduation mixing the two proves nothing. Same shape and its own
         // guard; a store missing any of the three flags gets all three.
-        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132) {
+        // v6.132.2 THE FOURTH RESET — for the RACE, not the counts. The counts
+        // were already 0/10/0 and honest; nothing false was ever booked. What
+        // needed clearing is `progress[char].runs`. Roughly 230 runs (joe 77,
+        // minguk 75, pat 78) were played under 6.132.0's gate, which could not
+        // fire at all: it compared a craft result's permanent level of 1
+        // against a max of 6, so no build could ever satisfy the SIMPLE SYRUP
+        // clause. Those runs are in the ledger, and leaving them there would
+        // inflate `runsTo`, `perRun` and `hoursTo` for whoever finishes first
+        // — the three figures the race exists to report. The race would have
+        // measured the broken gate instead of the character. A store missing
+        // ANY of the four flags gets all four.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
-                  immortalEpochVersion: SCRIPT_VERSION };
+                  resetEpoch1321: 1, immortalEpochVersion: SCRIPT_VERSION };
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -8312,7 +8323,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch132) graduation = s;
+            if (s && typeof s === 'object' && s.resetEpoch1321) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
