@@ -9078,7 +9078,7 @@ if (which === 'immortal-graduation') {
     // anyone. The round-robin that now ships is tested in its own block
     // below; this one proves the pin path is untouched by it.
     pineBot.config.graduation.rotate = false;
-    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
+    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
     T.setPhaseRows(Array(N - 1).fill(0).map(() => immortal('joe')));
     test('at N-1 the pin still resolves to joe', () => assert.strictEqual(T.chooseBartender(), 'joe'));
     test('...and nothing is recorded as graduated', () => assert.deepStrictEqual(T.graduationStatus().graduated, {}));
@@ -9148,7 +9148,7 @@ if (which === 'immortal-graduation') {
     // of sticking with one character until it reaches the 10 immortal
     // build count"). Shipped default; the pin block above ran with it off.
     pineBot.config.graduation.rotate = true;
-    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
+    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
     fresh(); T.setPhaseRows([]);
     test('rotate: a fresh store cycles joe -> minguk -> pat -> joe -> minguk, one step per run start', () => {
         const seq = Array(5).fill(0).map(() => T.chooseBartender());
@@ -9161,7 +9161,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.chooseBartender(), 'pat', 'after minguk comes pat, not joe');
     });
     test('rotate: the report previews the next pick without moving the cursor', () => {
-        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
+        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
         T.setGraduation(g); global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));
         const st1 = T.graduationStatus();
         assert.strictEqual(st1.rotate, true); assert.strictEqual(st1.lastPlayed, 'joe'); assert.strictEqual(st1.playing, 'minguk');
@@ -9170,7 +9170,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(JSON.parse(global.localStorage.getItem(T.graduationKey())).lastPlayed, 'joe', 'the cursor did not move');
     });
     test('rotate: a character at the bar is graduated on the next pick — whoever\'s turn it is — and KEEPS PLAYING (user: "rotate on every session regardless of whether they graduated")', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
         // pat (not the next in line) has ten; minguk is next by the cursor.
         T.setPhaseRows(Array(N).fill(0).map(() => immortal('pat', { v: tag('pat', '6.130.0') })));
         const b = T.chooseBartender();
@@ -9247,7 +9247,7 @@ if (which === 'immortal-graduation') {
     test('race: a ledger opened mid-epoch adopts the standing count and flags it, so runsTo is not overstated', () => {
         fresh();
         // A store already carrying counts from before the ledger existed.
-        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0' });
+        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0' });
         T.setPhaseRows([]);
         T.bookImmortal(immortal('pat'));
         const p = JSON.parse(global.localStorage.getItem(T.graduationKey())).progress.pat;
@@ -9303,7 +9303,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.immortalCount('joe'), 0, 'the pre-reset count was pulled back in');
     });
     test('rotate: the summary line still prints, with the next pick', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
         T.setPhaseRows([immortal('joe', { v: tag('joe', '6.130.0') })]);
         const s = T.reportSummary(pineBot.reportFull());
         assert.ok(/IMMORTAL\s+joe 1\/10\s+minguk 0\/10\s+pat 0\/10\s+playing joe/.test(s), s);
@@ -9371,6 +9371,44 @@ if (which === 'immortal-graduation') {
                 assert.ok(!raw.progress || !raw.progress.joe, JSON.stringify(raw.progress));
                 assert.strictEqual(raw.resetEpoch132, 1, JSON.stringify(raw));
             });
+        }
+        // v6.132.2 THE FOURTH RESET, and the only case the first three cannot
+        // reach: a 6.132.0 store, already carrying all three prior guards,
+        // with an honest 0 count and a LEDGER FULL OF RUNS. Those ~230 runs
+        // were played under a gate that could not fire (a craft result's
+        // permanent level of 1 against a max of 6), so leaving them would
+        // inflate runsTo/perRun/hoursTo for whoever finishes first — the three
+        // figures the race exists to report.
+        {
+            const s1320 = JSON.stringify({
+                graduated: {}, counts: { joe: 0, minguk: 0, pat: 0 },
+                progress: {
+                    joe: { runs: 77, immortal: 0, marks: {} },
+                    minguk: { runs: 75, immortal: 0, marks: {} },
+                    pat: { runs: 78, immortal: 0, marks: {} }
+                },
+                resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
+                immortalEpochVersion: '6.132.0', lastPlayed: 'pat' });
+            const b = makeEnv({ script: SCRIPT, storage: { pineBotGraduation: s1320 } });
+            b.pineBot.stop();
+            test('a 6.132.0 store is wiped by the fourth reset — its runs raced a gate that could not fire', () => {
+                const raw = JSON.parse(b.store.pineBotGraduation);
+                assert.ok(!raw.progress || !raw.progress.joe, JSON.stringify(raw.progress));
+                assert.strictEqual(raw.resetEpoch1321, 1, JSON.stringify(raw));
+                assert.strictEqual(raw.immortalEpochVersion, pkg.version, JSON.stringify(raw));
+            });
+            test('...and the race reports zero runs, not 77/75/78', () => {
+                const race = b.pineBot.graduation().race || [];
+                for (const r of race) assert.strictEqual(r.runs, 0, JSON.stringify(race));
+            });
+            // ...but a store that has ALREADY taken the fourth reset survives a
+            // reload with whatever it has earned since.
+            const carried = JSON.parse(b.store.pineBotGraduation);
+            carried.counts.joe = 3;
+            const b2 = makeEnv({ script: SCRIPT, storage: { pineBotGraduation: JSON.stringify(carried) } });
+            b2.pineBot.stop();
+            test('...and a second boot of the already-reset 6.132.2 store keeps its progress', () =>
+                assert.strictEqual(b2.pineBot.graduation().counts.joe, 3));
         }
         test('a pre-6.128.0 store (no guard at all) is wiped and stamped the same way', () => {
             const b = makeEnv({ script: SCRIPT, storage: { pineBotGraduation: JSON.stringify({ graduated: { joe: { at: 'x', count: 5 } }, counts: { joe: 5 } }) } });

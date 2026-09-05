@@ -721,7 +721,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch132) graduation = s;
+            if (s && typeof s === 'object' && s.resetEpoch1321) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
