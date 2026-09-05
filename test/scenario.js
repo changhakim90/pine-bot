@@ -5318,7 +5318,9 @@ if (which === 'run-cap') {
         // gate reads the game's real map rather than a squash of the display
         // name. `WEAPONS_FULL` is a complete build; scenes override it to
         // knock a single clause out.
-        const WEAPONS_FULL = { southside: 6, syrup: 6, olive: 6, sweetver: 6, dryver: 6, mint: 6 };
+        // v6.132.1: `syrup: 1` is what a COMPLETE build actually looks like — the
+        // craft result pins at 1 because the item leaves the ingredient pool.
+        const WEAPONS_FULL = { southside: 6, syrup: 1, olive: 6, sweetver: 6, dryver: 6, water: 6, sugar: 6, mint: 6 };
         const stableScene = (gt, extraP) => {
             global.player = Object.assign({ x: 200, y: 200, hp: 469, maxHp: 469, speed: 3.0,
                                             r: 7.2, ultReadyAt: 1e9, defense: DEF_CEILING,
@@ -5378,7 +5380,11 @@ if (which === 'run-cap') {
         for (const [label, drop] of [['SOUTH SIDE', 'southside'], ['SIMPLE SYRUP', 'syrup'],
                                      ['OLIVE', 'olive'], ['SWEET VERMOUTH', 'sweetver']]) {
             T.resetCapLatch(); T.setSupers(4);
-            const w = Object.assign({}, WEAPONS_FULL); w[drop] = 5;   // one level short
+            const w = Object.assign({}, WEAPONS_FULL);
+            // v6.132.1: a craft result has no level to dock — short means
+            // NOT CRAFTED, i.e. absent from the map, which is exactly what
+            // the gt-990 report showed (`key: null, src: 'none'`).
+            if (drop === 'syrup') delete w[drop]; else w[drop] = 5;
             stableScene(6000, { weapons: w });
             pl = stableScene(6320, { weapons: w });
             test(label + ' one level short: stable hp + seat armor is not a proof', () =>
@@ -5424,7 +5430,7 @@ if (which === 'run-cap') {
             // 6.132.0 this field was written only on a reset, so a run whose
             // clock never started reported `lastResetReason: null` — which is
             // precisely the paste the user brought in (streakS 0, no reason).
-            const w = Object.assign({}, WEAPONS_FULL); w.syrup = 3;
+            const w = Object.assign({}, WEAPONS_FULL); delete w.syrup;   // v6.132.1: uncrafted, not "level 3"
             stableScene(6800, { weapons: w });
             stableScene(6820, { weapons: w });
             test('...and a short build is named in the reset reason', () =>
@@ -5441,6 +5447,42 @@ if (which === 'run-cap') {
             test('an empty build list disables the leg', () =>
                 assert.strictEqual(pl.capDive, true));
             pineBot.config.deepHell.capStable = CS;
+        }
+        // v6.132.1 A CRAFT RESULT IS BINARY. User, on a live run the rule
+        // refused: "simple syrup disappears from the ingredients list like the
+        // black vermouth once crafted." The gt-5179 report showed water 6,
+        // sugar 6, syrup 1 — every other key at 6 — because a crafted item
+        // leaves the pool and its level can never move again. 6.132.0 read
+        // that 1 against a max of 6 and refused a complete build.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL);
+            w.syrup = 1;            // crafted: complete, and it can never exceed 1
+            w.water = 6; w.sugar = 6;
+            stableScene(7700, { weapons: w });
+            pl = stableScene(8020, { weapons: w });
+            test('SIMPLE SYRUP at 1 is COMPLETE — a craft result cannot be levelled', () =>
+                assert.strictEqual(pl.capDive, true, JSON.stringify(T.capDebug())));
+        }
+        // ...and the same for the vermouth clause's craft half.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL);
+            delete w.sweetver; w.blackver = 1;
+            stableScene(8100, { weapons: w });
+            pl = stableScene(8420, { weapons: w });
+            test('BLACK VERMOUTH at 1 satisfies the vermouth clause', () =>
+                assert.strictEqual(pl.capDive, true));
+        }
+        // ...but an UNCRAFTED syrup is still short: absent from the map
+        // entirely is what gt 990 actually looked like, and it must not pass.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL); delete w.syrup;
+            stableScene(8500, { weapons: w });
+            pl = stableScene(8820, { weapons: w });
+            test('an UNCRAFTED simple syrup (absent from weapons) still fails', () =>
+                assert.strictEqual(pl.capDive, false));
         }
         // the gate reads `player.weapons`, NOT ownedLevels — 6.91.2's lesson.
         // The bare "OLIVE" key freezes at 1 on acquisition while in-run levels
