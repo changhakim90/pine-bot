@@ -1956,11 +1956,16 @@ if (which === 'roster-cap') {
         assert.ok(pat.ingredients.includes(pineBot.test.superKey('GIN TONIC')),
                   'the shared key must already be planned');
     });
-    // THE SAFETY PROPERTY that makes the fifth slot free: LEMON is permanently
-    // banned, so WHISKY SOUR can never complete a super and cannot move the
-    // roster toward the six-maxed-super Rainbow Gun gate. If this ever fails,
-    // the fifth slot has stopped being free and the pick has to be reconsidered.
-    test('...and the freeze slot adds NO completable super line', () => {
+    // v6.135.0 AUDIT E3 — RENAMED to what it measures. This was "the freeze
+    // slot adds NO completable super line", with a comment calling it "THE
+    // SAFETY PROPERTY ... If this ever fails, the pick has to be
+    // reconsidered." It cannot fail for the reason it names: it checks that
+    // LEMON is off the PLAN LIST, which is true, while the game armed SUPER
+    // WHISKY SOUR anyway (`whiskysour 6, lemon 6`, measured in 6.133.0). A
+    // list-membership test is not a runtime safety property, and a tripwire
+    // that cannot trip is worse than none. The runtime guard lives in
+    // gunPathProgress and the slot doctrine; this asserts the roster shape.
+    test('...and WHISKY SOUR is a keyless occupant BY ROSTER: its key is off the plan list', () => {
         const key = pineBot.test.superKey('WHISKY SOUR');
         assert.strictEqual(key, 'LEMON', String(key));
         assert.ok(!pat.ingredients.includes('LEMON'), pat.ingredients.join(','));
@@ -2020,7 +2025,13 @@ if (which === 'roster-cap') {
     // THE SAFETY PROPERTY for the third occupant, stated as an invariant:
     // GINGER BEER must stay out of the plan AND stay arming-capped. If either
     // changes, MOSCOW MULE becomes a fifth line and this must fail.
-    test('MOSCOW MULE is keyless because GINGER BEER is never maxed', () => {
+    // v6.135.0 AUDIT E4 — RENAMED. "GINGER BEER is never maxed" was the claim;
+    // what is checked is that its lv5 card scores under -400 in an EMPTY pool.
+    // That is the arming cap's bid, and a bid is not a guarantee: LEMON and
+    // LIME both reached 6 through the same -700 in two-card hell pools
+    // (CHANGELOG 6.133.0). The assertion stays — the cap must keep biting —
+    // under a name that does not promise what a score cannot deliver.
+    test('MOSCOW MULE is keyless by roster, and GINGER BEER@lv5 carries the arming cap', () => {
         const key = pineBot.test.superKey('MOSCOW MULE');
         assert.strictEqual(key, 'GINGER BEER', String(key));
         assert.ok(!pat.ingredients.includes(key), pat.ingredients.join(','));
@@ -2142,9 +2153,144 @@ if (which === 'up-cards') {
         assert.ok([...T.craftReserve()].includes('SIMPLE SYRUP'), JSON.stringify([...T.craftReserve()])));
     test('...and OLIVE, the third vital ingredient', () =>
         assert.ok([...T.craftReserve()].includes('OLIVE'), JSON.stringify([...T.craftReserve()])));
+    // ── v6.135.0 AUDIT A1: super-rush respects the cap ────────────────────
+    // `rainbow-rush` paid +12 in hell to any key card while supersThisRun < 6
+    // — a bound that could never bind under maxSuperLines 4, so it paid on
+    // every hell pick toward a line the file refuses to open. Now gated on
+    // the real cap. (This scene is hell, gt 1740.)
+    T.setOwned({ 'SOUTH SIDE': 6 });
+    T.setSupers(0);
+    T.latchHell();   // the scene sets the game's flag; the bot's latch is separate
+    test('below the cap, a planned key in hell gets super-rush', () =>
+        assert.ok(/super-rush/.test(why('MINT', 'passive', 5)), why('MINT', 'passive', 5)));
+    T.setSupers(pineBot.config.maxSuperLines);
+    test('AT the cap it does not — there is nothing left to rush', () =>
+        assert.ok(!/super-rush/.test(why('MINT', 'passive', 5)), why('MINT', 'passive', 5)));
+    test('...and the old always-open "< 6" bound is gone', () =>
+        assert.ok(!/rainbow-rush/.test(why('MINT', 'passive', 5))));
+    T.setSupers(0);
+
+    // ── v6.135.0 AUDIT A4: MOJITO is a plan cocktail, not an avoided one ──
+    // It was on AVOID_COCKTAILS from a 6.8x "sixth super" worry AND one of
+    // the four intended lines since 6.88.3. Being on both silently withheld
+    // roster-first from it.
+    T.setOwned({ 'MOJITO': 0 });
+    test('MOJITO new carries roster-first like every other plan cocktail', () =>
+        assert.ok(/roster-first/.test(why('MOJITO', 'weapon', 0)), why('MOJITO', 'weapon', 0)));
+
     test('...and SIMPLE SYRUP UP still resolves to SIMPLE SYRUP', () =>
         assert.ok(sc('SIMPLE SYRUP UP', 'passive', 3) > 20,
             'SIMPLE SYRUP UP: ' + Math.round(sc('SIMPLE SYRUP UP', 'passive', 3))));
+    done();
+}
+
+// ── v6.135.0 PLAYER CONTROLS ────────────────────────────────────────────────
+//
+// USER: "I want to be able to start and stop the bot and end the loop cycle
+// for training. The bot should be able to allow the player to select the
+// character then start the bot." Two player-owned settings in their own
+// store: a character PIN that bypasses the rotation, and a LOOP mode that
+// stops the bot at the results screen after a run is booked. The subtle case
+// is the resume: ▶ Start on a results screen must NOT stop the bot again on
+// the same screen, which is why one-run mode arms at startRun(), not at
+// startBot().
+if (which === 'controls') {
+    const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'select', gameTime: 0 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const ctlKey = () => Object.keys(store).find(k => /^pineBotControl/.test(k));
+    // makeEnv swaps global.localStorage; a sub-boot must hand it back or the
+    // original bot's later writes land in the sub-boot's store.
+    const LS = global.localStorage;
+    const subBoot = (opts) => { const b = makeEnv(opts); b.pineBot.stop(); global.localStorage = LS; return b; };
+
+    // ── the PIN ─────────────────────────────────────────────────────────────
+    test('with no pin, chooseBartender follows the rotation', () => {
+        const a = T.chooseBartender(), b = T.chooseBartender();
+        assert.ok(a !== b, 'rotation did not advance: ' + a + ',' + b);
+    });
+    test('pin("pat") makes every pick pat and does not touch the rotation cursor', () => {
+        const cursorBefore = pineBot.graduation().lastPlayed;
+        assert.strictEqual(pineBot.pin('pat'), 'pat');
+        assert.strictEqual(T.chooseBartender(), 'pat');
+        assert.strictEqual(T.chooseBartender(), 'pat');
+        assert.strictEqual(pineBot.graduation().lastPlayed, cursorBefore, 'the cursor moved under a pin');
+    });
+    test('...the pin is persisted in its own namespaced store', () => {
+        assert.ok(ctlKey(), Object.keys(store).join(','));
+        assert.strictEqual(JSON.parse(store[ctlKey()]).pin, 'pat');
+    });
+    test('...and survives a fresh boot', () => {
+        const b = subBoot({ script: SCRIPT, game: { state: 'select', gameTime: 0 }, storage: Object.assign({}, store) });
+        assert.strictEqual(b.pineBot.control().pin, 'pat');
+        assert.strictEqual(b.pineBot.test.chooseBartender(), 'pat');
+    });
+    test('...and survives a graduation reset (different key, the bot cannot wipe it)', () => {
+        const wiped = Object.assign({}, store);
+        for (const k of Object.keys(wiped)) if (/pineBotGraduation/.test(k)) delete wiped[k];
+        const b = subBoot({ script: SCRIPT, game: { state: 'select', gameTime: 0 }, storage: wiped });
+        assert.strictEqual(b.pineBot.control().pin, 'pat');
+    });
+    test('pin(null) resumes the rotation where it left off', () => {
+        const cursor = pineBot.graduation().lastPlayed;
+        assert.strictEqual(pineBot.pin(null), 'auto');
+        const next = T.chooseBartender();
+        const order = pineBot.config.graduation.order;
+        assert.strictEqual(next, order[(order.indexOf(cursor) + 1) % order.length], 'cursor ' + cursor + ' -> ' + next);
+    });
+    test('an unknown character is refused, not stored', () =>
+        assert.strictEqual(pineBot.pin('nobody'), 'auto'));
+
+    // ── the LOOP ────────────────────────────────────────────────────────────
+    // continuous: a booked run does not stop the bot.
+    pineBot.loop('continuous');
+    pineBot.start();
+    T.startRun();
+    T.endRun();
+    test('loop mode: finishing a run leaves the bot running', () =>
+        assert.strictEqual(pineBot.control().running, true));
+
+    // single: the run is booked, THEN the bot stops.
+    pineBot.loop('single');
+    T.startRun();
+    test('one-run mode arms at startRun', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('one-run mode: finishing a run STOPS the bot', () =>
+        assert.strictEqual(pineBot.control().running, false));
+    test('...and the arm is consumed', () => assert.strictEqual(pineBot.control().armed, false));
+
+    // THE RESUME CASE. ▶ Start on the results screen: over() fires with no
+    // run active. It must not stop the bot again — that would trap the
+    // player on the results screen forever.
+    global.state = 'over';
+    pineBot.start();
+    T.stateHandlers.over();
+    test('▶ Start on the results screen in one-run mode does NOT stop again', () =>
+        assert.strictEqual(pineBot.control().running, true));
+    // ...and the next real run re-arms, so the mode is a mode, not a one-shot.
+    T.startRun();
+    test('...and the NEXT run re-arms', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('...and stops again after it', () => assert.strictEqual(pineBot.control().running, false));
+
+    // switching to one-run MID-RUN arms the current run, which is what the
+    // player means by "stop after this one".
+    pineBot.loop('continuous'); pineBot.start(); T.startRun();
+    assert.strictEqual(pineBot.control().armed, false);
+    pineBot.loop('single');
+    test('loop("single") mid-run arms the run in progress', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('...so it stops at the end of THIS run', () => assert.strictEqual(pineBot.control().running, false));
+
+    // over() with the bot stopped by one-run mode must not click RETRY.
+    // clickText returns false in the fake DOM, so the handler's return value
+    // is the tell: true = "handled, left alone", false = "tried to click".
+    pineBot.loop('single'); pineBot.start(); T.startRun(); global.state = 'over';
+    const handled = T.stateHandlers.over();
+    test('over() in one-run mode books the run and returns without RETRY', () =>
+        assert.ok(handled === true && pineBot.control().running === false, 'handled=' + handled));
+
+    test('loop mode is persisted', () => assert.strictEqual(JSON.parse(store[ctlKey()]).loop, 'single'));
     done();
 }
 
@@ -2188,16 +2334,35 @@ if (which === 'gun-path') {
     test('and ranks below a junk key that has barely started', () =>
         assert.ok(fresh.score > nearly.score,
             'lime ' + fresh.score.toFixed(0) + ' vs cointreau ' + nearly.score.toFixed(0)));
-    // lines that can NEVER complete are harmless and must not be penalised:
-    // LEMON and ORANGE are permanently banned, so their supers are unreachable
+    // v6.135.0 AUDIT E1 — REVISED ON PURPOSE. This used to read "LEMON and
+    // ORANGE are permanently banned, so their supers are unreachable" and
+    // assert LEMON is never a gun path. 6.133.0 measured `whiskysour 6, lemon
+    // 6` in a live run: the line completed. The test had passed only because
+    // WHISKY SOUR was never seeded, i.e. it was checking that an UNOWNED
+    // cocktail's key sits under the halfway floor — true, and stated here as
+    // exactly that — not permanence, which is false.
     const lemon = T.scoreCard({ n: 'LEMON', type: 'passive', lv: 3, maxlv: 6 }, 0, []);
-    test('a permanently unreachable line is not treated as a gun path', () =>
+    test('a key whose cocktail is unowned is under the gun-path floor (not "unreachable")', () =>
         assert.ok(!/gun-path/.test(lemon.why), lemon.why));
-    // and the sanctioned five are never penalised as gun paths
-    const plan = T.roadmap().cocktails[0];
-    const planCard = T.scoreCard({ n: plan, type: 'weapon', lv: 3, maxlv: 6 }, 0, []);
-    test('the planned five are never treated as a gun path', () =>
-        assert.ok(!/gun-path/.test(planCard.why), plan + ': ' + planCard.why));
+    test('...and the SAME key IS a gun path once its cocktail is owned and climbing', () => {
+        // gunPathProgress reads the key's level from ownedLevels (the card's
+        // `lv` is what the pool prints; the owned level is what the game has).
+        T.setOwned({ 'WHISKY SOUR': 4, 'LEMON': 3 });
+        const w = T.scoreCard({ n: 'LEMON', type: 'passive', lv: 3, maxlv: 6 }, 0, []).why;
+        T.setOwned({ 'WHISKY SOUR': 0, 'LEMON': 0 });
+        assert.ok(/gun-path/.test(w), w);
+    });
+    // v6.135.0 AUDIT E2 — REVISED ON PURPOSE. This was "the planned five are
+    // never treated as a gun path" and tested roadmap().cocktails[0], which is
+    // SOUTH SIDE — exempt by construction as a SUPER_LINE_COCKTAIL. The name
+    // said five, the exempt set is four, and one of the OTHER plan cocktails
+    // (WHISKY SOUR, a keyless occupant) IS taxed once its key climbs. Test the
+    // real invariant: every INTENDED line is exempt, all four of them.
+    for (const ck of pineBot.test.superLineCocktails()) {
+        const c = T.scoreCard({ n: ck, type: 'weapon', lv: 3, maxlv: 6 }, 0, []);
+        test('an intended super line is never a gun path: ' + ck, () =>
+            assert.ok(!/gun-path/.test(c.why), ck + ': ' + c.why));
+    }
     // v6.87.4: an off-plan line that has barely started is NOT taxed — two
     // levels in a fresh cocktail is damage, not a gun path, and taxing it
     // collapsed supers/run in the first 6.87.3 runs.
@@ -2248,14 +2413,21 @@ if (which === 'gun-forced') {
             f.pools[0].offered.every(o => /risk0\.\d/.test(o)), JSON.stringify(f.pools[0].offered)));
     test('and which one had to be eaten', () =>
         assert.ok(['ANGOSTURA', 'COINTREAU'].includes(f.pools[0].took), String(f.pools[0].took)));
-    // a pool with ONE safe card is not forced — the safe card is simply taken
+    // a pool with ONE safe card is not forced — the safe card is simply taken.
+    // v6.135.0 AUDIT C3/E7: the safe card used to be `type: 'item'`, a type
+    // the game never emits (game-source-facts: 'sp_timestop' is real, 'item'
+    // is not), so gunPathProgress returned 0 for it by not recognising it —
+    // the test proved nothing about a real safe card. And the assertion was
+    // "n is still 1", which also passes if handleLevelUp never ran. Now: the
+    // real type, and the pick itself is checked.
     global.window._pool = [
         { n: 'ANGOSTURA', type: 'passive', lv: 4, maxlv: 6 },
-        { n: 'TIME STOP', type: 'item', lv: 1, maxlv: 6 }
+        { n: 'TIME STOP', type: 'sp_timestop', lv: 0 }
     ];
-    T.handleLevelUp();
-    test('a pool with any safe option is NOT flagged as forced', () =>
-        assert.strictEqual(pineBot.gunForced().n, 1, 'flagged a pool that had a way out'));
+    const nBefore = pineBot.gunForced().n;
+    const ran = T.handleLevelUp();
+    test('a pool with a REAL safe card (sp_timestop) is NOT flagged as forced', () =>
+        assert.ok(ran !== false && pineBot.gunForced().n === nBefore, 'ran=' + ran + ' n ' + nBefore + '->' + pineBot.gunForced().n));
     done();
 }
 
@@ -4557,7 +4729,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace', 'report-budget', 'immortal-graduation', 'plan-golden-joe', 'plan-golden-pat', 'plan-golden-minguk', 'hell-latch-scan', 'shared-skill', 'passout-cluster-aim','up-cards'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!require('./scenario-list').includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -6335,10 +6507,11 @@ if (which === 'arming-cap') {
         test('the super-line key ' + k + ' can still be MAXED', () =>
             assert.ok(sc(k, 'passive', 5) > -400, k + ' @lv5 ' + Math.round(sc(k, 'passive', 5))));
 
-    // AND THE OUTCOME THE WHOLE THING EXISTS FOR: with the keys shut, the two
-    // keyless occupants stay keyless and the live run's 5-super state is
-    // unreachable. This is the assertion that would have caught the bug.
-    test('NEGRONI and WHISKY SOUR cannot be armed, so they stay keyless', () => {
+    // v6.135.0 AUDIT E4 — RENAMED. This said "cannot be armed ... the live
+    // run's 5-super state is unreachable"; 6.133.0 then measured exactly that
+    // state reached (SUPER WHISKY SOUR armed). What is asserted is that both
+    // keys carry the arming cap at lv5 — a necessary bid, not a guarantee.
+    test('NEGRONI and WHISKY SOUR keys carry the arming cap at lv5', () => {
         for (const c of ['NEGRONI', 'WHISKY SOUR']) {
             const k = pineBot.test.superKey(c);
             assert.ok(sc(k, 'passive', 5) < -400,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Pine & Co Auto Survivor
 // @namespace    https://pineandco.online/
-// @version      6.134.0
+// @version      6.135.0
 // @description  Autonomous player for Pine & Co. Reads the game's real internals (lexical globals + exported functions), plans movement on true coordinates, dodges projectiles / drop marks / dash lanes, and drives every menu through the game's own API. Optimises for TIME + DOWNS + SALES and pushes toward super cocktails and the Rainbow Gun. Stops on a Hell-mode high score so you can type your own name.
 // @author       you
 // @match        https://pineandco.online/*
@@ -132,7 +132,7 @@
 
     // Single source of truth for the version. Stamped onto every run record so
     // versions can actually be compared, and shown in the panel.
-    const SCRIPT_VERSION = '6.134.0';
+    const SCRIPT_VERSION = '6.135.0';
     // Bump ONLY when computeReward's scale changes. Rewards from different
     // epochs cannot be compared, so a bump clears the reward-derived baselines.
     // v6.91.6 EPOCH 3. Two scale changes, one of them not ours:
@@ -236,6 +236,13 @@
         // between them; a pin is how that reaches n=20 fastest. The
         // rotation list stays intact below — restoring pat/joe is this
         // same one-line change back, as it was for minguk.
+        // v6.135.0 AUDIT A2: BOTH of these are inert while
+        // `graduation.rotate` is on (the shipped state). chooseBartender()
+        // takes the player's pin (control store) first, then graduationPick()
+        // — which always returns a character under rotate:true — so neither
+        // value below is ever consulted. They stay as the fallback for a
+        // config with graduation disabled; the ~80 lines above are that era's
+        // record. To play one character, use the panel or pineBot.pin().
         preferredBartender: 'joe',
         bartenderRotation: ['pat', 'joe'],
 
@@ -445,8 +452,12 @@
     // VODKA CRANBERRY is KEPT over MOSCOW MULE (user), against that run's own
     // evidence. Recorded plainly: the 373-minute build carries the mule.
     //
-    // Super-line count is unchanged at exactly five, so the six-super Rainbow
-    // Gun gate still cannot open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
+    // [v6.135.0 AUDIT A6: the paragraph below is the 6.88.3 record and names
+    // FIVE lines including VODKA CRANBERRY. VODKA CRANBERRY left the roster in
+    // 6.92.1 and the cap is FOUR (`maxSuperLines`, SUPER_LINE_COCKTAILS). The
+    // authoritative list is SUPER_LINE_COCKTAILS; this stays as history.]
+    // Super-line count was then exactly five, so the six-super Rainbow
+    // Gun gate still could not open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
     // GIN TONIC(TONIC) VODKA CRANBERRY(CRANBERRY) MOJITO(SUGAR). NEGRONI loses
     // CAMPARI, WHISKY SOUR's LEMON and COSMOPOLITAN's ORANGE never unban, and
     // COFFEE BEANS' cocktail (ESPRESSO MARTINI) is off-roster.
@@ -473,9 +484,11 @@
         // stats still applying and only frees the slot count, so WATER ends up
         // costing nothing at all.
         //
-        // Super-line count is unchanged: WATER's cocktail is WHISKEY HIGHBALL
-        // and SUGAR's is MOJITO, neither of which is on the roster, so neither
-        // opens a sixth line toward the Rainbow Gun gate.
+        // Super-line count is unchanged: WATER's cocktail is WHISKEY HIGHBALL,
+        // which is off the roster. (v6.135.0 AUDIT A6/D1: this used to add
+        // "and SUGAR's is MOJITO, neither of which is on the roster" — MOJITO
+        // is on all three rosters below and is one of the four intended lines;
+        // SUGAR opening it is the plan, not a leak.)
         charRoadmap: {
             pat: {
                 cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
@@ -502,10 +515,13 @@
         rainbowPolicyOverride: 'skip',
         // v6.86.9: a hard ban, above the learned policy and the timing window.
         banRainbowGun: true,
-        // v6.87.2 (user): "cap the supercocktails to 5 cocktails". The Rainbow
-        // Gun's gate is SIX maxed supers, so five is the number that closes it
-        // by construction. Both charRoadmap rosters are built to exactly five
-        // completable lines (asserted by the `roster-cap` test); this is the
+        // v6.87.2 (user): "cap the supercocktails to 5 cocktails" — then
+        // v6.92.1 tightened it to FOUR, which is the shipped value below.
+        // (v6.135.0 AUDIT A5/D3: this paragraph still said five, and "both"
+        // rosters when there are three.) The Rainbow Gun's gate is SIX maxed
+        // supers, so four closes it with a full line of margin. All three
+        // charRoadmap rosters are built to exactly four intended lines
+        // (asserted by the `roster-cap` test); this is the
         // RUNTIME half of the same rule, for the pools that offer things the
         // roster never planned for. A card that would open or finish a sixth
         // line is refused outright, whatever the pool looks like.
@@ -1746,9 +1762,12 @@
             // evidence instead of me asserting it.
             regenDeficit: 40,
             dpsDeficitGain: 28,    // how hard picks shift to damage when losing the DPS race
-            // USER + CEM: the Rainbow Gun pickup time. The gun starts weak —
-            // too early = contact death, too late = kiting can't cover. The
-            // optimizer LEARNS the ideal moment from run rewards.
+            // INERT (v6.135.0 AUDIT A3/D4). The only reader sits below
+            // `if (CONFIG.banRainbowGun) break;` with the ban on, and 6.86.9
+            // removed this from the CEM search — so "the optimizer LEARNS the
+            // ideal moment" (the old comment here) has not been true since.
+            // Kept as the value the gun WOULD use if `banRainbowGun` were ever
+            // flipped, and reported in strategyWeights for that reason.
             rainbowReadyS: 1500
         },
 
@@ -1945,9 +1964,13 @@
         const rot = (CONFIG.bartenderRotation || []).filter(b => CHARS[b]);
         if (!rot.length) return null;
         let i = 0;
-        try { i = parseInt(localStorage.getItem('pineBotRotIdx') || '0', 10) || 0; } catch (e) { }
+        // v6.135.0 AUDIT C6: this key was written raw, the one store that
+        // escaped nsKey() and the only one missing from the deliberate
+        // exclusion list. Namespaced now. (nsKey is defined later in this
+        // file but this function only runs at run start, long after init.)
+        try { i = parseInt(localStorage.getItem(nsKey('pineBotRotIdx')) || '0', 10) || 0; } catch (e) { }
         const b = rot[i % rot.length];
-        try { localStorage.setItem('pineBotRotIdx', String((i + 1) % rot.length)); } catch (e) { }
+        try { localStorage.setItem(nsKey('pineBotRotIdx'), String((i + 1) % rot.length)); } catch (e) { }
         return b;
     }
 
@@ -2093,9 +2116,17 @@
     const AVOID_COCKTAILS = new Set([
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'WHISKEY HIGHBALL',
         'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2',
-        // MINGUK guard: these two would complete a SIXTH super off in-plan
-        // keys (SUGAR, OLIVE) and summon the gun — banned by design
-        'MOJITO', 'DRY MARTINI'
+        // MINGUK guard: DRY MARTINI would complete a super off an in-plan key
+        // (OLIVE) and summon the gun — banned by design.
+        // v6.135.0 AUDIT A4: MOJITO was listed here too, from the same 6.8x
+        // reasoning — and has been one of the FOUR intended super lines
+        // (SUPER_LINE_COCKTAILS) and on every charRoadmap roster since 6.88.3.
+        // Being on both lists meant `roster-first`, `level-later` and the
+        // `poolHasRoadmapAlt` avoid-veto all silently skipped it: measured,
+        // MOJITO new scored without roster-first while VODKA TONIC new got
+        // +24. A plan cocktail was being denied the bonus that exists to claim
+        // plan cocktails early. Removed.
+        'DRY MARTINI'
     ]);
     // WATER is NOT banned (user): WATER + SUGAR craft into SIMPLE SYRUP,
     // which opens the ingredient pool toward TOMATO JUICE (ult cooldown).
@@ -2200,8 +2231,12 @@
     //     CRANBERRY, SWEET VERMOUTH, DRY VERMOUTH and WATER are all keys of
     //     off-plan cocktails too, and the plan needs every one of them MAXED
     //     for its stat. Those stay guarded by occupancy and `latent-line`.
-    // Yields exactly the ingredients with no plan value: LIME, CAMPARI,
-    // LEMON, ORANGE, ANGOSTURA, COINTREAU, GINGER BEER, ABSINTHE.
+    // Yields exactly: LIME, CAMPARI, LEMON, ORANGE, ANGOSTURA, COINTREAU,
+    // GINGER BEER, ABSINTHE. (v6.135.0 AUDIT D9: this said "with no plan
+    // value". LEMON and GINGER BEER are the keys of two PLAN cocktails —
+    // WHISKY SOUR and MOSCOW MULE, the keyless occupants — and 6.133.0
+    // measured their lines completing. Capped means "we never level it on
+    // purpose", not "it has no value" and not "it cannot max".)
     const SUPER_LINE_KEYS = new Set(SUPER_LINE_COCKTAILS.map(c => SUPER_KEY_INGREDIENT[c]).filter(Boolean));
     function armsOffPlanLine(name) {
         // applyHellUnban() PUSHES its ingredients into PLAN_INGREDIENTS, which
@@ -2421,15 +2456,10 @@
     // the exclusive slot on the one latent line the arming cap cannot touch
     // (CRANBERRY is a plan ingredient). With the clamp gone the mule scores
     // its intended keyless-core + mule-lockout and claims the slot FIRST.
-    const LAST_RESORT = [];
-    // Measured band, not a guess. It must sit BELOW the hell-safe junk
-    // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
-    // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE
-    // -14) so that when the pool is nothing but junk the mule — which cannot
-    // open a sixth super now that GINGER BEER is permanently banned — is what
-    // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
-    // the one card the roster notes call unable to damage holdouts at all.
-    const LAST_RESORT_CEILING = 30;
+    // v6.135.0 AUDIT B3: `LAST_RESORT = []` and `LAST_RESORT_CEILING = 30`
+    // were declared here until this version. The list had been empty since
+    // 6.94.2, which made the clamp in scoreCard a pass-through; both are gone
+    // and scoreCard is scoreCardInner. The 6.94.2 note above is the record.
     // v6.89.0 (user): "maybe we need to get old fashioned and corpse reviver
     // no.2 out of the junk pools as we know southside and timestop upgrades and
     // negroni and olive and water are key to survival".
@@ -2465,14 +2495,24 @@
             AVOID_INGREDIENTS.delete(ing);
             if (!PLAN_INGREDIENTS.includes(ing)) PLAN_INGREDIENTS.push(ing);
         }
-        log('HELL UNBAN applied:', (CONFIG.hellUnbanIngredients || []).join(', '), '→ plan ingredients now', PLAN_INGREDIENTS.join(', '));
+        // v6.135.0 AUDIT B4: log only when something was actually unbanned.
+        // With the list empty (as shipped) this line fired in every hell run
+        // and read as a real plan mutation in the live console.
+        if ((CONFIG.hellUnbanIngredients || []).length)
+            log('HELL UNBAN applied:', CONFIG.hellUnbanIngredients.join(', '), '→ plan ingredients now', PLAN_INGREDIENTS.join(', '));
     }
 
     // ROSTER EXPERIMENT CANDIDATES — alternative 6-super builds composed from
     // the recipe book's verified roles, auditioned against the prescribed
-    // roadmap by a reward-credited UCB bandit (chooseRoster). Every candidate
-    // reaches the six-super Rainbow threshold and keeps the OLIVE / SWEET
-    // VERMOUTH survival staples in its ingredient plan.
+    // roadmap by a reward-credited UCB bandit (chooseRoster).
+    // [v6.135.0 AUDIT A7/B5: CONCLUDED and OFF — `rosterExperiment: false`
+    // makes chooseRoster() return 'user' unconditionally, so ROSTER_FIXED and
+    // the self-composition loop below are unreachable. They are kept as the
+    // documented alternative behind that switch. Note the candidates were
+    // built to "reach the six-super Rainbow threshold" — the opposite of the
+    // shipped doctrine — and every one carries a permanently banned key.]
+    // Every candidate was built to reach six supers and keeps the OLIVE /
+    // SWEET VERMOUTH survival staples in its ingredient plan.
     //   All rosters draw ONLY from the user-approved cocktail list (the
     //   avoid list above is excluded).
     //   fortress       defense/control maxed: NEGRONI dodge-shield, olive
@@ -2868,9 +2908,14 @@
         } catch (e) { return ''; }
     })();
     const nsKey = k => k + STORE_NS;
+    // v6.135.0: 'pineBotGraduation' was namespaced (6.126.0) but never added
+    // here, so the first run after a namespace was set lost the entire
+    // immortal-build ledger — counts, graduations, the race — the one number
+    // the 6.125–6.134 doctrine measures. 'pineBotControl' is new this version.
     const STORE_BASES = [CONFIG.learning.storageKey, 'pineBotDmgAudit', 'pineBotIncAudit',
         'pineBotHuntAudit', 'pineBotPauseAudit', 'pineBotParkAudit', 'pineBotPhaseAudit',
-        'pineBotBossCensus_v1', 'pineBotMarkAudit', 'pineBotCraftAudit_v1'];
+        'pineBotBossCensus_v1', 'pineBotMarkAudit', 'pineBotCraftAudit_v1',
+        'pineBotGraduation', 'pineBotControl'];
     function migrateStoreNamespace() {
         if (!STORE_NS) return 0;
         let copied = 0;
@@ -3121,7 +3166,47 @@
     const PHASE_AUDIT_KEY = nsKey('pineBotPhaseAudit');
     // v6.125.0: who has graduated under the immortal stop rule. Namespaced
     // with the rest, so the Codex fork on the same origin never sees it.
+    // ── v6.135.0 THE CONTROL STORE ──────────────────────────────────────────
+    //
+    // USER: "I want to be able to start and stop the bot and end the loop
+    // cycle for training. The bot should be able to allow the player to select
+    // the character then start the bot."
+    //
+    // Two settings the PLAYER owns, as opposed to the graduation store, which
+    // the bot owns and periodically wipes (five epoch resets so far). They
+    // live in their own key precisely so a counter reset can never touch them:
+    //   pin   — null for the rotation, or a character key. While set,
+    //           chooseBartender() returns it and the round-robin cursor is
+    //           left alone, so un-pinning resumes the cycle where it was.
+    //   loop  — 'continuous' (a run ends -> RETRY -> the next run starts, the
+    //           training loop as it has always been) or 'single' (the run is
+    //           booked exactly as before, then the bot STOPS at the results
+    //           screen instead of clicking RETRY). One-run mode is a mode, not
+    //           a one-shot: it re-arms on every startRun(), so it stops after
+    //           each run until the player turns it off. It is armed at run
+    //           START rather than at ▶ Start, because ▶ Start is also how the
+    //           player resumes from a results screen — arming there would stop
+    //           the bot again on the same screen before any run began.
+    const CONTROL_KEY = nsKey('pineBotControl');
+    let control = (() => {
+        let c = { pin: null, loop: 'continuous' };
+        try { const p = JSON.parse(localStorage.getItem(CONTROL_KEY) || 'null'); if (p && typeof p === 'object') c = Object.assign(c, p); } catch (e) { }
+        if (c.pin && !CHARS[c.pin]) c.pin = null;
+        if (c.loop !== 'single') c.loop = 'continuous';
+        return c;
+    })();
+    function saveControl() {
+        try { localStorage.setItem(CONTROL_KEY, JSON.stringify(control)); } catch (e) { }
+    }
+    let singleArmed = false;   // set at startRun() when control.loop === 'single'; consumed by finishRun()
+
     const GRADUATION_KEY = nsKey('pineBotGraduation');
+    // v6.135.0 AUDIT C9: the CURRENT reset flag, declared once. The store init
+    // below stamps it and reloadGraduation (04) adopts another tab's blob only
+    // if it carries it. Until now the reload guard was a hand-copied literal
+    // that every reset bump had to remember to edit — miss it, and the
+    // multi-tab merge silently stops adopting with no error.
+    const GRADUATION_EPOCH = 'resetEpoch134';
     let graduation = (() => {
         let g = { graduated: {} };
         try { const parsed = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null'); if (parsed && typeof parsed === 'object') g = parsed; } catch (e) { }
@@ -3167,9 +3252,10 @@
         // level-up cards for the first time — roughly 12 of every 14 picks.
         // Builds assembled before it were assembled by a different bot.
         if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 ||
-            !g.resetEpoch133 || !g.resetEpoch134) {
+            !g.resetEpoch133 || !g[GRADUATION_EPOCH]) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
-                  resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: SCRIPT_VERSION };
+                  resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: SCRIPT_VERSION };
+            g[GRADUATION_EPOCH] = 1;
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -3728,11 +3814,11 @@
                 }
             }
         }
-        // 2. the levels we scored ourselves. "OLIVE UP" FIRST — that is where
-        //    in-run upgrades actually land; the bare key is the acquisition
-        //    flag that froze at 1 and fooled every armour gate before 6.91.2.
-        const up = ownedLevels[name + ' UP'];
-        if (typeof up === 'number' && up > 0) return { lv: up, max: ownedMax[name + ' UP'] || max, key: name + ' UP', src: 'owned' };
+        // 2. the levels we scored ourselves. (v6.135.0 AUDIT B9: until 6.134.0
+        //    in-run upgrades landed under "OLIVE UP" and the bare key froze at
+        //    1, so this branch read the ` UP` key first. baseNameOf now strips
+        //    the suffix at every writer, no ` UP` key can exist, and the bare
+        //    key carries the real level — the lookup is gone with the shape.)
         const own = ownedLevels[name];
         if (typeof own === 'number' && own > 0) return { lv: own, max, key: name, src: 'owned' };
         // 3. the absorbed-key blind spot (6.89.0): a craft eats its parts, so
@@ -3740,7 +3826,7 @@
         if (typeof keyEffectivelyMaxed === 'function' && safe(() => keyEffectivelyMaxed(name), false)) {
             return { lv: max, max, key: name, src: 'absorbed' };
         }
-        if (everMaxed.has(name) || everMaxed.has(name + ' UP')) return { lv: max, max, key: name, src: 'evermaxed' };
+        if (everMaxed.has(name)) return { lv: max, max, key: name, src: 'evermaxed' };
         return { lv: 0, max, key: null, src: 'none' };
     }
     // Clauses are AND across, OR within: [['SOUTH SIDE'], ['SIMPLE SYRUP'],
@@ -5462,6 +5548,14 @@
     // separately in the version comparison, so the question "did the 6.79
     // scoring changes help or hurt?" gets answered by the snapshot table.
     const CROWN = CONFIG.scoringProfile === 'crown-6.74';
+    // v6.135.0 AUDIT B1: `scoringProfile` ships as 'crown-6.74', so CROWN is
+    // true and every `!CROWN` / `else` branch in this file is unreachable as
+    // shipped — six sites: slot-theft (-45), the full-bar craft bonus (+14),
+    // unlocks-plan-super / plan-super-soon, the '6.79' hell-prep block, the
+    // campari-shred/decay block, and stallBuild's junk ordering. They are the
+    // '6.79' profile, kept deliberately as the one-line A/B the version table
+    // was built to compare, NOT deleted as dead code. Read them as "what the
+    // bot would do under the other rulebook", never as what it does.
 
     function nameOf(card) {
         if (!card) return '';
@@ -5691,7 +5785,8 @@
             // deliberate KEYLESS occupants: slot-fillers that were believed
             // unable to super because their keys (LEMON, CAMPARI, GINGER BEER)
             // are avoid-listed. This function skipped them TWICE over — once
-            // as PLAN_COCKTAILS, once as NEVER_UNBANNED — and so returned 0.
+            // as PLAN_COCKTAILS, once via a since-deleted `NEVER_UNBANNED`
+            // set that exempted LEMON and ORANGE — and so returned 0.
             // Two consequences, and the second is the expensive one:
             //   1. no `gun-path` tax on the cocktail or its key, and
             //   2. `forcedGunPool` is `pool.every(risk > 0)`, so a pool holding
@@ -5744,15 +5839,13 @@
     // scoreCard has several exit points: clamping at one of them let the later
     // add() calls re-inflate the score right past it. Clamping outside catches
     // every path by construction.
+    // v6.135.0 AUDIT B3: this used to wrap scoreCardInner in the LAST_RESORT
+    // clamp. `LAST_RESORT` was emptied in 6.94.2 (see its comment in 01), so
+    // the wrapper had been a pure pass-through for forty versions while its
+    // 10-line justification for a ceiling of exactly 30 read as live. The
+    // `last-resort` scenario still asserts the mule is NOT clamped.
     function scoreCard(card, index, poolArr) {
-        const r = scoreCardInner(card, index, poolArr);
-        if (!r || !LAST_RESORT.includes(r.name)) return r;
-        const maxed = r.lv > 0 && r.cap && r.lv >= r.cap;
-        if (!maxed && r.score > LAST_RESORT_CEILING) {
-            r.why += 'last-resort-clamp' + Math.round(LAST_RESORT_CEILING - r.score) + ' ';
-            r.score = LAST_RESORT_CEILING;
-        }
-        return r;
+        return scoreCardInner(card, index, poolArr);
     }
     function scoreCardInner(card, index, poolArr) {
         const type = String((card && card.type) || '').toLowerCase();
@@ -5809,8 +5902,9 @@
                 // 'skip' && hellDetected && !zoner) was permanently false. The
                 // documented stall doctrine never engaged: a hell run at 60% HP
                 // with no zoner still charged bosses. The gun stays banned;
-                // only the bookkeeping moved above the break.
-                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
+                // only the bookkeeping moved above the break. (v6.135.0 AUDIT
+                // B6: the original assignment used to sit here too — a second,
+                // identical line that could never be the one that assigned.)
                 if (CONFIG.banRainbowGun) { add(-1000, 'gun-BANNED'); break; }
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
                 // v6.85.21 (user: "rainbowgun is still appearing"). Skip
@@ -6079,7 +6173,12 @@
                 if (cklv >= (ownedMax[ck] || 6)) kv += 22;   // cocktail done → maxing this unlocks its super
             }
             add(kv, 'super-key');
-            if (hellDetected && supersThisRun < 6 && kv > 0) add(12, 'rainbow-rush');
+            // v6.135.0 AUDIT A1: this read `supersThisRun < 6` — a limit that
+            // could never bind under `maxSuperLines: 4`, so in every hell pool
+            // it paid +12 to walk a key toward a line the whole file refuses to
+            // open. Gated on the real cap: below it, finishing a planned line's
+            // key is still worth rushing; at it, there is nothing to rush.
+            if (hellDetected && supersThisRun < (CONFIG.maxSuperLines || 4) && kv > 0) add(12, 'super-rush');
             if ((enemyMix.boss > 0.5 || hellDetected || enemyMix.total > 12) && VERSATILE_INGREDIENTS.includes(name))
                 add(8, 'versatile');   // MINT upgrades shred crowds and mobile bosses
             if (ITEM_FINDER_INGREDIENTS.includes(name)) add(6 + (hellDetected ? 4 : 0), 'item-finder');
@@ -7037,7 +7136,8 @@
             if (CROWN && (ownedLevels['SOUTH SIDE'] || 0) >= (ownedMax['SOUTH SIDE'] || 6)) add(20, 'unlocks-super-southside');
         }
         // (6.79) LAST STEP TO A PLAN SUPER: a finished plan cocktail waiting
-        // only on this ingredient. Slots are capped at five, so every one
+        // only on this ingredient. Lines are capped at FOUR (maxSuperLines;
+        // v6.135.0 AUDIT A5: this said five), so every one
         // must go to a cocktail we actually chose (CAMPARI -> SUPER NEGRONI,
         // MINT -> SUPER SOUTH SIDE), never to a banned line.
         if (!CROWN && type === 'passive' && !atCap && PLAN_INGREDIENTS.includes(name)) {
@@ -7078,7 +7178,11 @@
             // NEGRONI is a KEYLESS occupant by doctrine (its key CAMPARI is
             // arming-capped and avoid-listed since 6.92.0); the refusal that
             // guarded exactly this sat in the OTHER profile's dead branch.
-            // Hoisted here so the live branch refuses it too.
+            // Copied here so the live branch refuses it too. (v6.135.0 AUDIT
+            // D7: "hoisted" implied it moved; it was DUPLICATED, and the
+            // original still sits in the `else` — the '6.79' profile — below.
+            // Both stay: the branches are selected by scoringProfile, and a
+            // profile that loses this refusal is the gun leak 6.94.2 fixed.)
             if (type === 'super' && /NEGRONI/i.test(name)) add(-400, 'negroni-super-noop');
         } else {
             // 6.79 RULES — SOURCE-VERIFIED (read live from the game's
@@ -7288,7 +7392,9 @@
                 else add(-300, 'slot-waster');
             }
             // v6.87.2: the same refusal one step earlier and independent of the
-            // count — a card that COMPLETES a line outside the planned five is
+            // count — a card that COMPLETES a line outside the four INTENDED
+            // lines (SUPER_LINE_COCKTAILS; v6.135.0 AUDIT A5: this said "the
+            // planned five") is
             // a sixth line by construction, because the roster only ever holds
             // five. Waiting for nSupers to reach the cap let the pool hand us
             // the sixth line while we were still at four.
@@ -7330,14 +7436,16 @@
             }
         }
 
-        // RAINBOW RUSH: the goal is six super cocktails AS SOON AS POSSIBLE
-        // once hell begins — every super card, super-level, and last-step key
-        // ingredient gets priority toward the gun.
-        if (type === 'super' && hellDetected) add(40, 'rainbow-rush');
-        // SOURCE-INSPECTED (user bug report checked): the gun's real gate is
-        // maxedSupers >= 6 — six supers EACH LEVELED TO 6, not six unlocks.
-        // (No 7-cocktail requirement exists in the current build.) Leveling
-        // existing supers IS the rainbow path — priority raised accordingly.
+        // SUPER LEVELS IN HELL (v6.135.0 AUDIT A1/D5: this was named
+        // 'rainbow-rush' and its comment called six supers "the goal" — the
+        // exact outcome the rest of this file spends its scoring budget
+        // refusing. The bonus itself is sound and stays: a `super` card levels
+        // a line the plan ALREADY opened, which arms nothing new, and in hell
+        // the maxed supers are the damage. What was wrong was the name and the
+        // story, not the number.) SOURCE-INSPECTED: the gun's gate is
+        // maxedSupers >= 6, so a maxed super is one unit of gun progress ONLY
+        // if six lines exist — and `maxSuperLines: 4` makes that impossible.
+        if (type === 'super' && hellDetected) add(40, 'super-level-hell');
         if (/^★?\s*SUPER\b/i.test(name) && !atCap) {
             // whose super is this? strip the SUPER/UP decoration and match
             const bare = name.replace(/^★?\s*SUPER\s*/i, '').replace(/\s*UP$/i, '').trim();
@@ -7962,6 +8070,10 @@
 
     function startRun() {
         runActive = true;
+        // v6.135.0: one-run mode arms HERE, at the start of a real run, so that
+        // pressing ▶ Start on a results screen resumes cleanly (see the
+        // control store in 01 for why not at startBot).
+        singleArmed = control.loop === 'single';
         resetPoTracking();   // v6.86.2: passout kill-rate evidence is per run
         runStart = Date.now();
         runPicks = [];
@@ -8435,6 +8547,16 @@
             `\n  died to: ${lastDeathCause || 'unknown'}` +
             `\n  final frame: ${lastPlan ? lastPlan.diag : 'n/a'}`);
         setStatus(`run over — ${Math.round(stats.time)}s / ${stats.downs} / ${stats.sales}`);
+        // v6.135.0 ONE-RUN MODE: the run is booked exactly as always — the
+        // learner, the audits and the immortal ledger have all been written
+        // above — and only NOW does the bot step aside. The callers (over,
+        // highscore, the cap ladder) check `running` after this and skip the
+        // RETRY / backToTitle click, so the results screen is left standing
+        // for the player: type a name, read the board, pick a character.
+        if (singleArmed) {
+            singleArmed = false;
+            stopBot('run complete — one-run mode');
+        }
     }
 
 
@@ -8620,7 +8742,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch134) graduation = s;
+            if (s && typeof s === 'object' && s[GRADUATION_EPOCH]) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
@@ -8673,7 +8795,14 @@
                 pr.immortal = after;
             }
             localStorage.setItem(GRADUATION_KEY, JSON.stringify(graduation));
-        } catch (e) { }
+        } catch (e) {
+            // v6.135.0 AUDIT C7: this catch swallowed the write that records
+            // the immortal count — a quota error silently dropped a build with
+            // no signal beyond a number that stopped moving. Same shape as the
+            // 6.88.0 learn-store fix: surface it once, loudly, in the panel.
+            try { log('bookImmortal FAILED:', e && e.message); } catch (e2) { }
+            if (!saveWarned) { saveWarned = true; try { setStatus('⚠ could not save the immortal count — ' + (e && e.message)); } catch (e2) { } }
+        }
     }
     // The pin as the rule sees it: the configured pin unless that character
     // has graduated, in which case the first character in `order` that has
@@ -8816,12 +8945,26 @@
 
     function chooseBartender() {
         let b = null;
-        // v6.125.0: the pin is honoured through the immortal stop rule — a
-        // graduated character hands the pin to the next in CONFIG.graduation.order.
-        const gp = safe(() => graduationPick(), { char: CONFIG.preferredBartender, graduatedNow: null });
-        if (gp.char && CHARS[gp.char]) b = gp.char;
-        else if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender] && !(CONFIG.graduation && CONFIG.graduation.enabled)) b = CONFIG.preferredBartender;
-        else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        // v6.135.0: the PLAYER's pin comes first and bypasses the rotation
+        // entirely — graduationPick() is not called, so the round-robin cursor
+        // is left where it was and un-pinning resumes the cycle. Booking
+        // (bookImmortal) still runs at run end, so a pinned character's
+        // immortal builds count exactly as a rotated one's do.
+        if (control.pin && CHARS[control.pin]) b = control.pin;
+        if (!b) {
+            // v6.125.0: the pin is honoured through the immortal stop rule — a
+            // graduated character hands the pin to the next in CONFIG.graduation.order.
+            // (v6.135.0: this whole chain is now INSIDE `if (!b)`. The first cut
+            // left it as a bare else-if ladder after the player pin, and with
+            // `b` already set the `!b` head clause failed straight through to
+            // `bartenderRotation` — the dead branch the 6.135.0 audit had just
+            // flagged — which overwrote the pin on the second call. A dead
+            // branch is not harmless; it is one edit away from being live.)
+            const gp = safe(() => graduationPick(), { char: CONFIG.preferredBartender, graduatedNow: null });
+            if (gp.char && CHARS[gp.char]) b = gp.char;
+            else if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender] && !(CONFIG.graduation && CONFIG.graduation.enabled)) b = CONFIG.preferredBartender;
+            else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        }
         if (!b) {
             let best = BARTENDERS[0], bestScore = -Infinity;
             for (const c of BARTENDERS) {
@@ -9179,6 +9322,7 @@
         over() {
             if (runActive) { deathSnapshot = deathSnapshot || snapshotStats(); finishRun(); }
             releaseAll();
+            if (!running) return true;   // v6.135.0: one-run mode stopped us — leave RETRY alone
             const reason = recordStopReason();
             if (reason) {
                 stopBot(reason);
@@ -9212,6 +9356,7 @@
                 deathSnapshot = deathSnapshot || snapshotStats();
                 finishRun();
                 releaseAll();
+                if (!running) return true;   // v6.135.0: one-run mode
             }
             const reason = recordStopReason();
             if (reason) {
@@ -13721,6 +13866,7 @@
             if (runActive) {
                 deathSnapshot = deathSnapshot || snapshotStats();
                 finishRun();
+                if (!running) return;   // v6.135.0: one-run mode — booked, now stop, no restart
                 setStatus('RUN CAP: booked by force at stage 3');
             }
             if (!capForcedThisRun) { capForcedThisRun = true; log('run cap: hard book + restart'); }
@@ -14151,6 +14297,31 @@
     // so the run BOOKS and the farm carries on. Deliberately NOT endRun(),
     // which books the row but also stops the bot and needs a human to
     // restart it.
+    // v6.135.0 the two player-owned settings. Both persist immediately and
+    // both are safe to call mid-run: the pin is read at the next run start,
+    // and the loop mode is armed at the next startRun() — so neither can
+    // interrupt a run in progress. `paintControls` is assigned by buildPanel
+    // so a console call repaints the chips too.
+    let paintControls = () => {};
+    function setPin(c) {
+        control.pin = (c && CHARS[c]) ? c : null;
+        saveControl();
+        log('pin →', control.pin || 'auto (rotation)');
+        setStatus(control.pin ? 'next run: ' + control.pin + ' (pinned)' : 'next run: rotation');
+        paintControls();
+        return control.pin || 'auto';
+    }
+    function setLoop(mode) {
+        control.loop = mode === 'single' ? 'single' : 'continuous';
+        saveControl();
+        // if a run is in progress the change applies to THIS run's end too —
+        // arming now is what the player means by "stop after this one".
+        if (runActive) singleArmed = control.loop === 'single';
+        log('loop →', control.loop);
+        setStatus(control.loop === 'single' ? 'one-run mode: stops after this run' : 'loop mode: runs restart');
+        paintControls();
+        return control.loop;
+    }
     function killNow() {
         if (!runActive) { setStatus('no run in progress'); return 'no run in progress'; }
         capEarly = true;
@@ -14277,6 +14448,58 @@
         };
         r2.appendChild(killBtn); r2.appendChild(repBtn); r2.appendChild(recBtn);
         el.appendChild(r2);
+
+        // ── row 3: who plays next (v6.135.0) ─────────────────────────────
+        // USER: "allow the player to select the character then start the
+        // bot." Four chips: auto = the round-robin as before; a name pins it.
+        // The pin is read by chooseBartender() at the NEXT run start, so the
+        // way to use it is: ■ Stop (or let one-run mode stop), pick, ▶ Start.
+        // Persisted in the control store — survives reload and every counter
+        // reset, because the player set it and the bot did not.
+        const r3 = pbRow(3);
+        const charBtns = {};
+        const paintChars = () => {
+            for (const k in charBtns) {
+                const on = (k === 'auto') ? !control.pin : control.pin === k;
+                charBtns[k].style.background = on ? 'rgba(90,140,220,.9)' : 'rgba(255,255,255,.08)';
+                charBtns[k].style.color = on ? '#fff' : '#cdd';
+            }
+        };
+        for (const k of ['auto', 'joe', 'minguk', 'pat']) {
+            const b = pbBtn(k === 'auto' ? '⟳ auto' : k, {
+                title: k === 'auto' ? 'Rotate joe → minguk → pat, one per run (the training default)'
+                                    : 'Play ' + k + ' on every run until un-pinned',
+                grow: true, pad: '3px 2px'
+            });
+            b.onclick = () => { setPin(k === 'auto' ? null : k); paintChars(); };
+            charBtns[k] = b; r3.appendChild(b);
+        }
+        paintChars();
+        el.appendChild(r3);
+
+        // ── row 4: loop mode (v6.135.0) ──────────────────────────────────
+        // USER: "end the loop cycle for training." One button, two states.
+        // 🔁 Loop: a run ends -> RETRY -> the next run starts, unattended.
+        // ① One run: the run is booked exactly as always, then the bot stops
+        // at the results screen and hands the game back. Takes effect at the
+        // end of the CURRENT run — it never cuts a run short (⏻ End Run does
+        // that). It re-arms every run, so it is a mode, not a one-shot.
+        const r4 = pbRow();
+        const loopBtn = pbBtn('', { grow: true });
+        const paintLoop = () => {
+            const single = control.loop === 'single';
+            loopBtn.textContent = single ? '① One run, then stop' : '🔁 Loop runs';
+            loopBtn.title = single
+                ? 'After this run is booked the bot stops at the results screen. Click to loop again.'
+                : 'Runs restart automatically. Click to stop after the current run instead.';
+            loopBtn.style.background = single ? 'rgba(220,160,60,.85)' : 'rgba(255,255,255,.08)';
+            loopBtn.style.color = single ? '#fff8e6' : '#cdd';
+        };
+        loopBtn.onclick = () => { setLoop(control.loop === 'single' ? 'continuous' : 'single'); paintLoop(); };
+        paintLoop();
+        r4.appendChild(loopBtn);
+        el.appendChild(r4);
+        paintControls = () => { paintChars(); paintLoop(); };
 
         // ── status + live info ───────────────────────────────────────────
         const stWrap = document.createElement('div');
@@ -15099,6 +15322,11 @@
         try {
             window.pineBot = {
                 start: startBot, stop: stopBot, diagnose, reset: resetLearn,
+                // v6.135.0 player controls (also on the panel). pin('pat') /
+                // pin(null); loop('single') / loop('continuous'); control()
+                // reads both back.
+                pin: setPin, loop: setLoop,
+                control: () => Object.assign({ armed: singleArmed, running }, control),
                 // v6.104.0: the panel's ⏻ End Run, callable from the console.
                 // Latches the early cap so the tested ladder ends the run and
                 // the farm restarts; endRun() below books but STOPS the bot.
@@ -15162,6 +15390,7 @@
                     // structurally 0 for 1,079 runs and nothing could see it.
                     craftAudit: () => JSON.parse(JSON.stringify(craftAudit)),
                     craftReserve: () => new Set(CRAFT_RESERVE),   // v6.133.0: prove it is DERIVED, not hand-listed
+                    superLineCocktails: () => SUPER_LINE_COCKTAILS.slice(),   // v6.135.0: the exempt set, for the gun-path test
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
@@ -15251,7 +15480,10 @@
                     // clamp against. tunablePrior() kept its copy; these two
                     // halves of the same idiom had drifted apart.
                     setCemMean: (k, v) => { learn.cem.mean[k] = v; },
-                    bossRing: () => bossRingRef.v,
+                    // (v6.135.0 AUDIT C1: a second `bossRing` key sat here — the
+                    // same duplicate-key defect 6.122.0 fixed for `tunable`, 22
+                    // lines up. Identical body, so harmless today; removed so
+                    // an edit to the first copy cannot be silently discarded.)
                     // v6.107.0 tag-bandit hooks
                     tagsOf, enemyContextBonus,
                     setTagUcb: obj => { learn.tagucb = obj; },
@@ -15296,7 +15528,7 @@
                     phaseRow: (t, hell) => buildPhaseRow(t, hell),
                     capState: () => ({ capEarly, lastResetReason: capLastResetReason,
                                        satSince, satPeakEn, capFirstWall }),
-                    setSupers: n => { supersThisRun = n; },
+                    // (v6.135.0 AUDIT C1: duplicate `setSupers` removed here; the live one is above.)
                     speedSamples: () => spdSamples.slice(),
                     capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun, capReadyGt }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin

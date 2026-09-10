@@ -9,6 +9,14 @@
     // separately in the version comparison, so the question "did the 6.79
     // scoring changes help or hurt?" gets answered by the snapshot table.
     const CROWN = CONFIG.scoringProfile === 'crown-6.74';
+    // v6.135.0 AUDIT B1: `scoringProfile` ships as 'crown-6.74', so CROWN is
+    // true and every `!CROWN` / `else` branch in this file is unreachable as
+    // shipped — six sites: slot-theft (-45), the full-bar craft bonus (+14),
+    // unlocks-plan-super / plan-super-soon, the '6.79' hell-prep block, the
+    // campari-shred/decay block, and stallBuild's junk ordering. They are the
+    // '6.79' profile, kept deliberately as the one-line A/B the version table
+    // was built to compare, NOT deleted as dead code. Read them as "what the
+    // bot would do under the other rulebook", never as what it does.
 
     function nameOf(card) {
         if (!card) return '';
@@ -238,7 +246,8 @@
             // deliberate KEYLESS occupants: slot-fillers that were believed
             // unable to super because their keys (LEMON, CAMPARI, GINGER BEER)
             // are avoid-listed. This function skipped them TWICE over — once
-            // as PLAN_COCKTAILS, once as NEVER_UNBANNED — and so returned 0.
+            // as PLAN_COCKTAILS, once via a since-deleted `NEVER_UNBANNED`
+            // set that exempted LEMON and ORANGE — and so returned 0.
             // Two consequences, and the second is the expensive one:
             //   1. no `gun-path` tax on the cocktail or its key, and
             //   2. `forcedGunPool` is `pool.every(risk > 0)`, so a pool holding
@@ -291,15 +300,13 @@
     // scoreCard has several exit points: clamping at one of them let the later
     // add() calls re-inflate the score right past it. Clamping outside catches
     // every path by construction.
+    // v6.135.0 AUDIT B3: this used to wrap scoreCardInner in the LAST_RESORT
+    // clamp. `LAST_RESORT` was emptied in 6.94.2 (see its comment in 01), so
+    // the wrapper had been a pure pass-through for forty versions while its
+    // 10-line justification for a ceiling of exactly 30 read as live. The
+    // `last-resort` scenario still asserts the mule is NOT clamped.
     function scoreCard(card, index, poolArr) {
-        const r = scoreCardInner(card, index, poolArr);
-        if (!r || !LAST_RESORT.includes(r.name)) return r;
-        const maxed = r.lv > 0 && r.cap && r.lv >= r.cap;
-        if (!maxed && r.score > LAST_RESORT_CEILING) {
-            r.why += 'last-resort-clamp' + Math.round(LAST_RESORT_CEILING - r.score) + ' ';
-            r.score = LAST_RESORT_CEILING;
-        }
-        return r;
+        return scoreCardInner(card, index, poolArr);
     }
     function scoreCardInner(card, index, poolArr) {
         const type = String((card && card.type) || '').toLowerCase();
@@ -356,8 +363,9 @@
                 // 'skip' && hellDetected && !zoner) was permanently false. The
                 // documented stall doctrine never engaged: a hell run at 60% HP
                 // with no zoner still charged bosses. The gun stays banned;
-                // only the bookkeeping moved above the break.
-                if (!rainbowChoice) rainbowChoice = chooseRainbowPolicy();
+                // only the bookkeeping moved above the break. (v6.135.0 AUDIT
+                // B6: the original assignment used to sit here too — a second,
+                // identical line that could never be the one that assigned.)
                 if (CONFIG.banRainbowGun) { add(-1000, 'gun-BANNED'); break; }
                 const gtNow = typeof G.gameTime === 'number' ? G.gameTime : 0;
                 // v6.85.21 (user: "rainbowgun is still appearing"). Skip
@@ -626,7 +634,12 @@
                 if (cklv >= (ownedMax[ck] || 6)) kv += 22;   // cocktail done → maxing this unlocks its super
             }
             add(kv, 'super-key');
-            if (hellDetected && supersThisRun < 6 && kv > 0) add(12, 'rainbow-rush');
+            // v6.135.0 AUDIT A1: this read `supersThisRun < 6` — a limit that
+            // could never bind under `maxSuperLines: 4`, so in every hell pool
+            // it paid +12 to walk a key toward a line the whole file refuses to
+            // open. Gated on the real cap: below it, finishing a planned line's
+            // key is still worth rushing; at it, there is nothing to rush.
+            if (hellDetected && supersThisRun < (CONFIG.maxSuperLines || 4) && kv > 0) add(12, 'super-rush');
             if ((enemyMix.boss > 0.5 || hellDetected || enemyMix.total > 12) && VERSATILE_INGREDIENTS.includes(name))
                 add(8, 'versatile');   // MINT upgrades shred crowds and mobile bosses
             if (ITEM_FINDER_INGREDIENTS.includes(name)) add(6 + (hellDetected ? 4 : 0), 'item-finder');
@@ -1584,7 +1597,8 @@
             if (CROWN && (ownedLevels['SOUTH SIDE'] || 0) >= (ownedMax['SOUTH SIDE'] || 6)) add(20, 'unlocks-super-southside');
         }
         // (6.79) LAST STEP TO A PLAN SUPER: a finished plan cocktail waiting
-        // only on this ingredient. Slots are capped at five, so every one
+        // only on this ingredient. Lines are capped at FOUR (maxSuperLines;
+        // v6.135.0 AUDIT A5: this said five), so every one
         // must go to a cocktail we actually chose (CAMPARI -> SUPER NEGRONI,
         // MINT -> SUPER SOUTH SIDE), never to a banned line.
         if (!CROWN && type === 'passive' && !atCap && PLAN_INGREDIENTS.includes(name)) {
@@ -1625,7 +1639,11 @@
             // NEGRONI is a KEYLESS occupant by doctrine (its key CAMPARI is
             // arming-capped and avoid-listed since 6.92.0); the refusal that
             // guarded exactly this sat in the OTHER profile's dead branch.
-            // Hoisted here so the live branch refuses it too.
+            // Copied here so the live branch refuses it too. (v6.135.0 AUDIT
+            // D7: "hoisted" implied it moved; it was DUPLICATED, and the
+            // original still sits in the `else` — the '6.79' profile — below.
+            // Both stay: the branches are selected by scoringProfile, and a
+            // profile that loses this refusal is the gun leak 6.94.2 fixed.)
             if (type === 'super' && /NEGRONI/i.test(name)) add(-400, 'negroni-super-noop');
         } else {
             // 6.79 RULES — SOURCE-VERIFIED (read live from the game's
@@ -1835,7 +1853,9 @@
                 else add(-300, 'slot-waster');
             }
             // v6.87.2: the same refusal one step earlier and independent of the
-            // count — a card that COMPLETES a line outside the planned five is
+            // count — a card that COMPLETES a line outside the four INTENDED
+            // lines (SUPER_LINE_COCKTAILS; v6.135.0 AUDIT A5: this said "the
+            // planned five") is
             // a sixth line by construction, because the roster only ever holds
             // five. Waiting for nSupers to reach the cap let the pool hand us
             // the sixth line while we were still at four.
@@ -1877,14 +1897,16 @@
             }
         }
 
-        // RAINBOW RUSH: the goal is six super cocktails AS SOON AS POSSIBLE
-        // once hell begins — every super card, super-level, and last-step key
-        // ingredient gets priority toward the gun.
-        if (type === 'super' && hellDetected) add(40, 'rainbow-rush');
-        // SOURCE-INSPECTED (user bug report checked): the gun's real gate is
-        // maxedSupers >= 6 — six supers EACH LEVELED TO 6, not six unlocks.
-        // (No 7-cocktail requirement exists in the current build.) Leveling
-        // existing supers IS the rainbow path — priority raised accordingly.
+        // SUPER LEVELS IN HELL (v6.135.0 AUDIT A1/D5: this was named
+        // 'rainbow-rush' and its comment called six supers "the goal" — the
+        // exact outcome the rest of this file spends its scoring budget
+        // refusing. The bonus itself is sound and stays: a `super` card levels
+        // a line the plan ALREADY opened, which arms nothing new, and in hell
+        // the maxed supers are the damage. What was wrong was the name and the
+        // story, not the number.) SOURCE-INSPECTED: the gun's gate is
+        // maxedSupers >= 6, so a maxed super is one unit of gun progress ONLY
+        // if six lines exist — and `maxSuperLines: 4` makes that impossible.
+        if (type === 'super' && hellDetected) add(40, 'super-level-hell');
         if (/^★?\s*SUPER\b/i.test(name) && !atCap) {
             // whose super is this? strip the SUPER/UP decoration and match
             const bare = name.replace(/^★?\s*SUPER\s*/i, '').replace(/\s*UP$/i, '').trim();
