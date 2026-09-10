@@ -44,6 +44,13 @@ function recordPlans(makeEnv, script, { hell, char, seed, scenes = 40, ticks = 6
     pineBot.stop();
     const T = pineBot.test;
     T.applyDefaults(); T.setChar(char);
+    // v6.136.0: a fresh store now boots on SHIPPED_SKILL — including the
+    // learned enemy-type fear table, which scales the danger field. The
+    // golden set is a test of the PLANNER, recorded against static fear, so
+    // the learned tables are cleared here the same way applyDefaults()
+    // clears the CEM vector. (A seeded run would move 237/240 plans.)
+    if (T.setEnemyMul) T.setEnemyMul({});
+    if (T.setEnemyN) T.setEnemyN({});
     T.setOwned({ 'SOUTH SIDE': 6, 'OLIVE': 6, 'WATER': 4, 'GIN TONIC': 6, 'NEGRONI': 6 });
     const out = [];
     for (const sc of makeScenes(seed, scenes)) {

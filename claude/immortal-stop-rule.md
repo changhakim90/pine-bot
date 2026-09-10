@@ -9,6 +9,59 @@ original quotes verbatim — plus what's cross-referenced in
 remembers, that's why; the mechanics and quotes below are accurate, just
 possibly less richly annotated than the original.)*
 
+## Corrections and additions as of 6.135.0 (2026-09-10)
+
+The sections below from 6.132.0 downward are kept as written. These are the
+changes since, newest first; each is also marked inline with `[6.135.0: …]`
+where the older text would otherwise mislead.
+
+**6.135.0 — the player's controls sit above the rule.** A persisted
+`control` store (`pineBotControl`, its own key so no counter reset can touch
+it) carries `pin` and `loop`. `chooseBartender()` takes the pin FIRST and
+bypasses `graduationPick()` entirely when it is set, leaving the round-robin
+cursor untouched — so un-pinning resumes the cycle where it was, and a pinned
+character's immortal builds still book exactly as a rotated one's do
+(`bookImmortal` runs at `finishRun` regardless). `loop: 'single'` arms at
+`startRun()` and, at `finishRun()`, after every audit and the ledger have
+been written, stops the bot instead of clicking RETRY. It arms at run start
+rather than at ▶ Start so that ▶ Start on a results screen resumes cleanly.
+Also: the graduation store was namespaced in 6.126.0 but never added to the
+namespace migration list, so the first run after setting a namespace lost the
+whole ledger — fixed; and `reloadGraduation`'s adoption guard is now the
+single `GRADUATION_EPOCH` constant rather than a hand-copied literal.
+
+**6.134.0 — sixth reset (`resetEpoch134`), and the root cause under most of
+this doc.** `baseNameOf` never stripped the ` UP` suffix, so every name-keyed
+lookup in the scorer matched only the acquisition card and never the level-up
+card. `ownedLevels['OLIVE']` freezing at 1 while `OLIVE UP` climbed — the
+6.91.2 finding this doc leans on — was a symptom of that, not a game fact.
+The bare key now carries the real level. See `claude/up-card-blindness.md`.
+
+**6.133.1 — the vermouth clause is gone.** The gate is THREE clauses: SOUTH
+SIDE, SIMPLE SYRUP, OLIVE. Two reasons: a run with neither vermouth still
+booked an immortal build, and — decisively — SWEET VERMOUTH is MANHATTAN's
+super key, so requiring it armed a fifth super line (`manhattan 6, sweetver
+6` measured at gt 2795). NO reset accompanied this: relaxing a bar does not
+invalidate builds that met the stricter one.
+
+**6.133.0 — fifth reset (`resetEpoch133`)**, because the picker changed (the
+slot doctrine). The ingredient reserve is DERIVED from the gate's clauses —
+a craft result reserves itself and its parts, a cocktail clause reserves its
+super key (so SOUTH SIDE reserves MINT) — and locks the last slots of the
+8-slot ingredient bar for whatever the build still lacks.
+
+**6.132.2 / 6.132.1 — fourth reset (`resetEpoch1321`), and a craft result is
+binary.** 6.132.0 compared SIMPLE SYRUP's level against a max of 6; a crafted
+item leaves the ingredient pool and its level pins at 1 forever, so 1 is
+COMPLETE. The run that exposed it had all four named ingredients at def 35 /
+hp 1.00 and was refused. The reset was for the RACE ledger, not the counts:
+~230 runs had been played under a gate that could not fire.
+
+**Summary of the resets, for anyone counting:** 128 (bar raised to ten), 130
+(rotate every run), 132 (definition: build not supers), 1321 (race ledger
+under an unfireable gate), 133 (picker changed), 134 (` UP` fix — ~12 of 14
+picks changed). 6.133.1 deliberately did NOT reset.
+
 ## 6.132.0 — the bar is the BUILD, not the super count
 
 **User: "let's remove this from the rule and instead replace it with has
@@ -37,6 +90,9 @@ capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, holdS: 300, dipGraceS: 4,
                      ['SWEET VERMOUTH', 'BLACK VERMOUTH']] },
 ```
 
+`[6.135.0: the shipped list is `[['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE']]`
+— the vermouth clause was dropped in 6.133.1, see the top of this doc.]`
+
 Clauses are **AND across, OR within**. An absent or empty `build` list is
 the off switch and passes — config, not a code change. The stability proof
 is otherwise unchanged: from `fromS`, HP must hold `>= hpFloor` for `holdS`
@@ -55,6 +111,11 @@ never engaged in a single real run. **A gate keyed on
 `ownedLevels['OLIVE']` would have reproduced that failure exactly**, and
 silently, because a gate that never fires looks identical to a build that
 never qualifies.
+
+`[6.135.0: the "OLIVE UP" / bare-key split was the bot's OWN doing — a
+missing ` UP` strip in `baseNameOf` — not the game's. 6.134.0 fixed it and
+the bare key now carries the level. The conclusion here still stands:
+`player.weapons` is the game's ground truth and the gate reads it first.]`
 
 `player.weapons` is the game's own combined map. Three independent live
 dumps recorded in `01-config-data.js` and `03-scoring.js` agree on its
@@ -75,14 +136,21 @@ levels.
 *not* produce the key the game uses. So `buildKeyLevel(name)` tries the
 **measured** spellings first, then the squash, in that order.
 
+`[6.135.0: all three spellings were confirmed live in the first 6.132.0
+report — `southside`, `olive`, `sweetver` all answered `src: "weapons"`.
+And a craft RESULT reads `max: 1`: `syrup: 1` is complete, not 1-of-6
+(6.132.1).]`
+
 Resolution order, cheapest first:
 
 1. `player.weapons[key]` for each candidate spelling (object map; an array
    of entries is accepted too, so a shape change degrades to a miss on one
    leg rather than a thrown planner tick).
 2. `ownedLevels[name + ' UP']` — **the UP key first**, because that is
-   where in-run upgrades actually land.
+   where in-run upgrades actually land. `[6.135.0: REMOVED. No writer can
+   produce an ` UP` key since 6.134.0; this step was dead and is gone.]`
 3. `ownedLevels[name]` — the acquisition flag, last among the level reads.
+   `[6.135.0: now the real in-run level, and the second step.]`
 4. `keyEffectivelyMaxed(name)` / `everMaxed` — the 6.89.0 absorbed-key
    blind spot: a secret craft eats its parts, so a maxed half can leave
    every live reading behind.
@@ -105,6 +173,13 @@ keys) so a key this gate does not know is still visible in the paste.
 
 If a spelling is wrong, that leg reads `key: null, src: 'none'` on the
 first report after install.
+
+`[6.135.0: this paid for itself within one run. `SIMPLE SYRUP 1/6 (weapons)`
+in `buildShort` is what exposed the craft-result bug (6.132.1); `SWEET
+VERMOUTH or BLACK VERMOUTH 0/6 (none)` with the `raw` map showing
+`dryver 6` and no `sweetver` is what exposed the ingredient-slot lockout
+(6.133.0); and the `raw` map is where `manhattan 6, sweetver 6` was read
+(6.133.1). The OLIVE trap of the same shape cost four versions.]`
 
 **`capLastResetReason` now also fires when no streak was running.** The
 old code wrote that field only on a reset, so a build that never once met
@@ -137,6 +212,8 @@ did.
 `bookImmortal` (another tab may have booked runs since this page loaded)
 and `graduationPick` (the rotation cursor is shared state too), **guarded
 on the current reset flag** so a pre-reset blob can never be adopted back.
+`[6.135.0: the flag is the `GRADUATION_EPOCH` constant, shared with the
+store init, so a reset bump cannot leave the guard behind.]`
 
 This broke four pre-existing tests, and the reason is worth keeping: the
 test surface's `setGraduation()` wrote only the in-memory variable, so
@@ -320,6 +397,8 @@ Two changes:
    `lastPlayed`, and `playing` becomes a PREVIEW of the next pick — computed
    by the same function in a mode that neither moves the cursor nor records
    a graduation, so reading a report can never advance the rotation.
+   `[6.135.0: and the player's pin (control store) sits above all of this —
+   while set, `graduationPick()` is not consulted at all.]`
 
 What this costs and doesn't: the per-character SAMPLE RATE splits three
 ways — each `compare` row (`+joe` / `+minguk` / `+pat`) moves a third as
@@ -445,9 +524,11 @@ is immortal when ALL of:
   proved itself stable), not the 150-minute clock cap.
 - `why !== 'saturated'` — the STABLE-BUILD arm, not the deadlock/saturation
   arm. **From 6.132.0 that arm is HP + defense + the four-ingredient BUILD**
-  held for the hold window; before 6.132.0 it was HP + defense + `supers >= 3`.
-  Rows booked under the old bar are excluded by `resetEpoch132`'s version
-  floor, so the two definitions never mix inside one count.
+  `[6.135.0: THREE-ingredient since 6.133.1 — SOUTH SIDE, SIMPLE SYRUP,
+  OLIVE]` held for the hold window; before 6.132.0 it was HP + defense +
+  `supers >= 3`. Rows booked under the old bar are excluded by
+  `resetEpoch132`'s version floor, so the two definitions never mix inside
+  one count.
 - `parkT > 0` — corner anchoring actually happened.
 
 A capped run is by construction one that did not die on its own — the run
@@ -467,6 +548,8 @@ consulted: a capped run's cause is the ladder, not a real death.
   `immortalRowsCount` (so backfill and live booking never disagree), and
   writes `pineBotGraduation` immediately. **(6.131.0: it also maintains
   `graduation.progress[char]`, the race ledger — see that section.)**
+  `[6.135.0: a failed write now logs and shows in the panel once, instead
+  of being swallowed silently.]`
 - `graduationPick()` — resolves who the pin currently means: if the pinned
   character has already graduated, hands off to the first ungraduated
   character in `order`. Checks whether the current character has now met
@@ -496,6 +579,8 @@ consulted: a capped run's cause is the ladder, not a real death.
   already spent is history, not state to be rewritten.
 - `graduation.enabled: false` or `count: 0` disables the rule entirely,
   restoring the plain pin, graduations or not.
+- `[6.135.0]` `pineBot.pin(c)` / `pineBot.loop(mode)` / `pineBot.control()`
+  — the player's overrides, also on the panel. See the top of this doc.
 
 ## Verified against live data (pre-6.128.0 note, historical)
 

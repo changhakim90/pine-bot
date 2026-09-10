@@ -234,6 +234,13 @@
         // between them; a pin is how that reaches n=20 fastest. The
         // rotation list stays intact below — restoring pat/joe is this
         // same one-line change back, as it was for minguk.
+        // v6.135.0 AUDIT A2: BOTH of these are inert while
+        // `graduation.rotate` is on (the shipped state). chooseBartender()
+        // takes the player's pin (control store) first, then graduationPick()
+        // — which always returns a character under rotate:true — so neither
+        // value below is ever consulted. They stay as the fallback for a
+        // config with graduation disabled; the ~80 lines above are that era's
+        // record. To play one character, use the panel or pineBot.pin().
         preferredBartender: 'joe',
         bartenderRotation: ['pat', 'joe'],
 
@@ -443,8 +450,12 @@
     // VODKA CRANBERRY is KEPT over MOSCOW MULE (user), against that run's own
     // evidence. Recorded plainly: the 373-minute build carries the mule.
     //
-    // Super-line count is unchanged at exactly five, so the six-super Rainbow
-    // Gun gate still cannot open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
+    // [v6.135.0 AUDIT A6: the paragraph below is the 6.88.3 record and names
+    // FIVE lines including VODKA CRANBERRY. VODKA CRANBERRY left the roster in
+    // 6.92.1 and the cap is FOUR (`maxSuperLines`, SUPER_LINE_COCKTAILS). The
+    // authoritative list is SUPER_LINE_COCKTAILS; this stays as history.]
+    // Super-line count was then exactly five, so the six-super Rainbow
+    // Gun gate still could not open: SOUTH SIDE(MINT) VODKA TONIC(TONIC)
     // GIN TONIC(TONIC) VODKA CRANBERRY(CRANBERRY) MOJITO(SUGAR). NEGRONI loses
     // CAMPARI, WHISKY SOUR's LEMON and COSMOPOLITAN's ORANGE never unban, and
     // COFFEE BEANS' cocktail (ESPRESSO MARTINI) is off-roster.
@@ -471,9 +482,11 @@
         // stats still applying and only frees the slot count, so WATER ends up
         // costing nothing at all.
         //
-        // Super-line count is unchanged: WATER's cocktail is WHISKEY HIGHBALL
-        // and SUGAR's is MOJITO, neither of which is on the roster, so neither
-        // opens a sixth line toward the Rainbow Gun gate.
+        // Super-line count is unchanged: WATER's cocktail is WHISKEY HIGHBALL,
+        // which is off the roster. (v6.135.0 AUDIT A6/D1: this used to add
+        // "and SUGAR's is MOJITO, neither of which is on the roster" — MOJITO
+        // is on all three rosters below and is one of the four intended lines;
+        // SUGAR opening it is the plan, not a leak.)
         charRoadmap: {
             pat: {
                 cocktails: ['SOUTH SIDE', 'VODKA TONIC', 'GIN TONIC', 'MOJITO', 'NEGRONI', 'WHISKY SOUR', 'MOSCOW MULE'],
@@ -500,10 +513,13 @@
         rainbowPolicyOverride: 'skip',
         // v6.86.9: a hard ban, above the learned policy and the timing window.
         banRainbowGun: true,
-        // v6.87.2 (user): "cap the supercocktails to 5 cocktails". The Rainbow
-        // Gun's gate is SIX maxed supers, so five is the number that closes it
-        // by construction. Both charRoadmap rosters are built to exactly five
-        // completable lines (asserted by the `roster-cap` test); this is the
+        // v6.87.2 (user): "cap the supercocktails to 5 cocktails" — then
+        // v6.92.1 tightened it to FOUR, which is the shipped value below.
+        // (v6.135.0 AUDIT A5/D3: this paragraph still said five, and "both"
+        // rosters when there are three.) The Rainbow Gun's gate is SIX maxed
+        // supers, so four closes it with a full line of margin. All three
+        // charRoadmap rosters are built to exactly four intended lines
+        // (asserted by the `roster-cap` test); this is the
         // RUNTIME half of the same rule, for the pools that offer things the
         // roster never planned for. A card that would open or finish a sixth
         // line is refused outright, whatever the pool looks like.
@@ -1296,8 +1312,33 @@
             // from ownedLevels (see the BUILD GATE block for why that
             // distinction has cost this project four versions once already).
             // An empty list disables the leg.
+            // v6.133.1 THE VERMOUTH CLAUSE IS DROPPED (user: "it seems that one
+            // run where sweet vermouth or black vermouth wasn't carried still
+            // ended with an immortal build run ... if they don't need it then
+            // maybe we should drop it from the immortal build requirement").
+            //
+            // There is a second, independent reason, and it is the stronger
+            // one: THE CLAUSE WAS MANUFACTURING THE RAINBOW GUN. `MANHATTAN`'s
+            // super key IS `SWEET VERMOUTH` (SUPER_KEY_INGREDIENT, 01:1945),
+            // and this file already names MANHATTAN first among the six
+            // cocktails that are "latent by construction" because the plan
+            // maxes their keys on purpose. `armsOffPlanLine` returns FALSE for
+            // SWEET VERMOUTH — it is a PLAN_INGREDIENT — so the arming cap is
+            // structurally unable to protect that line. Measured at gt 2795:
+            //     manhattan 6   sweetver 6      <- SUPER MANHATTAN, ARMED
+            // and the pool offered "★ SUPER MANHATTAN UP" at gt 1884. A fifth
+            // line against `maxSuperLines: 4`, and the immortal rule itself
+            // required the ingredient that armed it. The gate was working
+            // against the gun doctrine it shares a config with.
+            //
+            // NO RESET accompanies this. The bar is being RELAXED, not
+            // redefined: every build already counted met a strictly harder
+            // requirement and still qualifies. Resetting here would discard
+            // five honestly earned builds (joe 1, minguk 2, pat 2) for no
+            // reason — the previous four resets each followed a change that
+            // made old counts incomparable, and this one does not.
             capStable: { fromS: 2400, hpFloor: 0.97, defMin: 34.9, holdS: 300, dipGraceS: 4,
-                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']] },
+                build: [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE']] },
         // v6.91.2: the real gate. Cap is 34.992; measured live at 34.992.
             parkRegenRate: 1.0,     // HP/s from regenBonus. Measured live at 2.218.
             // v6.112.0: the gate is now max(parkRegenRate, breakEven * this).
@@ -1581,6 +1622,12 @@
             eliteFrac: 0.3,        // top fraction of the batch that shapes the refit
             sigmaInit: 0.25,       // initial exploration: fraction of each param's range
             sigmaFloor: 0.05,      // exploration never collapses below this
+            // v6.136.0: a FRESH store starts on SHIPPED_SKILL (the reference
+            // store's converged means) with sigma re-floored to this fraction
+            // of each box — between the floor and a cold start. `false`
+            // disables the seed entirely (cold start at DEFAULT_PARAMS).
+            shippedSkill: true,
+            sigmaSeed: 0.10,
             // v6.86.0 anti-lockup (see 02-learning: hofRecord / maybeRestart)
             hofMergeDist: 0.02,    // hof vectors closer than this (mean |delta|/range) are the SAME point
             autoRestart: true,
@@ -1719,9 +1766,12 @@
             // evidence instead of me asserting it.
             regenDeficit: 40,
             dpsDeficitGain: 28,    // how hard picks shift to damage when losing the DPS race
-            // USER + CEM: the Rainbow Gun pickup time. The gun starts weak —
-            // too early = contact death, too late = kiting can't cover. The
-            // optimizer LEARNS the ideal moment from run rewards.
+            // INERT (v6.135.0 AUDIT A3/D4). The only reader sits below
+            // `if (CONFIG.banRainbowGun) break;` with the ban on, and 6.86.9
+            // removed this from the CEM search — so "the optimizer LEARNS the
+            // ideal moment" (the old comment here) has not been true since.
+            // Kept as the value the gun WOULD use if `banRainbowGun` were ever
+            // flipped, and reported in strategyWeights for that reason.
             rainbowReadyS: 1500
         },
 
@@ -1918,9 +1968,13 @@
         const rot = (CONFIG.bartenderRotation || []).filter(b => CHARS[b]);
         if (!rot.length) return null;
         let i = 0;
-        try { i = parseInt(localStorage.getItem('pineBotRotIdx') || '0', 10) || 0; } catch (e) { }
+        // v6.135.0 AUDIT C6: this key was written raw, the one store that
+        // escaped nsKey() and the only one missing from the deliberate
+        // exclusion list. Namespaced now. (nsKey is defined later in this
+        // file but this function only runs at run start, long after init.)
+        try { i = parseInt(localStorage.getItem(nsKey('pineBotRotIdx')) || '0', 10) || 0; } catch (e) { }
         const b = rot[i % rot.length];
-        try { localStorage.setItem('pineBotRotIdx', String((i + 1) % rot.length)); } catch (e) { }
+        try { localStorage.setItem(nsKey('pineBotRotIdx'), String((i + 1) % rot.length)); } catch (e) { }
         return b;
     }
 
@@ -1992,10 +2046,31 @@
         const out = new Set();
         try {
             const cl = (CONFIG.deepHell && CONFIG.deepHell.capStable && CONFIG.deepHell.capStable.build) || [];
+            // v6.134.0 (user: "simple syrup, mint, and olives are vital
+            // ingredients along with supersouthside level 6 as the main weapon
+            // for boss killer"). Three corrections, all measured:
+            //
+            //  - A COCKTAIL clause reserves its SUPER KEY. The gate names SOUTH
+            //    SIDE, and what the build actually wants is SUPER SOUTH SIDE,
+            //    which needs MINT at 6. A live 6.133.0 run held `southside: 6`
+            //    with NO `mint` anywhere in `player.weapons` — the super was
+            //    impossible — while `bloodymary 6 + tomato 6` and
+            //    `vodkamartini 6 + dryver 6` had both armed. The bot built two
+            //    lines it should not have and missed the one the plan is named
+            //    after. The cocktail itself still costs a cocktail slot, not an
+            //    ingredient one, so only the key is reserved here.
+            //  - A CRAFT RESULT reserves ITSELF as well as its parts. SIMPLE
+            //    SYRUP is a pickable card in its own right (the regen spine
+            //    scores it), so reserving only WATER and SUGAR let the slot
+            //    lock clamp the very thing the gate requires.
             const add = (n) => {
-                if (COCKTAILS.includes(n)) return;                 // a cocktail slot, not an ingredient one
+                if (COCKTAILS.includes(n)) {
+                    const k = SUPER_KEY_INGREDIENT[n];
+                    if (k) out.add(k);
+                    return;
+                }
                 const evo = EVOLUTIONS.filter(e => e.result === n)[0];
-                if (evo) { for (const part of evo.parts) out.add(part); return; }
+                if (evo) { out.add(n); for (const part of evo.parts) out.add(part); return; }
                 out.add(n);
             };
             for (const clause of cl) for (const n of (Array.isArray(clause) ? clause : [clause])) add(n);
@@ -2045,9 +2120,17 @@
     const AVOID_COCKTAILS = new Set([
         'GIMLET', 'MANHATTAN', 'OLD FASHIONED', 'SIDECAR', 'WHISKEY HIGHBALL',
         'MARGARITA', 'ESPRESSO MARTINI', 'CORPSE REVIVER NO.2',
-        // MINGUK guard: these two would complete a SIXTH super off in-plan
-        // keys (SUGAR, OLIVE) and summon the gun — banned by design
-        'MOJITO', 'DRY MARTINI'
+        // MINGUK guard: DRY MARTINI would complete a super off an in-plan key
+        // (OLIVE) and summon the gun — banned by design.
+        // v6.135.0 AUDIT A4: MOJITO was listed here too, from the same 6.8x
+        // reasoning — and has been one of the FOUR intended super lines
+        // (SUPER_LINE_COCKTAILS) and on every charRoadmap roster since 6.88.3.
+        // Being on both lists meant `roster-first`, `level-later` and the
+        // `poolHasRoadmapAlt` avoid-veto all silently skipped it: measured,
+        // MOJITO new scored without roster-first while VODKA TONIC new got
+        // +24. A plan cocktail was being denied the bonus that exists to claim
+        // plan cocktails early. Removed.
+        'DRY MARTINI'
     ]);
     // WATER is NOT banned (user): WATER + SUGAR craft into SIMPLE SYRUP,
     // which opens the ingredient pool toward TOMATO JUICE (ult cooldown).
@@ -2152,8 +2235,12 @@
     //     CRANBERRY, SWEET VERMOUTH, DRY VERMOUTH and WATER are all keys of
     //     off-plan cocktails too, and the plan needs every one of them MAXED
     //     for its stat. Those stay guarded by occupancy and `latent-line`.
-    // Yields exactly the ingredients with no plan value: LIME, CAMPARI,
-    // LEMON, ORANGE, ANGOSTURA, COINTREAU, GINGER BEER, ABSINTHE.
+    // Yields exactly: LIME, CAMPARI, LEMON, ORANGE, ANGOSTURA, COINTREAU,
+    // GINGER BEER, ABSINTHE. (v6.135.0 AUDIT D9: this said "with no plan
+    // value". LEMON and GINGER BEER are the keys of two PLAN cocktails —
+    // WHISKY SOUR and MOSCOW MULE, the keyless occupants — and 6.133.0
+    // measured their lines completing. Capped means "we never level it on
+    // purpose", not "it has no value" and not "it cannot max".)
     const SUPER_LINE_KEYS = new Set(SUPER_LINE_COCKTAILS.map(c => SUPER_KEY_INGREDIENT[c]).filter(Boolean));
     function armsOffPlanLine(name) {
         // applyHellUnban() PUSHES its ingredients into PLAN_INGREDIENTS, which
@@ -2373,15 +2460,10 @@
     // the exclusive slot on the one latent line the arming cap cannot touch
     // (CRANBERRY is a plan ingredient). With the clamp gone the mule scores
     // its intended keyless-core + mule-lockout and claims the slot FIRST.
-    const LAST_RESORT = [];
-    // Measured band, not a guess. It must sit BELOW the hell-safe junk
-    // (COFFEE BEANS 76, LIME 53, SODA WATER 49) so the mule is never sought,
-    // and ABOVE true junk (CORPSE REVIVER No.2 20, GINGER BEER 15, ABSINTHE
-    // -14) so that when the pool is nothing but junk the mule — which cannot
-    // open a sixth super now that GINGER BEER is permanently banned — is what
-    // gets eaten. A first attempt at 14 put it under CORPSE REVIVER, which is
-    // the one card the roster notes call unable to damage holdouts at all.
-    const LAST_RESORT_CEILING = 30;
+    // v6.135.0 AUDIT B3: `LAST_RESORT = []` and `LAST_RESORT_CEILING = 30`
+    // were declared here until this version. The list had been empty since
+    // 6.94.2, which made the clamp in scoreCard a pass-through; both are gone
+    // and scoreCard is scoreCardInner. The 6.94.2 note above is the record.
     // v6.89.0 (user): "maybe we need to get old fashioned and corpse reviver
     // no.2 out of the junk pools as we know southside and timestop upgrades and
     // negroni and olive and water are key to survival".
@@ -2417,14 +2499,24 @@
             AVOID_INGREDIENTS.delete(ing);
             if (!PLAN_INGREDIENTS.includes(ing)) PLAN_INGREDIENTS.push(ing);
         }
-        log('HELL UNBAN applied:', (CONFIG.hellUnbanIngredients || []).join(', '), '→ plan ingredients now', PLAN_INGREDIENTS.join(', '));
+        // v6.135.0 AUDIT B4: log only when something was actually unbanned.
+        // With the list empty (as shipped) this line fired in every hell run
+        // and read as a real plan mutation in the live console.
+        if ((CONFIG.hellUnbanIngredients || []).length)
+            log('HELL UNBAN applied:', CONFIG.hellUnbanIngredients.join(', '), '→ plan ingredients now', PLAN_INGREDIENTS.join(', '));
     }
 
     // ROSTER EXPERIMENT CANDIDATES — alternative 6-super builds composed from
     // the recipe book's verified roles, auditioned against the prescribed
-    // roadmap by a reward-credited UCB bandit (chooseRoster). Every candidate
-    // reaches the six-super Rainbow threshold and keeps the OLIVE / SWEET
-    // VERMOUTH survival staples in its ingredient plan.
+    // roadmap by a reward-credited UCB bandit (chooseRoster).
+    // [v6.135.0 AUDIT A7/B5: CONCLUDED and OFF — `rosterExperiment: false`
+    // makes chooseRoster() return 'user' unconditionally, so ROSTER_FIXED and
+    // the self-composition loop below are unreachable. They are kept as the
+    // documented alternative behind that switch. Note the candidates were
+    // built to "reach the six-super Rainbow threshold" — the opposite of the
+    // shipped doctrine — and every one carries a permanently banned key.]
+    // Every candidate was built to reach six supers and keeps the OLIVE /
+    // SWEET VERMOUTH survival staples in its ingredient plan.
     //   All rosters draw ONLY from the user-approved cocktail list (the
     //   avoid list above is excluded).
     //   fortress       defense/control maxed: NEGRONI dodge-shield, olive
@@ -2753,6 +2845,120 @@
     const DEFAULT_PARAMS = {};
     for (const k of Object.keys(TUNABLE)) DEFAULT_PARAMS[k] = getParam(k);
 
+    // =================================================================
+    // v6.136.0 SHIPPED SKILL — the learnings travel with the script
+    // =================================================================
+    // User: "make it so that the learnings are built in on the script itself
+    // so when a new player starts it doesn't have to play multiple runs."
+    //
+    // Until this version a fresh install started every learner from zero:
+    // the CEM at the CONFIG defaults with sigma at 25% of every box, the
+    // enemy-type fear table empty (nothing applied until 8 sole hits per
+    // type), the spawn timetable on the source-extracted fallback. The
+    // ~20-30 runs per dimension the learning-architecture doc quotes is the
+    // price of that cold start, and a new player paid it in full.
+    //
+    // This table is the learned state of the reference store — the 📋
+    // report of 2026-09-03: `6.123.0+crown+joe`, 9,569 runs, CEM generation
+    // 754 — copied verbatim. A store that has NO cem of its own is seeded
+    // from it instead of from DEFAULT_PARAMS (02-learning loadLearnInner);
+    // an empty enemy table and an empty spawn timetable are filled the same
+    // way. A store that already has any of these is never touched: this is
+    // a prior for the new player, not an override for the experienced one.
+    //
+    // What is shipped, and what is not:
+    //   cem          all 29 TUNABLE means and the sigma each had converged
+    //                to. Every box below matches the box the value was
+    //                trained under (asserted by the `shipped-skill` test —
+    //                a widened box would otherwise ship a stale corner).
+    //   enemyTypeMul the learned per-type fear (drunk/runner/boss ~1.36-1.39,
+    //                genz 1.10, thrower/bomber ~1.0) with the sole-hit
+    //                counts that back it, so it is APPLIED from run one.
+    //   spawnIntel   the boss census medians (first sighting per boss kind):
+    //                walls at 155 s, the first tier at 270 s, then 315 and
+    //                360 — not the 120/240/480 the source fallback assumes.
+    //   NOT shipped  the per-card item/LinUCB tables and the tag bandit. The
+    //                report carries only summaries of them, and in the
+    //                reference store both context layers sit at their caps
+    //                (+12 / +8) for every card with data — they add a
+    //                constant, not a ranking. The doctrine scores in
+    //                03-scoring carry the picks; those need no runs.
+    //
+    // SIGMA: the shipped sigmas are the converged ones (many at the 5%
+    // floor). They are re-floored to `learning.sigmaSeed` (10% of range) on
+    // seed, deliberately wider than the floor and narrower than a cold
+    // start's 25%: the reference store was trained BEFORE the 6.134.0 ` UP`
+    // fix (claude/up-card-blindness.md), and current-state.md says to expect
+    // the search to move again. A new player starts AT the measured optimum
+    // and keeps enough exploration to leave it.
+    //
+    // MAINTENANCE: refresh from a newer 📋 report (`learning.params[k].mean`
+    // / `.sigma`, `learning.enemy`, the `boss` census) when the reference
+    // store has re-converged post-6.134.0. Keep `source` honest — the report
+    // prints it, and a value whose provenance is unknown is a value nobody
+    // can audit.
+    const SHIPPED_SKILL = {
+        source: { version: '6.123.0+crown+joe', runs: 9569, gen: 754, exported: '2026-09-03' },
+        // key -> [mean, sigma] as reported
+        cem: {
+            'movement.smoothing': [0.423, 0.16],
+            'movement.standoff': [181.094, 9.996],
+            'movement.standoffPull': [1.72, 0.09],
+            'movement.lootPull': [0.544, 0.221],
+            'movement.panicHp': [0.592, 0.021],
+            'movement.lookaheadMs': [178.142, 18.08],
+            'threat.enemyWeight': [1.711, 0.398],
+            'threat.enemyRange': [167.832, 11.961],
+            'threat.projWeight': [1.798, 0.275],
+            'threat.projLookaheadMs': [622.607, 90.021],
+            'threat.markWeight': [15.922, 0.75],
+            'threat.lineWeight': [5.349, 0.761],
+            'threat.lineArmedWeight': [5.748, 2.215],
+            'strategy.deepFocusLv': [3.395, 0.176],
+            'strategy.roadmapBonus': [15.045, 0.838],
+            'strategy.earlyDps': [22.381, 1],
+            'strategy.expandPenalty': [23.86, 1.1],
+            'strategy.regenDeficit': [7.556, 11],
+            'strategy.dpsDeficitGain': [26.547, 2.56],
+            'movement.kitePull': [1.07, 0.182],
+            'movement.escapePull': [4.256, 0.28],
+            'movement.hellCautionMul': [0.864, 0.201],
+            'movement.passoutValue': [53.16, 1.8],
+            'movement.wallSiegeValue': [22.221, 5.312],
+            'movement.bossEngageValue': [22.992, 1.877],
+            'movement.bossRingMul': [0.987, 0.106],
+            'movement.poRingMul': [0.935, 0.025],
+            'movement.anchorValue': [6.547, 6],
+            'movement.anchorTtkS': [8.815, 0.4]
+        },
+        // the box each cem entry was trained under — must equal TUNABLE
+        cemBox: {
+            'movement.smoothing': [0.2, 0.85], 'movement.standoff': [55, 190], 'movement.standoffPull': [0, 1.8],
+            'movement.lootPull': [0.3, 2], 'movement.panicHp': [0.2, 0.62], 'movement.lookaheadMs': [140, 380],
+            'threat.enemyWeight': [0.5, 2.2], 'threat.enemyRange': [110, 240], 'threat.projWeight': [1, 6.5],
+            'threat.projLookaheadMs': [300, 850], 'threat.markWeight': [5, 20], 'threat.lineWeight': [0, 9],
+            'threat.lineArmedWeight': [3, 18], 'strategy.deepFocusLv': [2, 4], 'strategy.roadmapBonus': [10, 24],
+            'strategy.earlyDps': [4, 24], 'strategy.expandPenalty': [8, 30], 'strategy.regenDeficit': [0, 220],
+            'strategy.dpsDeficitGain': [10, 40], 'movement.kitePull': [0.5, 4], 'movement.escapePull': [1.5, 6],
+            'movement.hellCautionMul': [0.8, 3.2], 'movement.passoutValue': [18, 54], 'movement.wallSiegeValue': [12, 42],
+            'movement.bossEngageValue': [0, 36], 'movement.bossRingMul': [0.8, 1.25], 'movement.poRingMul': [0.8, 1.3],
+            'movement.anchorValue': [0, 120], 'movement.anchorTtkS': [2, 10]
+        },
+        // type -> [mul, soleHits]
+        enemy: {
+            drunk: [1.385, 278907], runner: [1.356, 261864], boss: [1.385, 30609],
+            genz: [1.098, 80031], thrower: [1.012, 9355], bomber: [1.0, 499]
+        },
+        // boss kind -> median first-sighting gt (the 6.112.0 census, n=60 runs,
+        // 31-227 sightings per kind). Seeded at a nominal weight of 20 so a
+        // player's own sightings re-weight it within ~20 runs (decay 0.985).
+        spawn: {
+            boss_nobook: 155, boss_karaoke: 270, boss_ladies: 270, boss_pickup: 270, boss_woman: 270,
+            boss_sprinter: 315, boss_amaro: 315, boss_glass: 360, boss_photo: 360, boss_couple: 360
+        },
+        spawnWeight: 20
+    };
+
     function applyParams(p) {
         if (!p) return;
         // v6.85.23 HARDENED: isFinite(null) is TRUE (null coerces to 0), and
@@ -2820,9 +3026,14 @@
         } catch (e) { return ''; }
     })();
     const nsKey = k => k + STORE_NS;
+    // v6.135.0: 'pineBotGraduation' was namespaced (6.126.0) but never added
+    // here, so the first run after a namespace was set lost the entire
+    // immortal-build ledger — counts, graduations, the race — the one number
+    // the 6.125–6.134 doctrine measures. 'pineBotControl' is new this version.
     const STORE_BASES = [CONFIG.learning.storageKey, 'pineBotDmgAudit', 'pineBotIncAudit',
         'pineBotHuntAudit', 'pineBotPauseAudit', 'pineBotParkAudit', 'pineBotPhaseAudit',
-        'pineBotBossCensus_v1', 'pineBotMarkAudit', 'pineBotCraftAudit_v1'];
+        'pineBotBossCensus_v1', 'pineBotMarkAudit', 'pineBotCraftAudit_v1',
+        'pineBotGraduation', 'pineBotControl'];
     function migrateStoreNamespace() {
         if (!STORE_NS) return 0;
         let copied = 0;
@@ -3073,7 +3284,47 @@
     const PHASE_AUDIT_KEY = nsKey('pineBotPhaseAudit');
     // v6.125.0: who has graduated under the immortal stop rule. Namespaced
     // with the rest, so the Codex fork on the same origin never sees it.
+    // ── v6.135.0 THE CONTROL STORE ──────────────────────────────────────────
+    //
+    // USER: "I want to be able to start and stop the bot and end the loop
+    // cycle for training. The bot should be able to allow the player to select
+    // the character then start the bot."
+    //
+    // Two settings the PLAYER owns, as opposed to the graduation store, which
+    // the bot owns and periodically wipes (five epoch resets so far). They
+    // live in their own key precisely so a counter reset can never touch them:
+    //   pin   — null for the rotation, or a character key. While set,
+    //           chooseBartender() returns it and the round-robin cursor is
+    //           left alone, so un-pinning resumes the cycle where it was.
+    //   loop  — 'continuous' (a run ends -> RETRY -> the next run starts, the
+    //           training loop as it has always been) or 'single' (the run is
+    //           booked exactly as before, then the bot STOPS at the results
+    //           screen instead of clicking RETRY). One-run mode is a mode, not
+    //           a one-shot: it re-arms on every startRun(), so it stops after
+    //           each run until the player turns it off. It is armed at run
+    //           START rather than at ▶ Start, because ▶ Start is also how the
+    //           player resumes from a results screen — arming there would stop
+    //           the bot again on the same screen before any run began.
+    const CONTROL_KEY = nsKey('pineBotControl');
+    let control = (() => {
+        let c = { pin: null, loop: 'continuous' };
+        try { const p = JSON.parse(localStorage.getItem(CONTROL_KEY) || 'null'); if (p && typeof p === 'object') c = Object.assign(c, p); } catch (e) { }
+        if (c.pin && !CHARS[c.pin]) c.pin = null;
+        if (c.loop !== 'single') c.loop = 'continuous';
+        return c;
+    })();
+    function saveControl() {
+        try { localStorage.setItem(CONTROL_KEY, JSON.stringify(control)); } catch (e) { }
+    }
+    let singleArmed = false;   // set at startRun() when control.loop === 'single'; consumed by finishRun()
+
     const GRADUATION_KEY = nsKey('pineBotGraduation');
+    // v6.135.0 AUDIT C9: the CURRENT reset flag, declared once. The store init
+    // below stamps it and reloadGraduation (04) adopts another tab's blob only
+    // if it carries it. Until now the reload guard was a hand-copied literal
+    // that every reset bump had to remember to edit — miss it, and the
+    // multi-tab merge silently stops adopting with no error.
+    const GRADUATION_EPOCH = 'resetEpoch134';
     let graduation = (() => {
         let g = { graduated: {} };
         try { const parsed = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null'); if (parsed && typeof parsed === 'object') g = parsed; } catch (e) { }
@@ -3114,9 +3365,15 @@
         // pool is about to narrow, and stops treating LEMON's line as
         // harmless. Builds assembled under the old picker are a different
         // experiment, so counts earned there cannot be pooled with these.
-        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 || !g.resetEpoch133) {
+        // v6.134.0 THE SIXTH RESET, and the most clearly earned of them. The
+        // ` UP` fix means the scorer's plan model and safety model now apply to
+        // level-up cards for the first time — roughly 12 of every 14 picks.
+        // Builds assembled before it were assembled by a different bot.
+        if (!g.resetEpoch128 || !g.resetEpoch130 || !g.resetEpoch132 || !g.resetEpoch1321 ||
+            !g.resetEpoch133 || !g[GRADUATION_EPOCH]) {
             g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1,
                   resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: SCRIPT_VERSION };
+            g[GRADUATION_EPOCH] = 1;
             // Written back immediately, not left to the next graduation/
             // bookImmortal write: a report or reload before either of those
             // fires again must see the reset, not the stale pre-reset blob.
@@ -3675,11 +3932,11 @@
                 }
             }
         }
-        // 2. the levels we scored ourselves. "OLIVE UP" FIRST — that is where
-        //    in-run upgrades actually land; the bare key is the acquisition
-        //    flag that froze at 1 and fooled every armour gate before 6.91.2.
-        const up = ownedLevels[name + ' UP'];
-        if (typeof up === 'number' && up > 0) return { lv: up, max: ownedMax[name + ' UP'] || max, key: name + ' UP', src: 'owned' };
+        // 2. the levels we scored ourselves. (v6.135.0 AUDIT B9: until 6.134.0
+        //    in-run upgrades landed under "OLIVE UP" and the bare key froze at
+        //    1, so this branch read the ` UP` key first. baseNameOf now strips
+        //    the suffix at every writer, no ` UP` key can exist, and the bare
+        //    key carries the real level — the lookup is gone with the shape.)
         const own = ownedLevels[name];
         if (typeof own === 'number' && own > 0) return { lv: own, max, key: name, src: 'owned' };
         // 3. the absorbed-key blind spot (6.89.0): a craft eats its parts, so
@@ -3687,7 +3944,7 @@
         if (typeof keyEffectivelyMaxed === 'function' && safe(() => keyEffectivelyMaxed(name), false)) {
             return { lv: max, max, key: name, src: 'absorbed' };
         }
-        if (everMaxed.has(name) || everMaxed.has(name + ' UP')) return { lv: max, max, key: name, src: 'evermaxed' };
+        if (everMaxed.has(name)) return { lv: max, max, key: name, src: 'evermaxed' };
         return { lv: 0, max, key: null, src: 'none' };
     }
     // Clauses are AND across, OR within: [['SOUTH SIDE'], ['SIMPLE SYRUP'],

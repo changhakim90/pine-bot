@@ -36,6 +36,20 @@ Context vector (`CTX_D = 10`): bias, early, mid, late, hell, HP ratio, dpsDefici
 
 **Adding CEM dimensions is safe now, but only because of the loader.** `02-learning.js` seeds any TUNABLE key missing from a stored CEM with `DEFAULT_PARAMS[k]` and a full `sigmaInit`, per key, on every load. That hardening postdates the 6.85.22 accident (six dims added with no seed, NaN drawn for each, batch/hof/step-size poisoned across 27 refits) that the `TUNABLE` comment still warns about. `store-guard` asserts the seeding. Cost: roughly 20–30 runs per new dimension before it separates from noise. Add 4–6 at a time, not 20.
 
+## The shipped skill (6.136.0): a new player starts where the reference store finished
+
+User: "make it so that the learnings are built in on the script itself so when a new player starts it doesn't have to play multiple runs." Before 6.136.0 every fresh install paid the cold start above in full: CEM at the CONFIG defaults with sigma at 25% of each box, enemy fear empty (nothing applied until 8 sole hits per type), the boss timetable on the source fallback.
+
+`SHIPPED_SKILL` in `01-config-data.js` is the reference store's learned state, copied verbatim from the 2026-09-03 📋 report — `6.123.0+crown+joe`, 9,569 runs, CEM generation 754. It carries three things: all 29 CEM means with the sigma each had converged to (and the box each was trained under); the six enemy fear multipliers with their sole-hit counts; and the boss census medians as a spawn timetable (walls 155 s, first tier 270, then 315 and 360 — the source fallback says 120/240/480).
+
+**The seed is gated on emptiness, never on a flag.** `loadLearnInner` uses the shipped means only where the `DEFAULT_PARAMS` seed would otherwise have been used — a store with no CEM, no legacy population, no single-point best. An empty fear table and an empty timetable are filled the same way. A store that has any of these keeps its own: the reference store itself sees no change, and `pineBot.reset()` (per-character key only) does not re-seed the shared skill.
+
+**Sigma is re-floored to `learning.sigmaSeed` = 10% of range** — above the 5% floor, below the 25% cold start. The reference predates the 6.134.0 ` UP` fix and `current-state.md` says to expect the search to move; a new player starts at the measured optimum with room to leave it. A dim whose live box differs from the box it was trained under is NOT seeded (it falls back to the CONFIG default at full `sigmaInit`, like a new dimension) — a widened box would otherwise ship a stale corner. The `shipped-skill` scenario asserts every shipped box equals the live box, so a box change fails the build until the table is refreshed.
+
+**Not shipped:** the per-card item/LinUCB tables and the tag bandit. The report carries only summaries of them, and in the reference store both context layers sit at their caps (+12 / +8) for every card with data — they add a constant to every pick, not a ranking. The doctrine scores in `03-scoring.js` carry the picks and need no runs.
+
+**Refreshing it:** take a newer report's `learning.params[k].mean` / `.sigma`, `learning.enemy`, and the `boss` census `firstGt` medians; update `source`. Do this once the reference store has re-converged post-6.134.0. `learning.shippedSkill: false` is the cold-start switch; `report().learning.cem.seeded` and `pineBot.learning().seeded / enemySeeded / spawnSeeded` say what a store started from.
+
 ## The enemy-type multiplier: withdrawn, then earned back
 
 6.85.22 learned a per-enemy-type threat multiplier and it produced the worst regression in the project (n=273, median 843, supers 0.1, z=−3.1). Cause: attribution assigned **every** damage event to the nearest type within 140px, so mark, projectile and DoT damage all landed on the commonest mob, which ratcheted to the 2.2 cap within ~10 runs — the bot feared drunks at 2.2× and stopped farming. 6.85.23 withdrew it and left the precondition in writing at the application site: *"applying it again requires sole-candidate attribution, not nearest-type."*

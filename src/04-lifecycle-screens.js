@@ -74,6 +74,10 @@
 
     function startRun() {
         runActive = true;
+        // v6.135.0: one-run mode arms HERE, at the start of a real run, so that
+        // pressing ▶ Start on a results screen resumes cleanly (see the
+        // control store in 01 for why not at startBot).
+        singleArmed = control.loop === 'single';
         resetPoTracking();   // v6.86.2: passout kill-rate evidence is per run
         runStart = Date.now();
         runPicks = [];
@@ -547,6 +551,16 @@
             `\n  died to: ${lastDeathCause || 'unknown'}` +
             `\n  final frame: ${lastPlan ? lastPlan.diag : 'n/a'}`);
         setStatus(`run over — ${Math.round(stats.time)}s / ${stats.downs} / ${stats.sales}`);
+        // v6.135.0 ONE-RUN MODE: the run is booked exactly as always — the
+        // learner, the audits and the immortal ledger have all been written
+        // above — and only NOW does the bot step aside. The callers (over,
+        // highscore, the cap ladder) check `running` after this and skip the
+        // RETRY / backToTitle click, so the results screen is left standing
+        // for the player: type a name, read the board, pick a character.
+        if (singleArmed) {
+            singleArmed = false;
+            stopBot('run complete — one-run mode');
+        }
     }
 
 
@@ -732,7 +746,7 @@
     function reloadGraduation() {
         try {
             const s = JSON.parse(localStorage.getItem(GRADUATION_KEY) || 'null');
-            if (s && typeof s === 'object' && s.resetEpoch133) graduation = s;
+            if (s && typeof s === 'object' && s[GRADUATION_EPOCH]) graduation = s;
         } catch (e) { }
     }
     function bookImmortal(row) {
@@ -785,7 +799,14 @@
                 pr.immortal = after;
             }
             localStorage.setItem(GRADUATION_KEY, JSON.stringify(graduation));
-        } catch (e) { }
+        } catch (e) {
+            // v6.135.0 AUDIT C7: this catch swallowed the write that records
+            // the immortal count — a quota error silently dropped a build with
+            // no signal beyond a number that stopped moving. Same shape as the
+            // 6.88.0 learn-store fix: surface it once, loudly, in the panel.
+            try { log('bookImmortal FAILED:', e && e.message); } catch (e2) { }
+            if (!saveWarned) { saveWarned = true; try { setStatus('⚠ could not save the immortal count — ' + (e && e.message)); } catch (e2) { } }
+        }
     }
     // The pin as the rule sees it: the configured pin unless that character
     // has graduated, in which case the first character in `order` that has
@@ -928,12 +949,26 @@
 
     function chooseBartender() {
         let b = null;
-        // v6.125.0: the pin is honoured through the immortal stop rule — a
-        // graduated character hands the pin to the next in CONFIG.graduation.order.
-        const gp = safe(() => graduationPick(), { char: CONFIG.preferredBartender, graduatedNow: null });
-        if (gp.char && CHARS[gp.char]) b = gp.char;
-        else if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender] && !(CONFIG.graduation && CONFIG.graduation.enabled)) b = CONFIG.preferredBartender;
-        else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        // v6.135.0: the PLAYER's pin comes first and bypasses the rotation
+        // entirely — graduationPick() is not called, so the round-robin cursor
+        // is left where it was and un-pinning resumes the cycle. Booking
+        // (bookImmortal) still runs at run end, so a pinned character's
+        // immortal builds count exactly as a rotated one's do.
+        if (control.pin && CHARS[control.pin]) b = control.pin;
+        if (!b) {
+            // v6.125.0: the pin is honoured through the immortal stop rule — a
+            // graduated character hands the pin to the next in CONFIG.graduation.order.
+            // (v6.135.0: this whole chain is now INSIDE `if (!b)`. The first cut
+            // left it as a bare else-if ladder after the player pin, and with
+            // `b` already set the `!b` head clause failed straight through to
+            // `bartenderRotation` — the dead branch the 6.135.0 audit had just
+            // flagged — which overwrote the pin on the second call. A dead
+            // branch is not harmless; it is one edit away from being live.)
+            const gp = safe(() => graduationPick(), { char: CONFIG.preferredBartender, graduatedNow: null });
+            if (gp.char && CHARS[gp.char]) b = gp.char;
+            else if (CONFIG.preferredBartender && CHARS[CONFIG.preferredBartender] && !(CONFIG.graduation && CONFIG.graduation.enabled)) b = CONFIG.preferredBartender;
+            else if (Array.isArray(CONFIG.bartenderRotation) && CONFIG.bartenderRotation.length) b = nextRotationChar();
+        }
         if (!b) {
             let best = BARTENDERS[0], bestScore = -Infinity;
             for (const c of BARTENDERS) {
@@ -1291,6 +1326,7 @@
         over() {
             if (runActive) { deathSnapshot = deathSnapshot || snapshotStats(); finishRun(); }
             releaseAll();
+            if (!running) return true;   // v6.135.0: one-run mode stopped us — leave RETRY alone
             const reason = recordStopReason();
             if (reason) {
                 stopBot(reason);
@@ -1324,6 +1360,7 @@
                 deathSnapshot = deathSnapshot || snapshotStats();
                 finishRun();
                 releaseAll();
+                if (!running) return true;   // v6.135.0: one-run mode
             }
             const reason = recordStopReason();
             if (reason) {

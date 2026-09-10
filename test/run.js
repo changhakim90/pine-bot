@@ -3,13 +3,18 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 const pkg = require('../package.json');
-const scenarios = ['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace', 'report-budget', 'immortal-graduation', 'plan-golden-joe', 'plan-golden-pat', 'plan-golden-minguk', 'hell-latch-scan', 'shared-skill', 'passout-cluster-aim'];
+const scenarios = require('./scenario-list');
 console.log('pine-bot tests v' + pkg.version);
 let failed = 0;
 for (const s of scenarios) {
     console.log('\n[' + s + ']');
     const r = spawnSync(process.execPath, [path.join(__dirname, 'scenario.js'), s], { stdio: 'inherit', timeout: 30000 });
-    if (r.status !== 0) failed++;
+    // v6.135.0 AUDIT C2: a timeout used to be indistinguishable from an
+    // assertion failure — status null, no FAIL line, and the last `ok` printed
+    // looked like the culprit. Twice in one session that sent the wrong test
+    // under investigation. Name it.
+    if (r.error && r.error.code === 'ETIMEDOUT') { console.log('  TIMEOUT ' + s + ' (30 s) — killed, not a test failure'); failed++; }
+    else if (r.status !== 0) { if (r.signal) console.log('  KILLED ' + s + ' by ' + r.signal); failed++; }
 }
 console.log(failed ? `\n${failed} scenario(s) FAILED` : '\nall tests passed');
 process.exit(failed ? 1 : 0);

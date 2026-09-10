@@ -1189,12 +1189,17 @@ if (which === 'cem-heal') {
         test('the step size is reset to a finite value', () => assert.ok(isFinite(L.cem.ss)));
         test('NaN entries are stripped from hof vectors', () =>
             assert.ok(!('movement.killOrderDist' in L.hof[0].p)));
-        test('the ratcheted enemyTypeMul store is cleared', () =>
+        test('the ratcheted enemyTypeMul store is cleared', () => {
             // v6.127.0: enemyTypeMul/enemyTypeN moved into the SHARED store,
-            // which always initialises the field to {} rather than leaving it
-            // `delete`d/undefined (see loadLearnInner) — same "cleared, not
-            // carrying stale ratchets" guarantee, different empty value.
-            assert.deepStrictEqual(L.enemyTypeMul, {}));
+            // which refuses a pre-6.107.0 table outright (see loadLearnInner).
+            // v6.136.0: the cleared table is then SEEDED from SHIPPED_SKILL,
+            // so "cleared" now means: the ratcheted entries are gone and
+            // nothing present exceeds the applied ceiling.
+            assert.ok(!('mob' in L.enemyTypeMul), 'ratcheted mob survived: ' + JSON.stringify(L.enemyTypeMul));
+            assert.ok(!(L.enemyTypeMul.bomber > 1.5), 'ratcheted bomber survived: ' + L.enemyTypeMul.bomber);
+            for (const k of Object.keys(L.enemyTypeMul))
+                assert.ok(L.enemyTypeMul[k] <= pineBot.config.learning.enemyMulCeil, k + ' ' + L.enemyTypeMul[k]);
+        });
         const sp = pineBot.test.sampleParams();
         test('sampling is finite again for every dimension', () =>
             assert.ok(Object.keys(sp).every(k => isFinite(sp[k])), JSON.stringify(sp).slice(0, 120)));
@@ -1956,11 +1961,16 @@ if (which === 'roster-cap') {
         assert.ok(pat.ingredients.includes(pineBot.test.superKey('GIN TONIC')),
                   'the shared key must already be planned');
     });
-    // THE SAFETY PROPERTY that makes the fifth slot free: LEMON is permanently
-    // banned, so WHISKY SOUR can never complete a super and cannot move the
-    // roster toward the six-maxed-super Rainbow Gun gate. If this ever fails,
-    // the fifth slot has stopped being free and the pick has to be reconsidered.
-    test('...and the freeze slot adds NO completable super line', () => {
+    // v6.135.0 AUDIT E3 — RENAMED to what it measures. This was "the freeze
+    // slot adds NO completable super line", with a comment calling it "THE
+    // SAFETY PROPERTY ... If this ever fails, the pick has to be
+    // reconsidered." It cannot fail for the reason it names: it checks that
+    // LEMON is off the PLAN LIST, which is true, while the game armed SUPER
+    // WHISKY SOUR anyway (`whiskysour 6, lemon 6`, measured in 6.133.0). A
+    // list-membership test is not a runtime safety property, and a tripwire
+    // that cannot trip is worse than none. The runtime guard lives in
+    // gunPathProgress and the slot doctrine; this asserts the roster shape.
+    test('...and WHISKY SOUR is a keyless occupant BY ROSTER: its key is off the plan list', () => {
         const key = pineBot.test.superKey('WHISKY SOUR');
         assert.strictEqual(key, 'LEMON', String(key));
         assert.ok(!pat.ingredients.includes('LEMON'), pat.ingredients.join(','));
@@ -2020,7 +2030,13 @@ if (which === 'roster-cap') {
     // THE SAFETY PROPERTY for the third occupant, stated as an invariant:
     // GINGER BEER must stay out of the plan AND stay arming-capped. If either
     // changes, MOSCOW MULE becomes a fifth line and this must fail.
-    test('MOSCOW MULE is keyless because GINGER BEER is never maxed', () => {
+    // v6.135.0 AUDIT E4 — RENAMED. "GINGER BEER is never maxed" was the claim;
+    // what is checked is that its lv5 card scores under -400 in an EMPTY pool.
+    // That is the arming cap's bid, and a bid is not a guarantee: LEMON and
+    // LIME both reached 6 through the same -700 in two-card hell pools
+    // (CHANGELOG 6.133.0). The assertion stays — the cap must keep biting —
+    // under a name that does not promise what a score cannot deliver.
+    test('MOSCOW MULE is keyless by roster, and GINGER BEER@lv5 carries the arming cap', () => {
         const key = pineBot.test.superKey('MOSCOW MULE');
         assert.strictEqual(key, 'GINGER BEER', String(key));
         assert.ok(!pat.ingredients.includes(key), pat.ingredients.join(','));
@@ -2056,6 +2072,233 @@ if (which === 'char-posture') {
 
 // v6.87.2 — the junk pool must not walk toward the Rainbow Gun, and the
 // super lines are capped at five.
+// ── v6.134.0 THE UP-CARD AXIS ──────────────────────────────────────────────
+//
+// The game emits TWO cards per thing: an acquisition card (`OLIVE`) and a
+// level-up card (`OLIVE UP`). `baseNameOf` stripped `Lv3`/`+1` but not ` UP`,
+// and all 39 name-keyed lookups in 03-scoring.js therefore matched only the
+// acquisition form. Measured before the fix, gt 1740, hell, both forms at lv5:
+//
+//     OLIVE           262  ->  OLIVE UP            9   (8 plan terms lost)
+//     WATER            80  ->  WATER UP            9
+//     LIME           -704  ->  LIME UP             9   (arming-cap lost)
+//     LEMON          -679  ->  LEMON UP            9
+//     MANHATTAN     -1065  ->  MANHATTAN UP       71   (latent-line lost)
+//
+// EVERY passive level-up scored exactly 9 (`ingredient+8 ucb+1`), so ingredient
+// level-ups were chosen by UCB noise alone. 12 of 14 picks in a live log were
+// UP cards. This scenario exists because ~1,900 existing assertions all score
+// by base name — the guards were verified against a card shape the game rarely
+// offers, which is why this survived 5,000+ runs.
+if (which === 'up-cards') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 1740, hell: true } });
+    pineBot.stop();
+    pineBot.test.applyDefaults();
+    const T = pineBot.test;
+    const own = {};
+    for (const n of ['MANHATTAN', 'LIME', 'LEMON', 'OLD FASHIONED', 'SOUTH SIDE',
+                     'OLIVE', 'WATER', 'CAMPARI', 'GIMLET', 'VODKA CRANBERRY'])
+        { own[n] = 5; own[n + ' UP'] = 5; }
+    own['SWEET VERMOUTH'] = 6; own['CRANBERRY'] = 6; own['ANGOSTURA'] = 5;
+    T.setOwned(own);
+    const card = (n, t, lv) => T.scoreCard({ n, type: t, lv }, 0);
+    const why = (n, t, lv) => card(n, t, lv).why;
+    const sc = (n, t, lv) => card(n, t, lv).score;
+
+    // THE SAFETY HALF. A guard that cannot see the card that does the levelling
+    // is not a guard: LEMON, LIME and CAMPARI all reached 6 in live runs
+    // through a -700 arming cap that never once looked at `<NAME> UP`.
+    for (const key of ['LIME', 'LEMON', 'CAMPARI']) {
+        test('arming-cap sees ' + key + ' UP, not just ' + key, () =>
+            assert.ok(/arming-cap/.test(why(key + ' UP', 'passive', 5)),
+                key + ' UP: ' + why(key + ' UP', 'passive', 5)));
+    }
+    for (const ck of ['MANHATTAN', 'VODKA CRANBERRY']) {
+        test('latent-line sees ' + ck + ' UP', () =>
+            assert.ok(/latent-line/.test(why(ck + ' UP', 'weapon', 5)),
+                ck + ' UP: ' + why(ck + ' UP', 'weapon', 5)));
+    }
+    for (const ck of ['GIMLET', 'OLD FASHIONED']) {
+        test('gun-path sees ' + ck + ' UP', () =>
+            assert.ok(/gun-path/.test(why(ck + ' UP', 'weapon', 5)),
+                ck + ' UP: ' + why(ck + ' UP', 'weapon', 5)));
+    }
+
+    // THE PLAN HALF, and the one that explains the variance. OLIVE 6 is
+    // defense 34.99; OLIVE 3 is 17.5. The park audit splits exactly there —
+    // SEATED medianEntryDef 35 / medianTimeS 2364 against NEVER-PARKED 17.5 /
+    // 1331 — and `OLIVE UP` scored 9, the same as every other ingredient.
+    test('OLIVE UP carries the armour plan terms', () =>
+        assert.ok(/entry-armor|survival-core|roadmap/.test(why('OLIVE UP', 'passive', 5)),
+            'OLIVE UP: ' + why('OLIVE UP', 'passive', 5)));
+    test('WATER UP carries its craft-half term', () =>
+        assert.ok(/craft-half|roadmap/.test(why('WATER UP', 'passive', 5)),
+            'WATER UP: ' + why('WATER UP', 'passive', 5)));
+
+    // THE AGGREGATE: a level-up must not be scored as an anonymous ingredient.
+    // Before the fix every one of these was 9.
+    test('plan and junk level-ups are no longer the SAME score', () =>
+        assert.ok(sc('OLIVE UP', 'passive', 5) > sc('LIME UP', 'passive', 5) + 100,
+            'OLIVE UP ' + Math.round(sc('OLIVE UP', 'passive', 5)) +
+            ' vs LIME UP ' + Math.round(sc('LIME UP', 'passive', 5))));
+
+    // SIMPLE SYRUP ends in "UP" with no space before it. The strip is
+    // `/\s+UP$/`, so this name must survive intact — a bare /UP$/ would turn
+    // it into "SIMPLE SYR" and silently unhook the whole regen half.
+    test('SIMPLE SYRUP is not mangled by the UP strip', () =>
+        assert.ok(/entry-regen-syrup|craft/.test(why('SIMPLE SYRUP', 'passive', 0)),
+            'SIMPLE SYRUP: ' + why('SIMPLE SYRUP', 'passive', 0)));
+    // v6.134.0 (user: "simple syrup, mint, and olives are vital ingredients
+    // along with supersouthside level 6 as the main weapon for boss killer").
+    // A live run held southside 6 with NO mint at all, so SUPER SOUTH SIDE was
+    // impossible, while BLOODY MARY and VODKA MARTINI had both armed.
+    test('the reserve holds MINT — SOUTH SIDE\'s super key', () =>
+        assert.ok([...T.craftReserve()].includes('MINT'), JSON.stringify([...T.craftReserve()])));
+    test('...and SIMPLE SYRUP itself, not only its parts', () =>
+        assert.ok([...T.craftReserve()].includes('SIMPLE SYRUP'), JSON.stringify([...T.craftReserve()])));
+    test('...and OLIVE, the third vital ingredient', () =>
+        assert.ok([...T.craftReserve()].includes('OLIVE'), JSON.stringify([...T.craftReserve()])));
+    // ── v6.135.0 AUDIT A1: super-rush respects the cap ────────────────────
+    // `rainbow-rush` paid +12 in hell to any key card while supersThisRun < 6
+    // — a bound that could never bind under maxSuperLines 4, so it paid on
+    // every hell pick toward a line the file refuses to open. Now gated on
+    // the real cap. (This scene is hell, gt 1740.)
+    T.setOwned({ 'SOUTH SIDE': 6 });
+    T.setSupers(0);
+    T.latchHell();   // the scene sets the game's flag; the bot's latch is separate
+    test('below the cap, a planned key in hell gets super-rush', () =>
+        assert.ok(/super-rush/.test(why('MINT', 'passive', 5)), why('MINT', 'passive', 5)));
+    T.setSupers(pineBot.config.maxSuperLines);
+    test('AT the cap it does not — there is nothing left to rush', () =>
+        assert.ok(!/super-rush/.test(why('MINT', 'passive', 5)), why('MINT', 'passive', 5)));
+    test('...and the old always-open "< 6" bound is gone', () =>
+        assert.ok(!/rainbow-rush/.test(why('MINT', 'passive', 5))));
+    T.setSupers(0);
+
+    // ── v6.135.0 AUDIT A4: MOJITO is a plan cocktail, not an avoided one ──
+    // It was on AVOID_COCKTAILS from a 6.8x "sixth super" worry AND one of
+    // the four intended lines since 6.88.3. Being on both silently withheld
+    // roster-first from it.
+    T.setOwned({ 'MOJITO': 0 });
+    test('MOJITO new carries roster-first like every other plan cocktail', () =>
+        assert.ok(/roster-first/.test(why('MOJITO', 'weapon', 0)), why('MOJITO', 'weapon', 0)));
+
+    test('...and SIMPLE SYRUP UP still resolves to SIMPLE SYRUP', () =>
+        assert.ok(sc('SIMPLE SYRUP UP', 'passive', 3) > 20,
+            'SIMPLE SYRUP UP: ' + Math.round(sc('SIMPLE SYRUP UP', 'passive', 3))));
+    done();
+}
+
+// ── v6.135.0 PLAYER CONTROLS ────────────────────────────────────────────────
+//
+// USER: "I want to be able to start and stop the bot and end the loop cycle
+// for training. The bot should be able to allow the player to select the
+// character then start the bot." Two player-owned settings in their own
+// store: a character PIN that bypasses the rotation, and a LOOP mode that
+// stops the bot at the results screen after a run is booked. The subtle case
+// is the resume: ▶ Start on a results screen must NOT stop the bot again on
+// the same screen, which is why one-run mode arms at startRun(), not at
+// startBot().
+if (which === 'controls') {
+    const { pineBot, store } = makeEnv({ script: SCRIPT, game: { state: 'select', gameTime: 0 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const ctlKey = () => Object.keys(store).find(k => /^pineBotControl/.test(k));
+    // makeEnv swaps global.localStorage; a sub-boot must hand it back or the
+    // original bot's later writes land in the sub-boot's store.
+    const LS = global.localStorage;
+    const subBoot = (opts) => { const b = makeEnv(opts); b.pineBot.stop(); global.localStorage = LS; return b; };
+
+    // ── the PIN ─────────────────────────────────────────────────────────────
+    test('with no pin, chooseBartender follows the rotation', () => {
+        const a = T.chooseBartender(), b = T.chooseBartender();
+        assert.ok(a !== b, 'rotation did not advance: ' + a + ',' + b);
+    });
+    test('pin("pat") makes every pick pat and does not touch the rotation cursor', () => {
+        const cursorBefore = pineBot.graduation().lastPlayed;
+        assert.strictEqual(pineBot.pin('pat'), 'pat');
+        assert.strictEqual(T.chooseBartender(), 'pat');
+        assert.strictEqual(T.chooseBartender(), 'pat');
+        assert.strictEqual(pineBot.graduation().lastPlayed, cursorBefore, 'the cursor moved under a pin');
+    });
+    test('...the pin is persisted in its own namespaced store', () => {
+        assert.ok(ctlKey(), Object.keys(store).join(','));
+        assert.strictEqual(JSON.parse(store[ctlKey()]).pin, 'pat');
+    });
+    test('...and survives a fresh boot', () => {
+        const b = subBoot({ script: SCRIPT, game: { state: 'select', gameTime: 0 }, storage: Object.assign({}, store) });
+        assert.strictEqual(b.pineBot.control().pin, 'pat');
+        assert.strictEqual(b.pineBot.test.chooseBartender(), 'pat');
+    });
+    test('...and survives a graduation reset (different key, the bot cannot wipe it)', () => {
+        const wiped = Object.assign({}, store);
+        for (const k of Object.keys(wiped)) if (/pineBotGraduation/.test(k)) delete wiped[k];
+        const b = subBoot({ script: SCRIPT, game: { state: 'select', gameTime: 0 }, storage: wiped });
+        assert.strictEqual(b.pineBot.control().pin, 'pat');
+    });
+    test('pin(null) resumes the rotation where it left off', () => {
+        const cursor = pineBot.graduation().lastPlayed;
+        assert.strictEqual(pineBot.pin(null), 'auto');
+        const next = T.chooseBartender();
+        const order = pineBot.config.graduation.order;
+        assert.strictEqual(next, order[(order.indexOf(cursor) + 1) % order.length], 'cursor ' + cursor + ' -> ' + next);
+    });
+    test('an unknown character is refused, not stored', () =>
+        assert.strictEqual(pineBot.pin('nobody'), 'auto'));
+
+    // ── the LOOP ────────────────────────────────────────────────────────────
+    // continuous: a booked run does not stop the bot.
+    pineBot.loop('continuous');
+    pineBot.start();
+    T.startRun();
+    T.endRun();
+    test('loop mode: finishing a run leaves the bot running', () =>
+        assert.strictEqual(pineBot.control().running, true));
+
+    // single: the run is booked, THEN the bot stops.
+    pineBot.loop('single');
+    T.startRun();
+    test('one-run mode arms at startRun', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('one-run mode: finishing a run STOPS the bot', () =>
+        assert.strictEqual(pineBot.control().running, false));
+    test('...and the arm is consumed', () => assert.strictEqual(pineBot.control().armed, false));
+
+    // THE RESUME CASE. ▶ Start on the results screen: over() fires with no
+    // run active. It must not stop the bot again — that would trap the
+    // player on the results screen forever.
+    global.state = 'over';
+    pineBot.start();
+    T.stateHandlers.over();
+    test('▶ Start on the results screen in one-run mode does NOT stop again', () =>
+        assert.strictEqual(pineBot.control().running, true));
+    // ...and the next real run re-arms, so the mode is a mode, not a one-shot.
+    T.startRun();
+    test('...and the NEXT run re-arms', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('...and stops again after it', () => assert.strictEqual(pineBot.control().running, false));
+
+    // switching to one-run MID-RUN arms the current run, which is what the
+    // player means by "stop after this one".
+    pineBot.loop('continuous'); pineBot.start(); T.startRun();
+    assert.strictEqual(pineBot.control().armed, false);
+    pineBot.loop('single');
+    test('loop("single") mid-run arms the run in progress', () => assert.strictEqual(pineBot.control().armed, true));
+    T.endRun();
+    test('...so it stops at the end of THIS run', () => assert.strictEqual(pineBot.control().running, false));
+
+    // over() with the bot stopped by one-run mode must not click RETRY.
+    // clickText returns false in the fake DOM, so the handler's return value
+    // is the tell: true = "handled, left alone", false = "tried to click".
+    pineBot.loop('single'); pineBot.start(); T.startRun(); global.state = 'over';
+    const handled = T.stateHandlers.over();
+    test('over() in one-run mode books the run and returns without RETRY', () =>
+        assert.ok(handled === true && pineBot.control().running === false, 'handled=' + handled));
+
+    test('loop mode is persisted', () => assert.strictEqual(JSON.parse(store[ctlKey()]).loop, 'single'));
+    done();
+}
+
 if (which === 'gun-path') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900 } });
     pineBot.stop();
@@ -2096,16 +2339,35 @@ if (which === 'gun-path') {
     test('and ranks below a junk key that has barely started', () =>
         assert.ok(fresh.score > nearly.score,
             'lime ' + fresh.score.toFixed(0) + ' vs cointreau ' + nearly.score.toFixed(0)));
-    // lines that can NEVER complete are harmless and must not be penalised:
-    // LEMON and ORANGE are permanently banned, so their supers are unreachable
+    // v6.135.0 AUDIT E1 — REVISED ON PURPOSE. This used to read "LEMON and
+    // ORANGE are permanently banned, so their supers are unreachable" and
+    // assert LEMON is never a gun path. 6.133.0 measured `whiskysour 6, lemon
+    // 6` in a live run: the line completed. The test had passed only because
+    // WHISKY SOUR was never seeded, i.e. it was checking that an UNOWNED
+    // cocktail's key sits under the halfway floor — true, and stated here as
+    // exactly that — not permanence, which is false.
     const lemon = T.scoreCard({ n: 'LEMON', type: 'passive', lv: 3, maxlv: 6 }, 0, []);
-    test('a permanently unreachable line is not treated as a gun path', () =>
+    test('a key whose cocktail is unowned is under the gun-path floor (not "unreachable")', () =>
         assert.ok(!/gun-path/.test(lemon.why), lemon.why));
-    // and the sanctioned five are never penalised as gun paths
-    const plan = T.roadmap().cocktails[0];
-    const planCard = T.scoreCard({ n: plan, type: 'weapon', lv: 3, maxlv: 6 }, 0, []);
-    test('the planned five are never treated as a gun path', () =>
-        assert.ok(!/gun-path/.test(planCard.why), plan + ': ' + planCard.why));
+    test('...and the SAME key IS a gun path once its cocktail is owned and climbing', () => {
+        // gunPathProgress reads the key's level from ownedLevels (the card's
+        // `lv` is what the pool prints; the owned level is what the game has).
+        T.setOwned({ 'WHISKY SOUR': 4, 'LEMON': 3 });
+        const w = T.scoreCard({ n: 'LEMON', type: 'passive', lv: 3, maxlv: 6 }, 0, []).why;
+        T.setOwned({ 'WHISKY SOUR': 0, 'LEMON': 0 });
+        assert.ok(/gun-path/.test(w), w);
+    });
+    // v6.135.0 AUDIT E2 — REVISED ON PURPOSE. This was "the planned five are
+    // never treated as a gun path" and tested roadmap().cocktails[0], which is
+    // SOUTH SIDE — exempt by construction as a SUPER_LINE_COCKTAIL. The name
+    // said five, the exempt set is four, and one of the OTHER plan cocktails
+    // (WHISKY SOUR, a keyless occupant) IS taxed once its key climbs. Test the
+    // real invariant: every INTENDED line is exempt, all four of them.
+    for (const ck of pineBot.test.superLineCocktails()) {
+        const c = T.scoreCard({ n: ck, type: 'weapon', lv: 3, maxlv: 6 }, 0, []);
+        test('an intended super line is never a gun path: ' + ck, () =>
+            assert.ok(!/gun-path/.test(c.why), ck + ': ' + c.why));
+    }
     // v6.87.4: an off-plan line that has barely started is NOT taxed — two
     // levels in a fresh cocktail is damage, not a gun path, and taxing it
     // collapsed supers/run in the first 6.87.3 runs.
@@ -2156,14 +2418,21 @@ if (which === 'gun-forced') {
             f.pools[0].offered.every(o => /risk0\.\d/.test(o)), JSON.stringify(f.pools[0].offered)));
     test('and which one had to be eaten', () =>
         assert.ok(['ANGOSTURA', 'COINTREAU'].includes(f.pools[0].took), String(f.pools[0].took)));
-    // a pool with ONE safe card is not forced — the safe card is simply taken
+    // a pool with ONE safe card is not forced — the safe card is simply taken.
+    // v6.135.0 AUDIT C3/E7: the safe card used to be `type: 'item'`, a type
+    // the game never emits (game-source-facts: 'sp_timestop' is real, 'item'
+    // is not), so gunPathProgress returned 0 for it by not recognising it —
+    // the test proved nothing about a real safe card. And the assertion was
+    // "n is still 1", which also passes if handleLevelUp never ran. Now: the
+    // real type, and the pick itself is checked.
     global.window._pool = [
         { n: 'ANGOSTURA', type: 'passive', lv: 4, maxlv: 6 },
-        { n: 'TIME STOP', type: 'item', lv: 1, maxlv: 6 }
+        { n: 'TIME STOP', type: 'sp_timestop', lv: 0 }
     ];
-    T.handleLevelUp();
-    test('a pool with any safe option is NOT flagged as forced', () =>
-        assert.strictEqual(pineBot.gunForced().n, 1, 'flagged a pool that had a way out'));
+    const nBefore = pineBot.gunForced().n;
+    const ran = T.handleLevelUp();
+    test('a pool with a REAL safe card (sp_timestop) is NOT flagged as forced', () =>
+        assert.ok(ran !== false && pineBot.gunForced().n === nBefore, 'ran=' + ran + ' n ' + nBefore + '->' + pineBot.gunForced().n));
     done();
 }
 
@@ -3122,18 +3391,25 @@ if (which === 'latent-line') {
         // VERMOUTH 0/6 (none)"]`, with WATER and SIMPLE SYRUP both fine. A
         // hand-list protects whichever part failed last; the gate's clauses
         // protect all of them.
-        test('...and the reserve covers SWEET VERMOUTH too, not just WATER', () =>
+        // (v6.133.1: the gate's clauses are now SOUTH SIDE / SIMPLE SYRUP /
+        // OLIVE, so the reserve is WATER + SUGAR + OLIVE. The vermouths left
+        // with the clause — which is the point of deriving it.)
+        test('...and the reserve covers every part the gate names, not just WATER', () =>
             assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)),
                 'reserve is ' + JSON.stringify([...T.craftReserve()])));
         {
-            // WATER in, SWEET VERMOUTH still out: the lock must still hold.
-            T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 0 });
-            test('...with WATER owned but SWEET VERMOUTH missing the lock holds', () =>
+            // WATER in, another reserved part still out: the lock must hold on
+            // ANY missing part, not only the one that failed in the field.
+            T.setOwned({ 'WATER': 1, 'OLIVE': 0 });
+            test('...with WATER owned but another build part missing the lock holds', () =>
                 assert.ok(/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
             T.setOwned({ 'WATER': 0 });
         }
         // ...and once WATER is in, the bar is free to fill normally again.
-        T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 6, 'DRY VERMOUTH': 6, 'SUGAR': 6, 'OLIVE': 6 });
+        // v6.134.0: the reserve now also holds MINT (SOUTH SIDE's super key)
+        // and SIMPLE SYRUP itself, so "every build part" means all of them.
+        T.setOwned({ 'WATER': 1, 'SWEET VERMOUTH': 6, 'DRY VERMOUTH': 6, 'SUGAR': 6,
+                     'OLIVE': 6, 'MINT': 6, 'SIMPLE SYRUP': 1 });
         test('...and with every build part owned the lock lifts', () =>
             assert.ok(!/slot-lock/.test(why('CRANBERRY', 'passive', 0)), why('CRANBERRY', 'passive', 0)));
         T.setOwned({ 'OLIVE': 0, 'TOMATO JUICE': 0, 'MINT': 0, 'SWEET VERMOUTH': 0,
@@ -4417,6 +4693,9 @@ if (which === 'runaway-guard') {
     const T = pineBot.test;
     const TUN = T.tunable ? T.tunable() : null;
     const C = pineBot.config;
+    // v6.136.0: boot applies the CEM mean — now the SHIPPED one on a fresh
+    // store — over CONFIG. This test is about the DOCUMENTED defaults.
+    T.applyDefaults();
     const get = k => k.split('.').reduce((o, x) => o && o[x], C);
 
     if (!TUN) { test('TUNABLE is reachable from the test surface', () => assert.ok(false, 'no accessor')); done(); }
@@ -4458,7 +4737,7 @@ if (which === 'runaway-guard') {
     done();
 }
 
-if (!['snapshots', 'scoring', 'hell-unban', 'pat-profile', 'boss-floor', 'directives', 'time-stop', 'flight', 'hell-southside', 'ult-falloff', 'flame-cross', 'backlog', 'freeze-aura', 'damage-audit', 'focus-fire', 'item-stop', 'flame-anchor', 'kill-order', 'edge-boss', 'stop-giant', 'grind', 'gun-veto', 'learned', 'cem-heal', 'cem-lockup', 'ult-kinds', 'po-feasibility', 'tank-holdout', 'demo-digest', 'rotation', 'rotation-resume', 'rotation-doctrine', 'runner-posture', 'roster-cap', 'char-posture', 'gun-path', 'gun-forced', 'craft-prompt', 'evo-tip', 'audit-signal', 'audit-craft', 'audit-clicks', 'levelup-repeat', 'levelup-miss', 'chrome-veto', 'corner-anchor', 'mark-escape', 'underpowered-label', 'slot-lockout', 'latent-line', 'shield-pool', 'ult-chain', 'kite-damp', 'kite-deadband', 'income-audit', 'panic-anchor', 'minguk-invuln', 'mark-ghost', 'deep-park', 'dormant-hunt', 'freeze-slot', 'arming-cap', 'runaway-guard', 'po-harvest', 'flame-passout', 'day-trek', 'joe-pierce', 'farm-stance', 'joe-guard', 'entry-seat', 'entry-seat-hell', 'run-cap', 'store-guard', 'phase-audit', 'joe-day', 'audit-merge', 'nudge-ratchet', 'tag-learn', 'drop-anchor', 'armor-tier', 'learn-probe', 'stall-escape', 'lane-escape', 'box-reopen', 'ult-economy', 'deep-regime', 'boss-census', 'break-even', 'overlay-report', 'regime-breaks', 'park-miss', 'regen-spine', 'audit-repairs', 'park-regen', 'claim-before-level', 'store-namespace', 'report-budget', 'immortal-graduation', 'plan-golden-joe', 'plan-golden-pat', 'plan-golden-minguk', 'hell-latch-scan', 'shared-skill', 'passout-cluster-aim'].includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
+if (!require('./scenario-list').includes(which)) { console.error('unknown scenario ' + which); process.exit(2); }
 
 
 // v6.93.1 — THE HARVEST APPROACH. User: "Joe and Pat still can't clear
@@ -5435,9 +5714,23 @@ if (which === 'run-cap') {
         // new one, and the live report showed supers:2 was the ONLY leg short.
         test('v6.132.0: supersMin is gone from the shipped config', () =>
             assert.strictEqual(CS.supersMin, undefined));
-        test('...replaced by the four build clauses, vermouth as an OR', () =>
+        // v6.133.1: THREE clauses. The vermouth clause is gone — a run that
+        // never carried either still booked an immortal build, and more
+        // decisively, SWEET VERMOUTH is MANHATTAN's super key, so requiring it
+        // armed a fifth super line (`manhattan 6, sweetver 6` measured at gt
+        // 2795, with "★ SUPER MANHATTAN UP" offered at 1884) against a
+        // maxSuperLines of 4. The immortal rule was feeding the rainbow gun.
+        test('...replaced by THREE build clauses; the vermouth clause is gone', () =>
             assert.deepStrictEqual(CS.build,
-                [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE'], ['SWEET VERMOUTH', 'BLACK VERMOUTH']]));
+                [['SOUTH SIDE'], ['SIMPLE SYRUP'], ['OLIVE']]));
+        // ...and the reserve follows the gate, so the two vermouth ingredient
+        // slots are released rather than held for a requirement that no longer
+        // exists. That is the payoff for deriving it instead of hand-listing.
+        test('...and the ingredient reserve drops the vermouths with it', () => {
+            const r = [...T.craftReserve()];
+            assert.ok(!r.includes('SWEET VERMOUTH') && !r.includes('DRY VERMOUTH'), JSON.stringify(r));
+            assert.ok(r.includes('WATER') && r.includes('OLIVE'), JSON.stringify(r));
+        });
         // v6.102.0 THE CEILING TOOTH — the assertion that would have caught
         // the bug that made the whole early cap dead code for four versions.
         // The game computes player.defense = min(60, 3*upDefense + pas.armor);
@@ -5518,8 +5811,12 @@ if (which === 'run-cap') {
         // time, because "all four" passing by accident (an empty clause list,
         // a gate that reads nothing and returns true) is the failure mode that
         // would quietly re-open the rule to every build.
+        // v6.133.1: three clauses now — the vermouth clause was dropped because
+        // SWEET VERMOUTH is MANHATTAN's super key and requiring it armed a
+        // fifth line. SWEET VERMOUTH short must therefore NOT block the proof,
+        // which is asserted separately below.
         for (const [label, drop] of [['SOUTH SIDE', 'southside'], ['SIMPLE SYRUP', 'syrup'],
-                                     ['OLIVE', 'olive'], ['SWEET VERMOUTH', 'sweetver']]) {
+                                     ['OLIVE', 'olive']]) {
             T.resetCapLatch(); T.setSupers(4);
             const w = Object.assign({}, WEAPONS_FULL);
             // v6.132.1: a craft result has no level to dock — short means
@@ -5548,6 +5845,18 @@ if (which === 'run-cap') {
             test('the build latch does not survive a run boundary', () =>
                 assert.strictEqual(pl.capDive, false,
                     'a run with NO ingredients capped immortal on a stale latch'));
+        }
+        // v6.133.1 THE DROPPED CLAUSE IS INERT: a build with NO vermouth of
+        // either kind must now pass. This is the assertion that would catch the
+        // clause being silently reinstated.
+        {
+            T.resetCapLatch(); T.setSupers(4);
+            const w = Object.assign({}, WEAPONS_FULL);
+            delete w.sweetver; delete w.dryver;   // neither half, and no craft
+            stableScene(9000, { weapons: w });
+            pl = stableScene(9320, { weapons: w });
+            test('v6.133.1: no vermouth of any kind still proves the build', () =>
+                assert.strictEqual(pl.capDive, true, JSON.stringify(T.capDebug())));
         }
         // ...and BLACK VERMOUTH satisfies the vermouth clause on its own —
         // that is the whole point of the OR, because the craft eats SWEET
@@ -6141,6 +6450,9 @@ if (which === 'nudge-ratchet') {
     //    the pinned era carry the corner inside them).
     L.hof = [{ r: 3, p: { ...L.cem.mean } }];
     const res = global.window.pineBot.recenterSearch();
+    // v6.136.0: the live config carries the SHIPPED mean on a fresh store;
+    // recenter goes to the documented CONFIG default, so read that.
+    T.applyDefaults();
     test('recenterSearch returns the mean to the config default', () =>
         assert.ok(Math.abs(L.cem.mean['movement.standoff'] - pineBot.config.movement.standoff) < 1,
             'standoff ' + L.cem.mean['movement.standoff'] + ' vs ' + pineBot.config.movement.standoff));
@@ -6206,10 +6518,11 @@ if (which === 'arming-cap') {
         test('the super-line key ' + k + ' can still be MAXED', () =>
             assert.ok(sc(k, 'passive', 5) > -400, k + ' @lv5 ' + Math.round(sc(k, 'passive', 5))));
 
-    // AND THE OUTCOME THE WHOLE THING EXISTS FOR: with the keys shut, the two
-    // keyless occupants stay keyless and the live run's 5-super state is
-    // unreachable. This is the assertion that would have caught the bug.
-    test('NEGRONI and WHISKY SOUR cannot be armed, so they stay keyless', () => {
+    // v6.135.0 AUDIT E4 — RENAMED. This said "cannot be armed ... the live
+    // run's 5-super state is unreachable"; 6.133.0 then measured exactly that
+    // state reached (SUPER WHISKY SOUR armed). What is asserted is that both
+    // keys carry the arming cap at lv5 — a necessary bid, not a guarantee.
+    test('NEGRONI and WHISKY SOUR keys carry the arming cap at lv5', () => {
         for (const c of ['NEGRONI', 'WHISKY SOUR']) {
             const k = pineBot.test.superKey(c);
             assert.ok(sc(k, 'passive', 5) < -400,
@@ -6964,6 +7277,9 @@ if (which === 'lane-escape') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900, hell: false } });
     pineBot.stop();
     pineBot.test.applyDefaults();
+    // v6.136.0: a fresh store boots on the shipped enemy fear table (drunk
+    // 1.385x); the crowd scenes below were calibrated on static fear.
+    pineBot.test.setEnemyMul({}); pineBot.test.setEnemyN({});
     const T = pineBot.test, C = pineBot.config;
 
     // A horizontal charge lane through the middle of the field, with the
@@ -7101,6 +7417,10 @@ if (which === 'lane-escape') {
     // pair carried one number twice. A diversion is the thing worth counting.
     test('laneDiv counts overrules, not firings', () => {
         T.startRun();
+        // startRun's trial reloads the store and plays the CEM mean — the
+        // SHIPPED mean and fear table on a fresh store (6.136.0). Put the
+        // scene back on the static values it was calibrated against.
+        T.applyDefaults(); T.setEnemyMul({}); T.setEnemyN({});
         // player deep in an armed lane with a crowd sitting on the exit: the
         // field wants to stay, the override leaves anyway = a real diversion.
         put(300, 285, [lane(true)]);
@@ -8803,9 +9123,12 @@ if (which === 'claim-before-level') {
         assert.strictEqual(took, 'GIN TONIC', 'took ' + took);
         assert.ok(/claim-before-level/.test(lastWhy()), 'the audit does not say why: ' + lastWhy());
     });
+    // v6.134.0: the audit now records STIRRING, not "STIRRING UP" — the ` UP`
+    // suffix is stripped at `baseNameOf`, so the log names the CARD rather than
+    // the decoration the game happened to print on it. Same card, one identity.
     test('the pick log records the base it stepped over', () => {
         const a = T.pickAudit(); const last = a[a.length - 1];
-        assert.ok(/STIRRING UP=\d+/.test((last.over || []).join(' ')), JSON.stringify(last));
+        assert.ok(/\bSTIRRING=\d+/.test((last.over || []).join(' ')), JSON.stringify(last));
     });
     test('every plan cocktail claims over the base, not just the tonic line', () => {
         for (const c of ['SOUTH SIDE', 'VODKA TONIC', 'MOJITO', 'WHISKY SOUR', 'MOSCOW MULE']) {
@@ -9219,7 +9542,7 @@ if (which === 'immortal-graduation') {
     // anyone. The round-robin that now ships is tested in its own block
     // below; this one proves the pin path is untouched by it.
     pineBot.config.graduation.rotate = false;
-    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+    T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
     T.setPhaseRows(Array(N - 1).fill(0).map(() => immortal('joe')));
     test('at N-1 the pin still resolves to joe', () => assert.strictEqual(T.chooseBartender(), 'joe'));
     test('...and nothing is recorded as graduated', () => assert.deepStrictEqual(T.graduationStatus().graduated, {}));
@@ -9289,7 +9612,7 @@ if (which === 'immortal-graduation') {
     // of sticking with one character until it reaches the 10 immortal
     // build count"). Shipped default; the pin block above ran with it off.
     pineBot.config.graduation.rotate = true;
-    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+    const fresh = () => T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
     fresh(); T.setPhaseRows([]);
     test('rotate: a fresh store cycles joe -> minguk -> pat -> joe -> minguk, one step per run start', () => {
         const seq = Array(5).fill(0).map(() => T.chooseBartender());
@@ -9302,7 +9625,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.chooseBartender(), 'pat', 'after minguk comes pat, not joe');
     });
     test('rotate: the report previews the next pick without moving the cursor', () => {
-        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
+        const g = { graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' };
         T.setGraduation(g); global.localStorage.setItem(T.graduationKey(), JSON.stringify(g));
         const st1 = T.graduationStatus();
         assert.strictEqual(st1.rotate, true); assert.strictEqual(st1.lastPlayed, 'joe'); assert.strictEqual(st1.playing, 'minguk');
@@ -9311,7 +9634,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(JSON.parse(global.localStorage.getItem(T.graduationKey())).lastPlayed, 'joe', 'the cursor did not move');
     });
     test('rotate: a character at the bar is graduated on the next pick — whoever\'s turn it is — and KEEPS PLAYING (user: "rotate on every session regardless of whether they graduated")', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'joe' });
         // pat (not the next in line) has ten; minguk is next by the cursor.
         T.setPhaseRows(Array(N).fill(0).map(() => immortal('pat', { v: tag('pat', '6.130.0') })));
         const b = T.chooseBartender();
@@ -9388,7 +9711,7 @@ if (which === 'immortal-graduation') {
     test('race: a ledger opened mid-epoch adopts the standing count and flags it, so runsTo is not overstated', () => {
         fresh();
         // A store already carrying counts from before the ledger existed.
-        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0' });
+        T.setGraduation({ graduated: {}, counts: { pat: 4 }, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0' });
         T.setPhaseRows([]);
         T.bookImmortal(immortal('pat'));
         const p = JSON.parse(global.localStorage.getItem(T.graduationKey())).progress.pat;
@@ -9444,7 +9767,7 @@ if (which === 'immortal-graduation') {
         assert.strictEqual(T.immortalCount('joe'), 0, 'the pre-reset count was pulled back in');
     });
     test('rotate: the summary line still prints, with the next pick', () => {
-        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
+        fresh(); T.setGraduation({ graduated: {}, counts: {}, resetEpoch128: 1, resetEpoch130: 1, resetEpoch132: 1, resetEpoch1321: 1, resetEpoch133: 1, resetEpoch134: 1, immortalEpochVersion: '6.130.0', lastPlayed: 'pat' });
         T.setPhaseRows([immortal('joe', { v: tag('joe', '6.130.0') })]);
         const s = T.reportSummary(pineBot.reportFull());
         assert.ok(/IMMORTAL\s+joe 1\/10\s+minguk 0\/10\s+pat 0\/10\s+playing joe/.test(s), s);
@@ -9812,6 +10135,146 @@ if (which === 'passout-cluster-aim') {
         test('minguk: aim sits well outside the near pile — clearly further than the clustered aim', () =>
             assert.ok(plan.poCentroidDist - plan.poNearest > 5,
                 JSON.stringify({ centroid: plan.poCentroidDist, nearest: plan.poNearest })));
+    }
+    done();
+}
+
+// v6.136.0 THE SHIPPED SKILL — user: "make it so that the learnings are
+// built in on the script itself so when a new player starts it doesn't have
+// to play multiple runs." A store with no tuning of its own boots on the
+// reference store's converged CEM means (9,569 runs), the learned enemy
+// fear table, and the measured boss timetable. A store that has any of
+// these keeps its own. The table is data copied from a 📋 report, so the
+// guards here are about its SHAPE staying honest: every key is a live
+// dimension, every value is inside its box, and every box is the one the
+// value was trained under.
+if (which === 'shipped-skill') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const S = T.shippedSkill();
+    const TUN = T.tunable();
+    const L = T.getLearn();
+    const seedFrac = pineBot.config.learning.sigmaSeed;
+
+    // ── 1. the table itself ─────────────────────────────────────────────
+    test('every shipped CEM key is a live TUNABLE dimension', () => {
+        for (const k of Object.keys(S.cem)) assert.ok(TUN[k], k + ' is not in TUNABLE — a dead dimension is being shipped');
+    });
+    test('every shipped mean sits inside its live box', () => {
+        for (const k of Object.keys(S.cem)) {
+            const [m, s] = S.cem[k];
+            assert.ok(isFinite(m) && isFinite(s) && s >= 0, k + ' ' + JSON.stringify(S.cem[k]));
+            assert.ok(m >= TUN[k].min - 1e-9 && m <= TUN[k].max + 1e-9, k + ' mean ' + m + ' outside ' + JSON.stringify(TUN[k]));
+        }
+    });
+    test('every shipped box equals the live box (a moved box means a stale value)', () => {
+        for (const k of Object.keys(S.cem)) {
+            const b = S.cemBox[k];
+            assert.ok(b, k + ' has no cemBox record');
+            assert.ok(b[0] === TUN[k].min && b[1] === TUN[k].max,
+                k + ' trained under [' + b + '] but the live box is [' + TUN[k].min + ',' + TUN[k].max + '] — refresh SHIPPED_SKILL from a report on the current box, or the loader will (correctly) ignore this dim');
+        }
+    });
+    test('every live dimension has a shipped value (a new dim needs a conscious entry or an explicit cold start)', () => {
+        const missing = Object.keys(TUN).filter(k => !S.cem[k]);
+        assert.deepStrictEqual(missing, [], 'unshipped dims: ' + missing.join(', '));
+    });
+    test('the provenance is recorded', () =>
+        assert.ok(S.source && S.source.runs > 1000 && /^\d+\.\d+\.\d+/.test(S.source.version), JSON.stringify(S.source)));
+    test('shipped enemy fear stays inside the store clamp and the applied band', () => {
+        for (const k of Object.keys(S.enemy)) {
+            const [mul, n] = S.enemy[k];
+            assert.ok(mul >= 0.6 && mul <= 2.2 && n >= pineBot.config.learning.enemyMulMinN, k + ' ' + JSON.stringify(S.enemy[k]));
+            assert.ok(mul <= pineBot.config.learning.enemyMulCeil, k + ' ' + mul + ' would be clamped by enemyMulCeil — ship what is applied');
+        }
+    });
+
+    // ── 2. a FRESH store boots on it ────────────────────────────────────
+    test('a fresh store\'s CEM mean is the shipped mean, not the CONFIG default', () => {
+        for (const k of Object.keys(S.cem))
+            assert.ok(Math.abs(L.cem.mean[k] - S.cem[k][0]) < 1e-9, k + ' ' + L.cem.mean[k] + ' vs shipped ' + S.cem[k][0]);
+    });
+    test('...and it is APPLIED: the live config carries the shipped mean at boot', () =>
+        assert.ok(Math.abs(pineBot.config.movement.standoff - S.cem['movement.standoff'][0]) < 1e-9,
+            'live standoff ' + pineBot.config.movement.standoff));
+    test('a converged shipped sigma is re-floored to sigmaSeed x range', () => {
+        const k = 'movement.panicHp', range = TUN[k].max - TUN[k].min;
+        assert.ok(S.cem[k][1] < range * seedFrac, 'fixture: ' + k + ' is no longer converged in the table');
+        assert.ok(Math.abs(L.cem.sigma[k] - range * seedFrac) < 1e-9, k + ' sigma ' + L.cem.sigma[k] + ' vs ' + range * seedFrac);
+    });
+    test('...and a wider shipped sigma is kept as shipped', () => {
+        const k = 'movement.lootPull', range = TUN[k].max - TUN[k].min;
+        assert.ok(S.cem[k][1] > range * seedFrac, 'fixture: ' + k + ' is narrower than sigmaSeed in the table');
+        assert.ok(Math.abs(L.cem.sigma[k] - S.cem[k][1]) < 1e-9, k + ' sigma ' + L.cem.sigma[k]);
+    });
+    test('sigmaSeed sits between the floor and a cold start', () =>
+        assert.ok(seedFrac > pineBot.config.learning.sigmaFloor && seedFrac < pineBot.config.learning.sigmaInit, String(seedFrac)));
+    test('the seed is recorded on the CEM with its provenance, at generation 0', () =>
+        assert.ok(L.cem.seeded && L.cem.seeded.runs === S.source.runs && L.cem.seeded.dims === Object.keys(S.cem).length && L.cem.gen === 0,
+            JSON.stringify(L.cem.seeded)));
+    test('the enemy fear table is seeded and APPLIED from run one', () => {
+        assert.strictEqual(L.enemyTypeMul.drunk, S.enemy.drunk[0]);
+        assert.strictEqual(L.enemyTypeN.drunk, S.enemy.drunk[1]);
+        assert.ok(Math.abs(T.typeMulOf('drunk') - S.enemy.drunk[0]) < 1e-9, 'applied ' + T.typeMulOf('drunk'));
+        assert.strictEqual(T.typeMulOf('bomber'), 1);
+    });
+    test('the boss timetable is seeded at the census medians', () => {
+        const si = L.spawnIntel;
+        for (const k of Object.keys(S.spawn))
+            assert.ok(si[k] && Math.abs(si[k].sum / si[k].n - S.spawn[k]) < 1e-9 && si[k].n === S.spawnWeight, k + ' ' + JSON.stringify(si[k]));
+    });
+    test('the report names the seed', () => {
+        const r = pineBot.learning();
+        assert.ok(r.seeded && r.seeded.runs === S.source.runs && r.enemySeeded && r.spawnSeeded, JSON.stringify(r.seeded));
+    });
+    test('sampling around the seeded mean is finite for every dimension', () => {
+        const sp = T.sampleParams();
+        for (const k of Object.keys(TUN)) assert.ok(isFinite(sp[k]) && sp[k] >= TUN[k].min && sp[k] <= TUN[k].max, k + ' ' + sp[k]);
+    });
+
+    // ── 3. an EXPERIENCED store is never touched ────────────────────────
+    {
+        const own = {
+            runs: 40, bartender: 'joe', rewardEpoch: CUR_EPOCH, enemyMulEpoch6107: 1,
+            cem: { mean: { 'movement.standoff': 120 }, sigma: { 'movement.standoff': 20 }, gen: 7, batch: [] },
+            enemyTypeMul: { drunk: 1.05 }, enemyTypeN: { drunk: 50 },
+            spawnIntel: { boss_nobook: { n: 3, sum: 600 } }
+        };
+        const b = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 },
+            storage: { pineBotUCB_v5_joe: JSON.stringify(own) } });
+        b.pineBot.stop();
+        const L2 = b.pineBot.test.getLearn();
+        test('a store with its own CEM keeps its mean', () =>
+            assert.strictEqual(L2.cem.mean['movement.standoff'], 120, JSON.stringify(L2.cem.seeded)));
+        test('...and its generation, and carries no seed record', () =>
+            assert.ok(L2.cem.gen === 7 && !L2.cem.seeded, JSON.stringify({ gen: L2.cem.gen, seeded: L2.cem.seeded })));
+        test('...a dimension the old store lacked is backfilled at the CONFIG default, not the shipped mean', () => {
+            b.pineBot.test.applyDefaults();
+            const k = 'movement.lootPull';
+            assert.ok(Math.abs(L2.cem.mean[k] - b.pineBot.config.movement.lootPull) < 1e-9, k + ' ' + L2.cem.mean[k]);
+            assert.ok(Math.abs(L2.cem.mean[k] - S.cem[k][0]) > 1e-6, k + ' took the shipped mean into an experienced store');
+        });
+        test('a store with its own enemy table keeps it', () =>
+            assert.ok(L2.enemyTypeMul.drunk === 1.05 && L2.enemyTypeN.drunk === 50 && !('runner' in L2.enemyTypeMul), JSON.stringify(L2.enemyTypeMul)));
+        test('a store with its own timetable keeps it', () =>
+            assert.ok(L2.spawnIntel.boss_nobook.n === 3 && !('boss_karaoke' in L2.spawnIntel), JSON.stringify(L2.spawnIntel)));
+    }
+
+    // ── 4. the off switch ───────────────────────────────────────────────
+    {
+        const c = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+        c.pineBot.stop();
+        c.pineBot.config.learning.shippedSkill = false;
+        for (const k of Object.keys(c.store)) if (/pineBotUCB_v5/.test(k)) delete c.store[k];
+        c.pineBot.test.reloadLearn();
+        c.pineBot.test.applyDefaults();
+        const L3 = c.pineBot.test.getLearn();
+        test('learning.shippedSkill = false is a cold start at the CONFIG defaults', () =>
+            assert.ok(Math.abs(L3.cem.mean['movement.standoff'] - c.pineBot.config.movement.standoff) < 1e-9 && !L3.cem.seeded,
+                JSON.stringify({ mean: L3.cem.mean['movement.standoff'], cfg: c.pineBot.config.movement.standoff, seeded: L3.cem.seeded })));
+        test('...with an empty fear table and no timetable', () =>
+            assert.ok(!Object.keys(L3.enemyTypeMul).length && !Object.keys(L3.spawnIntel).length, JSON.stringify(L3.enemyTypeMul)));
     }
     done();
 }

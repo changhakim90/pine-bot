@@ -39,6 +39,7 @@
             if (runActive) {
                 deathSnapshot = deathSnapshot || snapshotStats();
                 finishRun();
+                if (!running) return;   // v6.135.0: one-run mode — booked, now stop, no restart
                 setStatus('RUN CAP: booked by force at stage 3');
             }
             if (!capForcedThisRun) { capForcedThisRun = true; log('run cap: hard book + restart'); }
@@ -469,6 +470,31 @@
     // so the run BOOKS and the farm carries on. Deliberately NOT endRun(),
     // which books the row but also stops the bot and needs a human to
     // restart it.
+    // v6.135.0 the two player-owned settings. Both persist immediately and
+    // both are safe to call mid-run: the pin is read at the next run start,
+    // and the loop mode is armed at the next startRun() — so neither can
+    // interrupt a run in progress. `paintControls` is assigned by buildPanel
+    // so a console call repaints the chips too.
+    let paintControls = () => {};
+    function setPin(c) {
+        control.pin = (c && CHARS[c]) ? c : null;
+        saveControl();
+        log('pin →', control.pin || 'auto (rotation)');
+        setStatus(control.pin ? 'next run: ' + control.pin + ' (pinned)' : 'next run: rotation');
+        paintControls();
+        return control.pin || 'auto';
+    }
+    function setLoop(mode) {
+        control.loop = mode === 'single' ? 'single' : 'continuous';
+        saveControl();
+        // if a run is in progress the change applies to THIS run's end too —
+        // arming now is what the player means by "stop after this one".
+        if (runActive) singleArmed = control.loop === 'single';
+        log('loop →', control.loop);
+        setStatus(control.loop === 'single' ? 'one-run mode: stops after this run' : 'loop mode: runs restart');
+        paintControls();
+        return control.loop;
+    }
     function killNow() {
         if (!runActive) { setStatus('no run in progress'); return 'no run in progress'; }
         capEarly = true;
@@ -595,6 +621,58 @@
         };
         r2.appendChild(killBtn); r2.appendChild(repBtn); r2.appendChild(recBtn);
         el.appendChild(r2);
+
+        // ── row 3: who plays next (v6.135.0) ─────────────────────────────
+        // USER: "allow the player to select the character then start the
+        // bot." Four chips: auto = the round-robin as before; a name pins it.
+        // The pin is read by chooseBartender() at the NEXT run start, so the
+        // way to use it is: ■ Stop (or let one-run mode stop), pick, ▶ Start.
+        // Persisted in the control store — survives reload and every counter
+        // reset, because the player set it and the bot did not.
+        const r3 = pbRow(3);
+        const charBtns = {};
+        const paintChars = () => {
+            for (const k in charBtns) {
+                const on = (k === 'auto') ? !control.pin : control.pin === k;
+                charBtns[k].style.background = on ? 'rgba(90,140,220,.9)' : 'rgba(255,255,255,.08)';
+                charBtns[k].style.color = on ? '#fff' : '#cdd';
+            }
+        };
+        for (const k of ['auto', 'joe', 'minguk', 'pat']) {
+            const b = pbBtn(k === 'auto' ? '⟳ auto' : k, {
+                title: k === 'auto' ? 'Rotate joe → minguk → pat, one per run (the training default)'
+                                    : 'Play ' + k + ' on every run until un-pinned',
+                grow: true, pad: '3px 2px'
+            });
+            b.onclick = () => { setPin(k === 'auto' ? null : k); paintChars(); };
+            charBtns[k] = b; r3.appendChild(b);
+        }
+        paintChars();
+        el.appendChild(r3);
+
+        // ── row 4: loop mode (v6.135.0) ──────────────────────────────────
+        // USER: "end the loop cycle for training." One button, two states.
+        // 🔁 Loop: a run ends -> RETRY -> the next run starts, unattended.
+        // ① One run: the run is booked exactly as always, then the bot stops
+        // at the results screen and hands the game back. Takes effect at the
+        // end of the CURRENT run — it never cuts a run short (⏻ End Run does
+        // that). It re-arms every run, so it is a mode, not a one-shot.
+        const r4 = pbRow();
+        const loopBtn = pbBtn('', { grow: true });
+        const paintLoop = () => {
+            const single = control.loop === 'single';
+            loopBtn.textContent = single ? '① One run, then stop' : '🔁 Loop runs';
+            loopBtn.title = single
+                ? 'After this run is booked the bot stops at the results screen. Click to loop again.'
+                : 'Runs restart automatically. Click to stop after the current run instead.';
+            loopBtn.style.background = single ? 'rgba(220,160,60,.85)' : 'rgba(255,255,255,.08)';
+            loopBtn.style.color = single ? '#fff8e6' : '#cdd';
+        };
+        loopBtn.onclick = () => { setLoop(control.loop === 'single' ? 'continuous' : 'single'); paintLoop(); };
+        paintLoop();
+        r4.appendChild(loopBtn);
+        el.appendChild(r4);
+        paintControls = () => { paintChars(); paintLoop(); };
 
         // ── status + live info ───────────────────────────────────────────
         const stWrap = document.createElement('div');
@@ -763,6 +841,7 @@
                 lastGradient: learn.lastGradient || null,
                 cem: {
                     generation: learn.cem.gen,
+                    seeded: learn.cem.seeded || null,   // v6.136.0: shipped-skill provenance, or null
                     batch: learn.cem.batch.length + '/' + CONFIG.learning.batchSize,
                     mean: Object.fromEntries(Object.entries(learn.cem.mean).map(([k, v]) => [k, +v.toFixed(3)])),
                     explorationPct: Object.fromEntries(Object.entries(learn.cem.sigma).map(([k, v]) => {
@@ -1417,6 +1496,11 @@
         try {
             window.pineBot = {
                 start: startBot, stop: stopBot, diagnose, reset: resetLearn,
+                // v6.135.0 player controls (also on the panel). pin('pat') /
+                // pin(null); loop('single') / loop('continuous'); control()
+                // reads both back.
+                pin: setPin, loop: setLoop,
+                control: () => Object.assign({ armed: singleArmed, running }, control),
                 // v6.104.0: the panel's ⏻ End Run, callable from the console.
                 // Latches the early cap so the tested ladder ends the run and
                 // the farm restarts; endRun() below books but STOPS the bot.
@@ -1475,11 +1559,14 @@
                     // v6.111.0: the one-shot migration table, so store-guard can
                     // assert it is emptied once its migration has run.
                     tunablePrior: () => JSON.parse(JSON.stringify(TUNABLE_PRIOR)),
+                    shippedSkill: () => JSON.parse(JSON.stringify(SHIPPED_SKILL)),   // v6.136.0
+                    typeMulOf: t => typeMul(t),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.133.0: read the craft audit back. `ready` was
                     // structurally 0 for 1,079 runs and nothing could see it.
                     craftAudit: () => JSON.parse(JSON.stringify(craftAudit)),
                     craftReserve: () => new Set(CRAFT_RESERVE),   // v6.133.0: prove it is DERIVED, not hand-listed
+                    superLineCocktails: () => SUPER_LINE_COCKTAILS.slice(),   // v6.135.0: the exempt set, for the gun-path test
                     // v6.88.0 AUDIT: hooks for the regression suite
                     versionRows, applyParams, saveLearn, pruneVersions,
                     // v6.96.2: store-guard + phase-audit hooks
@@ -1569,7 +1656,10 @@
                     // clamp against. tunablePrior() kept its copy; these two
                     // halves of the same idiom had drifted apart.
                     setCemMean: (k, v) => { learn.cem.mean[k] = v; },
-                    bossRing: () => bossRingRef.v,
+                    // (v6.135.0 AUDIT C1: a second `bossRing` key sat here — the
+                    // same duplicate-key defect 6.122.0 fixed for `tunable`, 22
+                    // lines up. Identical body, so harmless today; removed so
+                    // an edit to the first copy cannot be silently discarded.)
                     // v6.107.0 tag-bandit hooks
                     tagsOf, enemyContextBonus,
                     setTagUcb: obj => { learn.tagucb = obj; },
@@ -1614,7 +1704,7 @@
                     phaseRow: (t, hell) => buildPhaseRow(t, hell),
                     capState: () => ({ capEarly, lastResetReason: capLastResetReason,
                                        satSince, satPeakEn, capFirstWall }),
-                    setSupers: n => { supersThisRun = n; },
+                    // (v6.135.0 AUDIT C1: duplicate `setSupers` removed here; the live one is above.)
                     speedSamples: () => spdSamples.slice(),
                     capDebug: () => ({ capStableSince, capEarly, capDipSince, capBestStreakS, capLastResetReason, capFirstGt, capForcedThisRun, capReadyGt }),
                     // v6.86.11: the pat/minguk rotation is testable — the pin
@@ -2210,6 +2300,12 @@
                     // re-opened, and when. Silent until a box actually moves.
                     reopen: safe(() => learn.cem.lastReopen, null),
                     reopens: safe(() => learn.cem.reopens, 0),
+                    // v6.136.0: where a fresh store's CEM started. `null` on
+                    // a store that predates the shipped skill or brought its
+                    // own tuning; otherwise the reference store's provenance.
+                    seeded: safe(() => learn.cem.seeded || null, null),
+                    enemySeeded: !!(learn && learn.enemyMulSeeded),
+                    spawnSeeded: !!(learn && learn.spawnSeeded),
                     tags, enemy, params,
                     anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
                 };

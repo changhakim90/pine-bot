@@ -26,9 +26,10 @@ anything in its area:
 
 | doc | covers |
 | --- | --- |
+| `claude/current-state.md` | Start here. One page on what the bot does as of the current version — the gate, the gun doctrine, the panel controls, the learners, how to run and ship. |
 | `claude/release-state.md` | Read before shipping. Where each version stands, the release loop, statistics discipline, and every proxy-reading mistake made so far. |
 | `claude/immortal-stop-rule.md` | The graduation rule end to end — the predicate, the resets, the rotation, the race ledger. |
-| `claude/learning-architecture.md` | The five learners, what is and is not learned, and the rules for adding a CEM dimension. |
+| `claude/learning-architecture.md` | The five learners, what is and is not learned, the rules for adding a CEM dimension, and the shipped skill a fresh install starts from. |
 | `claude/optimizer-ceiling.md` | Why `planMove` was never JIT-compiled, and the 61,440-byte bytecode ceiling it must stay under. |
 | `claude/game-source-facts.md` | Facts read from the game's own source — the real numbers behind every scoring assumption. |
 

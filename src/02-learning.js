@@ -278,15 +278,67 @@
                 for (const s of d.pop) if (s.n > 0 && (!best || s.sum / s.n > best.sum / best.n)) best = s;
                 if (best) seed = best.params;
             } else if (d.tuning && d.tuning.best) seed = d.tuning.best;
+            // v6.136.0 SHIPPED SKILL: a store with no tuning of ANY kind — no
+            // cem, no legacy population, no single-point best — starts on
+            // the reference store's converged means (SHIPPED_SKILL in part
+            // 01), not on the CONFIG defaults. Only dims whose shipped box
+            // equals the live box are taken; a dim whose box has moved since
+            // the reference was exported falls back to DEFAULT_PARAMS with a
+            // full sigmaInit, exactly as a brand-new dimension would.
+            const shipped = seed === DEFAULT_PARAMS && CONFIG.learning.shippedSkill !== false &&
+                typeof SHIPPED_SKILL === 'object' && SHIPPED_SKILL && SHIPPED_SKILL.cem;
+            const seedFrac = isFinite(CONFIG.learning.sigmaSeed) ? CONFIG.learning.sigmaSeed : 0.10;
             const mean = {}, sigma = {};
+            let seededDims = 0;
             for (const k of Object.keys(TUNABLE)) {
-                const spec = TUNABLE[k];
+                const spec = TUNABLE[k], range = spec.max - spec.min;
+                const sh = shipped && SHIPPED_SKILL.cem[k], box = shipped && SHIPPED_SKILL.cemBox && SHIPPED_SKILL.cemBox[k];
+                if (sh && isFinite(sh[0]) && box && box[0] === spec.min && box[1] === spec.max) {
+                    mean[k] = Math.min(spec.max, Math.max(spec.min, sh[0]));
+                    sigma[k] = Math.max(isFinite(sh[1]) ? sh[1] : 0, range * seedFrac);
+                    seededDims++;
+                    continue;
+                }
                 mean[k] = Math.min(spec.max, Math.max(spec.min, seed[k] ?? DEFAULT_PARAMS[k]));
-                sigma[k] = (spec.max - spec.min) * CONFIG.learning.sigmaInit;
+                sigma[k] = range * CONFIG.learning.sigmaInit;
             }
             d.cem = { mean, sigma, batch: [], gen: 0 };
+            if (seededDims) d.cem.seeded = Object.assign({ dims: seededDims, sigmaSeed: seedFrac }, SHIPPED_SKILL.source || {});
             delete d.pop;
             delete d.tuning;
+        }
+        // v6.136.0 SHIPPED SKILL, the two tables the CEM does not cover. Both
+        // seeds are gated on EMPTINESS, never on a flag: a store that has
+        // ever written a single entry of its own keeps it, and the reference
+        // values are a starting point that the run-end updaters (EMA for the
+        // fear table, decayed mean for the timetable) overwrite at their
+        // normal rate. The shared-store migration above already refuses a
+        // pre-6.107.0 ratcheted table (it adopts enemyTypeMul only when the
+        // seed carries `enemyMulEpoch6107`), so what reaches this point is
+        // either a table the player earned or an empty one — and only the
+        // empty one is seeded.
+        if (CONFIG.learning.shippedSkill !== false && typeof SHIPPED_SKILL === 'object' && SHIPPED_SKILL) {
+            try {
+                if (SHIPPED_SKILL.enemy && !Object.keys(d.enemyTypeMul || {}).length && !Object.keys(d.enemyTypeN || {}).length) {
+                    d.enemyTypeMul = {}; d.enemyTypeN = {};
+                    for (const k of Object.keys(SHIPPED_SKILL.enemy)) {
+                        const [mul, n] = SHIPPED_SKILL.enemy[k];
+                        if (!isFinite(mul) || !isFinite(n)) continue;
+                        d.enemyTypeMul[k] = Math.max(0.6, Math.min(2.2, mul));
+                        d.enemyTypeN[k] = n;
+                    }
+                    d.enemyMulSeeded = 1;
+                }
+                if (SHIPPED_SKILL.spawn && !Object.keys(d.spawnIntel || {}).length) {
+                    const w = isFinite(SHIPPED_SKILL.spawnWeight) ? SHIPPED_SKILL.spawnWeight : 20;
+                    d.spawnIntel = {};
+                    for (const k of Object.keys(SHIPPED_SKILL.spawn)) {
+                        const gt = SHIPPED_SKILL.spawn[k];
+                        if (isFinite(gt) && gt > 5) d.spawnIntel[k] = { n: w, sum: w * gt };
+                    }
+                    d.spawnSeeded = 1;
+                }
+            } catch (e) { }
         }
         // CRITICAL: backfill parameters added in NEWER versions. A stored CEM
         // from an older script lacks entries for new TUNABLE keys; sampling
