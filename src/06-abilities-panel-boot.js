@@ -841,6 +841,7 @@
                 lastGradient: learn.lastGradient || null,
                 cem: {
                     generation: learn.cem.gen,
+                    seeded: learn.cem.seeded || null,   // v6.136.0: shipped-skill provenance, or null
                     batch: learn.cem.batch.length + '/' + CONFIG.learning.batchSize,
                     mean: Object.fromEntries(Object.entries(learn.cem.mean).map(([k, v]) => [k, +v.toFixed(3)])),
                     explorationPct: Object.fromEntries(Object.entries(learn.cem.sigma).map(([k, v]) => {
@@ -1558,6 +1559,8 @@
                     // v6.111.0: the one-shot migration table, so store-guard can
                     // assert it is emptied once its migration has run.
                     tunablePrior: () => JSON.parse(JSON.stringify(TUNABLE_PRIOR)),
+                    shippedSkill: () => JSON.parse(JSON.stringify(SHIPPED_SKILL)),   // v6.136.0
+                    typeMulOf: t => typeMul(t),
                     evolutionPending, takeCraftPrompt, stateHandlers: STATE_HANDLERS, handleScreens,
                     // v6.133.0: read the craft audit back. `ready` was
                     // structurally 0 for 1,079 runs and nothing could see it.
@@ -2297,6 +2300,12 @@
                     // re-opened, and when. Silent until a box actually moves.
                     reopen: safe(() => learn.cem.lastReopen, null),
                     reopens: safe(() => learn.cem.reopens, 0),
+                    // v6.136.0: where a fresh store's CEM started. `null` on
+                    // a store that predates the shipped skill or brought its
+                    // own tuning; otherwise the reference store's provenance.
+                    seeded: safe(() => learn.cem.seeded || null, null),
+                    enemySeeded: !!(learn && learn.enemyMulSeeded),
+                    spawnSeeded: !!(learn && learn.spawnSeeded),
                     tags, enemy, params,
                     anchor: { armedTicksThisRun: dropAnchorTicks, lastArmedGt: Math.round(dropAnchorLastGt) }
                 };

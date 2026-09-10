@@ -1,6 +1,6 @@
 # Release state — read this before shipping a bot version
 
-Last updated 2026-09-10 at **6.135.0**. The "Where things stand" table and
+Last updated 2026-09-10 at **6.136.0**. The "Where things stand" table and
 the "release loop" section below are the 2026-09-04 record and are kept as
 written; everything that has moved since is in the block directly under
 this paragraph. Measured performance lives in `claude/version-history.md`
@@ -12,7 +12,21 @@ write-ups: `claude/immortal-stop-rule.md` (the rule, resets through 134),
 `claude/shared-skill-architecture.md`, and **`claude/current-state.md` — the
 one-page summary of the bot as it is now; start there.**
 
-## As of 6.135.0 (2026-09-10) — what changed since the table below
+## As of 6.136.0 (2026-09-10) — what changed since the table below
+
+**6.136.0 — the shipped skill.** Built on top of 6.135.0 in the sandbox
+(`/home/claude/live`, working tree; the sandbox cannot push — deliver as a
+patch or the built userscript). `npm test` green: 108 scenarios (new
+`shipped-skill`, 23 assertions), 1,124 assertions. `golden-plans.json`
+untouched — `plan-scenes.js` now clears the learned fear table beside
+`applyDefaults()` so the golden set stays a planner test; a seeded fresh
+store moves 237/240 plans, which is the feature. Data source for
+`SHIPPED_SKILL`: `/home/claude/report83.json` (the 2026-09-03 report,
+`6.123.0+crown+joe`, 9,569 runs, gen 754). **Refresh it from a post-6.134.0
+report once the reference store has re-converged** — the `shipped-skill`
+test fails the build if a TUNABLE box moves without the table following.
+No counter reset; the reference store is untouched by design (the seed is
+gated on emptiness).
 
 **Shipped 2026-09-10 from branch `ship`** (rebased onto the merged
 `origin/main` = `f0cfd35`, PR #7, which already carries 6.133.0 as `d5b7142`).
@@ -26,6 +40,7 @@ Delivered as `6.135.0-on-main.patch` — three commits: 6.133.1 `e59f702`,
 
 | version | on `origin/main`? | what |
 |---|---|---|
+| **6.136.0** | built, not yet delivered | The shipped skill: a fresh install starts on the reference store's learned state (29 CEM means at 10% sigma, the enemy fear table, the boss timetable) instead of a cold start. Seeding is gated on emptiness — experienced stores untouched. `learning.shippedSkill: false` = cold start. `plan-diff`: golden set unchanged (fear table cleared in the recorder). **No counter reset.** |
 | **6.135.0** | patch delivered, merge pending | Player controls (character pin + one-run loop mode, persisted in their own store), the code-health audit (rainbow-rush respected a cap that could never bind; MOJITO was on its own avoid list; graduation store missing from the namespace migration; duplicate test-surface keys; dead LAST_RESORT clamp; a swallowed immortal-count write; the runner reporting a timeout as a test failure; one shared scenario list), stale comments corrected in place, three tests renamed to what they actually measure. `plan-diff` vs 6.131.0 still `0 differ`. **No counter reset.** |
 | 6.134.0 | merged | **The ` UP` card fix** — `baseNameOf` never stripped the level-up suffix, so every name-keyed lookup in the scorer matched only the acquisition card; every ingredient level-up scored 9 and was chosen by noise. Sixth reset. `claude/up-card-blindness.md`. |
 | 6.133.1 | merged | Vermouth clause dropped from the immortal gate (SWEET VERMOUTH is MANHATTAN's super key — the gate was arming the gun). No reset. |

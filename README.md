@@ -50,7 +50,7 @@ disabled so every tab keeps full frame rate.
 ## The panel
 
 ```
-🍸 Pine Bot v6.135.0                              –
+🍸 Pine Bot v6.136.0                              –
 ▶ Start   ■ Stop   ⏻ End Run   📋   🎥
 ⟳ auto   joe   minguk   pat
 🔁 Loop runs
@@ -76,6 +76,13 @@ by any counter reset.
 1. Script installed, game on its title screen.
 2. Leave ⟳ auto (or pick one — pat is sturdiest, joe weakest) and 🔁 Loop runs.
 3. ▶ Start. Walk away.
+
+A fresh install already plays like a trained one: the script ships with the
+learned state of the reference store (9,569 runs — the movement/threat
+optimizer's converged values, the enemy fear table, the measured boss
+timetable) and starts every new profile from it. Your own runs refine it
+from there; a profile that has already learned anything keeps what it has.
+`pineBot.learning().seeded` says what a profile started from.
 
 The bot drives every menu: select, intro, level-ups, crafts, the after-hours
 choice (always Hell), results, next run. To play yourself: ■ Stop, play. To
@@ -156,7 +163,9 @@ target, hours to target, median gt at which each build proved itself).
 ## Training faster
 
 There is **no offline training**: every learner needs a run's reward and the
-only source is the game playing a run. What you can do:
+only source is the game playing a run. A new profile does not start from
+scratch, though — it starts from the shipped skill above, so the runs you
+play refine rather than rebuild. What you can do:
 
 - **Parallel tabs, one brain** — `node run/playwright.js --headless --tabs 4
   --profile ./farm`. All tabs share one `localStorage`; each run merges into

@@ -1189,12 +1189,17 @@ if (which === 'cem-heal') {
         test('the step size is reset to a finite value', () => assert.ok(isFinite(L.cem.ss)));
         test('NaN entries are stripped from hof vectors', () =>
             assert.ok(!('movement.killOrderDist' in L.hof[0].p)));
-        test('the ratcheted enemyTypeMul store is cleared', () =>
+        test('the ratcheted enemyTypeMul store is cleared', () => {
             // v6.127.0: enemyTypeMul/enemyTypeN moved into the SHARED store,
-            // which always initialises the field to {} rather than leaving it
-            // `delete`d/undefined (see loadLearnInner) — same "cleared, not
-            // carrying stale ratchets" guarantee, different empty value.
-            assert.deepStrictEqual(L.enemyTypeMul, {}));
+            // which refuses a pre-6.107.0 table outright (see loadLearnInner).
+            // v6.136.0: the cleared table is then SEEDED from SHIPPED_SKILL,
+            // so "cleared" now means: the ratcheted entries are gone and
+            // nothing present exceeds the applied ceiling.
+            assert.ok(!('mob' in L.enemyTypeMul), 'ratcheted mob survived: ' + JSON.stringify(L.enemyTypeMul));
+            assert.ok(!(L.enemyTypeMul.bomber > 1.5), 'ratcheted bomber survived: ' + L.enemyTypeMul.bomber);
+            for (const k of Object.keys(L.enemyTypeMul))
+                assert.ok(L.enemyTypeMul[k] <= pineBot.config.learning.enemyMulCeil, k + ' ' + L.enemyTypeMul[k]);
+        });
         const sp = pineBot.test.sampleParams();
         test('sampling is finite again for every dimension', () =>
             assert.ok(Object.keys(sp).every(k => isFinite(sp[k])), JSON.stringify(sp).slice(0, 120)));
@@ -4688,6 +4693,9 @@ if (which === 'runaway-guard') {
     const T = pineBot.test;
     const TUN = T.tunable ? T.tunable() : null;
     const C = pineBot.config;
+    // v6.136.0: boot applies the CEM mean — now the SHIPPED one on a fresh
+    // store — over CONFIG. This test is about the DOCUMENTED defaults.
+    T.applyDefaults();
     const get = k => k.split('.').reduce((o, x) => o && o[x], C);
 
     if (!TUN) { test('TUNABLE is reachable from the test surface', () => assert.ok(false, 'no accessor')); done(); }
@@ -6442,6 +6450,9 @@ if (which === 'nudge-ratchet') {
     //    the pinned era carry the corner inside them).
     L.hof = [{ r: 3, p: { ...L.cem.mean } }];
     const res = global.window.pineBot.recenterSearch();
+    // v6.136.0: the live config carries the SHIPPED mean on a fresh store;
+    // recenter goes to the documented CONFIG default, so read that.
+    T.applyDefaults();
     test('recenterSearch returns the mean to the config default', () =>
         assert.ok(Math.abs(L.cem.mean['movement.standoff'] - pineBot.config.movement.standoff) < 1,
             'standoff ' + L.cem.mean['movement.standoff'] + ' vs ' + pineBot.config.movement.standoff));
@@ -7266,6 +7277,9 @@ if (which === 'lane-escape') {
     const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 900, hell: false } });
     pineBot.stop();
     pineBot.test.applyDefaults();
+    // v6.136.0: a fresh store boots on the shipped enemy fear table (drunk
+    // 1.385x); the crowd scenes below were calibrated on static fear.
+    pineBot.test.setEnemyMul({}); pineBot.test.setEnemyN({});
     const T = pineBot.test, C = pineBot.config;
 
     // A horizontal charge lane through the middle of the field, with the
@@ -7403,6 +7417,10 @@ if (which === 'lane-escape') {
     // pair carried one number twice. A diversion is the thing worth counting.
     test('laneDiv counts overrules, not firings', () => {
         T.startRun();
+        // startRun's trial reloads the store and plays the CEM mean — the
+        // SHIPPED mean and fear table on a fresh store (6.136.0). Put the
+        // scene back on the static values it was calibrated against.
+        T.applyDefaults(); T.setEnemyMul({}); T.setEnemyN({});
         // player deep in an armed lane with a crowd sitting on the exit: the
         // field wants to stay, the override leaves anyway = a real diversion.
         put(300, 285, [lane(true)]);
@@ -10117,6 +10135,146 @@ if (which === 'passout-cluster-aim') {
         test('minguk: aim sits well outside the near pile — clearly further than the clustered aim', () =>
             assert.ok(plan.poCentroidDist - plan.poNearest > 5,
                 JSON.stringify({ centroid: plan.poCentroidDist, nearest: plan.poNearest })));
+    }
+    done();
+}
+
+// v6.136.0 THE SHIPPED SKILL — user: "make it so that the learnings are
+// built in on the script itself so when a new player starts it doesn't have
+// to play multiple runs." A store with no tuning of its own boots on the
+// reference store's converged CEM means (9,569 runs), the learned enemy
+// fear table, and the measured boss timetable. A store that has any of
+// these keeps its own. The table is data copied from a 📋 report, so the
+// guards here are about its SHAPE staying honest: every key is a live
+// dimension, every value is inside its box, and every box is the one the
+// value was trained under.
+if (which === 'shipped-skill') {
+    const { pineBot } = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+    pineBot.stop();
+    const T = pineBot.test;
+    const S = T.shippedSkill();
+    const TUN = T.tunable();
+    const L = T.getLearn();
+    const seedFrac = pineBot.config.learning.sigmaSeed;
+
+    // ── 1. the table itself ─────────────────────────────────────────────
+    test('every shipped CEM key is a live TUNABLE dimension', () => {
+        for (const k of Object.keys(S.cem)) assert.ok(TUN[k], k + ' is not in TUNABLE — a dead dimension is being shipped');
+    });
+    test('every shipped mean sits inside its live box', () => {
+        for (const k of Object.keys(S.cem)) {
+            const [m, s] = S.cem[k];
+            assert.ok(isFinite(m) && isFinite(s) && s >= 0, k + ' ' + JSON.stringify(S.cem[k]));
+            assert.ok(m >= TUN[k].min - 1e-9 && m <= TUN[k].max + 1e-9, k + ' mean ' + m + ' outside ' + JSON.stringify(TUN[k]));
+        }
+    });
+    test('every shipped box equals the live box (a moved box means a stale value)', () => {
+        for (const k of Object.keys(S.cem)) {
+            const b = S.cemBox[k];
+            assert.ok(b, k + ' has no cemBox record');
+            assert.ok(b[0] === TUN[k].min && b[1] === TUN[k].max,
+                k + ' trained under [' + b + '] but the live box is [' + TUN[k].min + ',' + TUN[k].max + '] — refresh SHIPPED_SKILL from a report on the current box, or the loader will (correctly) ignore this dim');
+        }
+    });
+    test('every live dimension has a shipped value (a new dim needs a conscious entry or an explicit cold start)', () => {
+        const missing = Object.keys(TUN).filter(k => !S.cem[k]);
+        assert.deepStrictEqual(missing, [], 'unshipped dims: ' + missing.join(', '));
+    });
+    test('the provenance is recorded', () =>
+        assert.ok(S.source && S.source.runs > 1000 && /^\d+\.\d+\.\d+/.test(S.source.version), JSON.stringify(S.source)));
+    test('shipped enemy fear stays inside the store clamp and the applied band', () => {
+        for (const k of Object.keys(S.enemy)) {
+            const [mul, n] = S.enemy[k];
+            assert.ok(mul >= 0.6 && mul <= 2.2 && n >= pineBot.config.learning.enemyMulMinN, k + ' ' + JSON.stringify(S.enemy[k]));
+            assert.ok(mul <= pineBot.config.learning.enemyMulCeil, k + ' ' + mul + ' would be clamped by enemyMulCeil — ship what is applied');
+        }
+    });
+
+    // ── 2. a FRESH store boots on it ────────────────────────────────────
+    test('a fresh store\'s CEM mean is the shipped mean, not the CONFIG default', () => {
+        for (const k of Object.keys(S.cem))
+            assert.ok(Math.abs(L.cem.mean[k] - S.cem[k][0]) < 1e-9, k + ' ' + L.cem.mean[k] + ' vs shipped ' + S.cem[k][0]);
+    });
+    test('...and it is APPLIED: the live config carries the shipped mean at boot', () =>
+        assert.ok(Math.abs(pineBot.config.movement.standoff - S.cem['movement.standoff'][0]) < 1e-9,
+            'live standoff ' + pineBot.config.movement.standoff));
+    test('a converged shipped sigma is re-floored to sigmaSeed x range', () => {
+        const k = 'movement.panicHp', range = TUN[k].max - TUN[k].min;
+        assert.ok(S.cem[k][1] < range * seedFrac, 'fixture: ' + k + ' is no longer converged in the table');
+        assert.ok(Math.abs(L.cem.sigma[k] - range * seedFrac) < 1e-9, k + ' sigma ' + L.cem.sigma[k] + ' vs ' + range * seedFrac);
+    });
+    test('...and a wider shipped sigma is kept as shipped', () => {
+        const k = 'movement.lootPull', range = TUN[k].max - TUN[k].min;
+        assert.ok(S.cem[k][1] > range * seedFrac, 'fixture: ' + k + ' is narrower than sigmaSeed in the table');
+        assert.ok(Math.abs(L.cem.sigma[k] - S.cem[k][1]) < 1e-9, k + ' sigma ' + L.cem.sigma[k]);
+    });
+    test('sigmaSeed sits between the floor and a cold start', () =>
+        assert.ok(seedFrac > pineBot.config.learning.sigmaFloor && seedFrac < pineBot.config.learning.sigmaInit, String(seedFrac)));
+    test('the seed is recorded on the CEM with its provenance, at generation 0', () =>
+        assert.ok(L.cem.seeded && L.cem.seeded.runs === S.source.runs && L.cem.seeded.dims === Object.keys(S.cem).length && L.cem.gen === 0,
+            JSON.stringify(L.cem.seeded)));
+    test('the enemy fear table is seeded and APPLIED from run one', () => {
+        assert.strictEqual(L.enemyTypeMul.drunk, S.enemy.drunk[0]);
+        assert.strictEqual(L.enemyTypeN.drunk, S.enemy.drunk[1]);
+        assert.ok(Math.abs(T.typeMulOf('drunk') - S.enemy.drunk[0]) < 1e-9, 'applied ' + T.typeMulOf('drunk'));
+        assert.strictEqual(T.typeMulOf('bomber'), 1);
+    });
+    test('the boss timetable is seeded at the census medians', () => {
+        const si = L.spawnIntel;
+        for (const k of Object.keys(S.spawn))
+            assert.ok(si[k] && Math.abs(si[k].sum / si[k].n - S.spawn[k]) < 1e-9 && si[k].n === S.spawnWeight, k + ' ' + JSON.stringify(si[k]));
+    });
+    test('the report names the seed', () => {
+        const r = pineBot.learning();
+        assert.ok(r.seeded && r.seeded.runs === S.source.runs && r.enemySeeded && r.spawnSeeded, JSON.stringify(r.seeded));
+    });
+    test('sampling around the seeded mean is finite for every dimension', () => {
+        const sp = T.sampleParams();
+        for (const k of Object.keys(TUN)) assert.ok(isFinite(sp[k]) && sp[k] >= TUN[k].min && sp[k] <= TUN[k].max, k + ' ' + sp[k]);
+    });
+
+    // ── 3. an EXPERIENCED store is never touched ────────────────────────
+    {
+        const own = {
+            runs: 40, bartender: 'joe', rewardEpoch: CUR_EPOCH, enemyMulEpoch6107: 1,
+            cem: { mean: { 'movement.standoff': 120 }, sigma: { 'movement.standoff': 20 }, gen: 7, batch: [] },
+            enemyTypeMul: { drunk: 1.05 }, enemyTypeN: { drunk: 50 },
+            spawnIntel: { boss_nobook: { n: 3, sum: 600 } }
+        };
+        const b = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 },
+            storage: { pineBotUCB_v5_joe: JSON.stringify(own) } });
+        b.pineBot.stop();
+        const L2 = b.pineBot.test.getLearn();
+        test('a store with its own CEM keeps its mean', () =>
+            assert.strictEqual(L2.cem.mean['movement.standoff'], 120, JSON.stringify(L2.cem.seeded)));
+        test('...and its generation, and carries no seed record', () =>
+            assert.ok(L2.cem.gen === 7 && !L2.cem.seeded, JSON.stringify({ gen: L2.cem.gen, seeded: L2.cem.seeded })));
+        test('...a dimension the old store lacked is backfilled at the CONFIG default, not the shipped mean', () => {
+            b.pineBot.test.applyDefaults();
+            const k = 'movement.lootPull';
+            assert.ok(Math.abs(L2.cem.mean[k] - b.pineBot.config.movement.lootPull) < 1e-9, k + ' ' + L2.cem.mean[k]);
+            assert.ok(Math.abs(L2.cem.mean[k] - S.cem[k][0]) > 1e-6, k + ' took the shipped mean into an experienced store');
+        });
+        test('a store with its own enemy table keeps it', () =>
+            assert.ok(L2.enemyTypeMul.drunk === 1.05 && L2.enemyTypeN.drunk === 50 && !('runner' in L2.enemyTypeMul), JSON.stringify(L2.enemyTypeMul)));
+        test('a store with its own timetable keeps it', () =>
+            assert.ok(L2.spawnIntel.boss_nobook.n === 3 && !('boss_karaoke' in L2.spawnIntel), JSON.stringify(L2.spawnIntel)));
+    }
+
+    // ── 4. the off switch ───────────────────────────────────────────────
+    {
+        const c = makeEnv({ script: SCRIPT, game: { state: 'playing', gameTime: 5 } });
+        c.pineBot.stop();
+        c.pineBot.config.learning.shippedSkill = false;
+        for (const k of Object.keys(c.store)) if (/pineBotUCB_v5/.test(k)) delete c.store[k];
+        c.pineBot.test.reloadLearn();
+        c.pineBot.test.applyDefaults();
+        const L3 = c.pineBot.test.getLearn();
+        test('learning.shippedSkill = false is a cold start at the CONFIG defaults', () =>
+            assert.ok(Math.abs(L3.cem.mean['movement.standoff'] - c.pineBot.config.movement.standoff) < 1e-9 && !L3.cem.seeded,
+                JSON.stringify({ mean: L3.cem.mean['movement.standoff'], cfg: c.pineBot.config.movement.standoff, seeded: L3.cem.seeded })));
+        test('...with an empty fear table and no timetable', () =>
+            assert.ok(!Object.keys(L3.enemyTypeMul).length && !Object.keys(L3.spawnIntel).length, JSON.stringify(L3.enemyTypeMul)));
     }
     done();
 }

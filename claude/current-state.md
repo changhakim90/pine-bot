@@ -1,7 +1,7 @@
-# Current state — the bot as of 6.135.0
+# Current state — the bot as of 6.136.0
 
 Written 2026-09-10. This is the one-page summary; every claim here is true of
-the code at 6.135.0 and points to the doc that carries the history. When this
+the code at 6.136.0 and points to the doc that carries the history. When this
 page and an older doc disagree, this page wins and the older doc should be
 corrected — not the other way round.
 
@@ -107,8 +107,17 @@ CEM over ~30 movement/threat/strategy dims plus UCB bandits (card tags, enemy
 type multipliers, item/build, spawn intel). Since 6.127.0 the skill is ONE
 store across all three characters (`pineBotUCB_v5_shared`); `runs`, `history`,
 `hof` stay per character. There is no offline training — every learner needs
-a run's reward and the only source of one is the game. `claude/learning-
-architecture.md`, `claude/shared-skill-architecture.md`.
+a run's reward and the only source of one is the game.
+
+**A fresh install does not start from zero (6.136.0).** `SHIPPED_SKILL` in
+part 01 carries the reference store's learned state — the 2026-09-03 report,
+`6.123.0+crown+joe`, 9,569 runs, gen 754: all 29 CEM means (sigma re-floored
+to 10% of each box), the six enemy fear multipliers with their counts, and
+the boss census timetable. A store with no CEM / empty fear table / empty
+timetable starts on it; a store that has any of them keeps its own, so the
+reference store itself is untouched. `learning.shippedSkill: false` is the
+cold start. `claude/learning-architecture.md`,
+`claude/shared-skill-architecture.md`.
 
 ## Running it
 
@@ -140,6 +149,8 @@ version number. `claude/release-state.md`.
    spend two ingredient slots for a craft that never lands.
 3. **Post-6.134.0 re-convergence.** Every CEM mean was learned against a
    scorer that could not see level-ups. Judge 6.134.0+ rows on their own.
+   `SHIPPED_SKILL` was copied from that pre-fix store; refresh it from a
+   post-6.134.0 report once the reference store has settled.
 4. **Deep holds break on park, not damage** (`deepBreak.park` ≫ `ring`); the
    seat regen leg (`parkMiss.regen`) is the largest miss reason.
 5. `rainbow-rush` was gated (6.135.0) but the '6.79' scoring profile behind

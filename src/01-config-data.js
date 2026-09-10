@@ -1622,6 +1622,12 @@
             eliteFrac: 0.3,        // top fraction of the batch that shapes the refit
             sigmaInit: 0.25,       // initial exploration: fraction of each param's range
             sigmaFloor: 0.05,      // exploration never collapses below this
+            // v6.136.0: a FRESH store starts on SHIPPED_SKILL (the reference
+            // store's converged means) with sigma re-floored to this fraction
+            // of each box — between the floor and a cold start. `false`
+            // disables the seed entirely (cold start at DEFAULT_PARAMS).
+            shippedSkill: true,
+            sigmaSeed: 0.10,
             // v6.86.0 anti-lockup (see 02-learning: hofRecord / maybeRestart)
             hofMergeDist: 0.02,    // hof vectors closer than this (mean |delta|/range) are the SAME point
             autoRestart: true,
@@ -2838,6 +2844,120 @@
     }
     const DEFAULT_PARAMS = {};
     for (const k of Object.keys(TUNABLE)) DEFAULT_PARAMS[k] = getParam(k);
+
+    // =================================================================
+    // v6.136.0 SHIPPED SKILL — the learnings travel with the script
+    // =================================================================
+    // User: "make it so that the learnings are built in on the script itself
+    // so when a new player starts it doesn't have to play multiple runs."
+    //
+    // Until this version a fresh install started every learner from zero:
+    // the CEM at the CONFIG defaults with sigma at 25% of every box, the
+    // enemy-type fear table empty (nothing applied until 8 sole hits per
+    // type), the spawn timetable on the source-extracted fallback. The
+    // ~20-30 runs per dimension the learning-architecture doc quotes is the
+    // price of that cold start, and a new player paid it in full.
+    //
+    // This table is the learned state of the reference store — the 📋
+    // report of 2026-09-03: `6.123.0+crown+joe`, 9,569 runs, CEM generation
+    // 754 — copied verbatim. A store that has NO cem of its own is seeded
+    // from it instead of from DEFAULT_PARAMS (02-learning loadLearnInner);
+    // an empty enemy table and an empty spawn timetable are filled the same
+    // way. A store that already has any of these is never touched: this is
+    // a prior for the new player, not an override for the experienced one.
+    //
+    // What is shipped, and what is not:
+    //   cem          all 29 TUNABLE means and the sigma each had converged
+    //                to. Every box below matches the box the value was
+    //                trained under (asserted by the `shipped-skill` test —
+    //                a widened box would otherwise ship a stale corner).
+    //   enemyTypeMul the learned per-type fear (drunk/runner/boss ~1.36-1.39,
+    //                genz 1.10, thrower/bomber ~1.0) with the sole-hit
+    //                counts that back it, so it is APPLIED from run one.
+    //   spawnIntel   the boss census medians (first sighting per boss kind):
+    //                walls at 155 s, the first tier at 270 s, then 315 and
+    //                360 — not the 120/240/480 the source fallback assumes.
+    //   NOT shipped  the per-card item/LinUCB tables and the tag bandit. The
+    //                report carries only summaries of them, and in the
+    //                reference store both context layers sit at their caps
+    //                (+12 / +8) for every card with data — they add a
+    //                constant, not a ranking. The doctrine scores in
+    //                03-scoring carry the picks; those need no runs.
+    //
+    // SIGMA: the shipped sigmas are the converged ones (many at the 5%
+    // floor). They are re-floored to `learning.sigmaSeed` (10% of range) on
+    // seed, deliberately wider than the floor and narrower than a cold
+    // start's 25%: the reference store was trained BEFORE the 6.134.0 ` UP`
+    // fix (claude/up-card-blindness.md), and current-state.md says to expect
+    // the search to move again. A new player starts AT the measured optimum
+    // and keeps enough exploration to leave it.
+    //
+    // MAINTENANCE: refresh from a newer 📋 report (`learning.params[k].mean`
+    // / `.sigma`, `learning.enemy`, the `boss` census) when the reference
+    // store has re-converged post-6.134.0. Keep `source` honest — the report
+    // prints it, and a value whose provenance is unknown is a value nobody
+    // can audit.
+    const SHIPPED_SKILL = {
+        source: { version: '6.123.0+crown+joe', runs: 9569, gen: 754, exported: '2026-09-03' },
+        // key -> [mean, sigma] as reported
+        cem: {
+            'movement.smoothing': [0.423, 0.16],
+            'movement.standoff': [181.094, 9.996],
+            'movement.standoffPull': [1.72, 0.09],
+            'movement.lootPull': [0.544, 0.221],
+            'movement.panicHp': [0.592, 0.021],
+            'movement.lookaheadMs': [178.142, 18.08],
+            'threat.enemyWeight': [1.711, 0.398],
+            'threat.enemyRange': [167.832, 11.961],
+            'threat.projWeight': [1.798, 0.275],
+            'threat.projLookaheadMs': [622.607, 90.021],
+            'threat.markWeight': [15.922, 0.75],
+            'threat.lineWeight': [5.349, 0.761],
+            'threat.lineArmedWeight': [5.748, 2.215],
+            'strategy.deepFocusLv': [3.395, 0.176],
+            'strategy.roadmapBonus': [15.045, 0.838],
+            'strategy.earlyDps': [22.381, 1],
+            'strategy.expandPenalty': [23.86, 1.1],
+            'strategy.regenDeficit': [7.556, 11],
+            'strategy.dpsDeficitGain': [26.547, 2.56],
+            'movement.kitePull': [1.07, 0.182],
+            'movement.escapePull': [4.256, 0.28],
+            'movement.hellCautionMul': [0.864, 0.201],
+            'movement.passoutValue': [53.16, 1.8],
+            'movement.wallSiegeValue': [22.221, 5.312],
+            'movement.bossEngageValue': [22.992, 1.877],
+            'movement.bossRingMul': [0.987, 0.106],
+            'movement.poRingMul': [0.935, 0.025],
+            'movement.anchorValue': [6.547, 6],
+            'movement.anchorTtkS': [8.815, 0.4]
+        },
+        // the box each cem entry was trained under — must equal TUNABLE
+        cemBox: {
+            'movement.smoothing': [0.2, 0.85], 'movement.standoff': [55, 190], 'movement.standoffPull': [0, 1.8],
+            'movement.lootPull': [0.3, 2], 'movement.panicHp': [0.2, 0.62], 'movement.lookaheadMs': [140, 380],
+            'threat.enemyWeight': [0.5, 2.2], 'threat.enemyRange': [110, 240], 'threat.projWeight': [1, 6.5],
+            'threat.projLookaheadMs': [300, 850], 'threat.markWeight': [5, 20], 'threat.lineWeight': [0, 9],
+            'threat.lineArmedWeight': [3, 18], 'strategy.deepFocusLv': [2, 4], 'strategy.roadmapBonus': [10, 24],
+            'strategy.earlyDps': [4, 24], 'strategy.expandPenalty': [8, 30], 'strategy.regenDeficit': [0, 220],
+            'strategy.dpsDeficitGain': [10, 40], 'movement.kitePull': [0.5, 4], 'movement.escapePull': [1.5, 6],
+            'movement.hellCautionMul': [0.8, 3.2], 'movement.passoutValue': [18, 54], 'movement.wallSiegeValue': [12, 42],
+            'movement.bossEngageValue': [0, 36], 'movement.bossRingMul': [0.8, 1.25], 'movement.poRingMul': [0.8, 1.3],
+            'movement.anchorValue': [0, 120], 'movement.anchorTtkS': [2, 10]
+        },
+        // type -> [mul, soleHits]
+        enemy: {
+            drunk: [1.385, 278907], runner: [1.356, 261864], boss: [1.385, 30609],
+            genz: [1.098, 80031], thrower: [1.012, 9355], bomber: [1.0, 499]
+        },
+        // boss kind -> median first-sighting gt (the 6.112.0 census, n=60 runs,
+        // 31-227 sightings per kind). Seeded at a nominal weight of 20 so a
+        // player's own sightings re-weight it within ~20 runs (decay 0.985).
+        spawn: {
+            boss_nobook: 155, boss_karaoke: 270, boss_ladies: 270, boss_pickup: 270, boss_woman: 270,
+            boss_sprinter: 315, boss_amaro: 315, boss_glass: 360, boss_photo: 360, boss_couple: 360
+        },
+        spawnWeight: 20
+    };
 
     function applyParams(p) {
         if (!p) return;
